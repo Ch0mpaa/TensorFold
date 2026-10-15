@@ -155,6 +155,43 @@ pub fn rotate(x: []f64, rows: usize, cols: usize, axis: usize) void {
     }
 }
 
+/// The same normalized Walsh-Hadamard rotation as `rotate`, using butterfly
+/// stages instead of the scalar oracle's direct matrix product.
+pub fn rotateFast(x: []f64, rows: usize, cols: usize, axis: usize) void {
+    const inv = 1.0 / std.math.sqrt(@as(f64, hadamard_dim));
+    if (axis == 0) {
+        for (0..cols) |col| {
+            var block_at: usize = 0;
+            while (block_at < rows) : (block_at += hadamard_dim) rotateBlockFast(x, cols, block_at, col, axis, inv);
+        }
+    } else {
+        for (0..rows) |row| {
+            var block_at: usize = 0;
+            while (block_at < cols) : (block_at += hadamard_dim) rotateBlockFast(x, cols, row, block_at, axis, inv);
+        }
+    }
+}
+
+fn rotateBlockFast(x: []f64, cols: usize, base_r: usize, base_c: usize, axis: usize, inv: f64) void {
+    var values: [hadamard_dim]f64 = undefined;
+    for (0..hadamard_dim) |i| values[i] = if (axis == 0) x[(base_r + i) * cols + base_c] else x[base_r * cols + base_c + i];
+    var stride: usize = 1;
+    while (stride < hadamard_dim) : (stride *= 2) {
+        var base: usize = 0;
+        while (base < hadamard_dim) : (base += 2 * stride) {
+            for (0..stride) |i| {
+                const a = values[base + i];
+                const b = values[base + stride + i];
+                values[base + i] = a + b;
+                values[base + stride + i] = a - b;
+            }
+        }
+    }
+    for (values, 0..) |value, i| {
+        if (axis == 0) x[(base_r + i) * cols + base_c] = value * inv else x[base_r * cols + base_c + i] = value * inv;
+    }
+}
+
 fn rotateBlock(x: []f64, cols: usize, base_r: usize, base_c: usize, axis: usize, inv: f64) void {
     var scratch: [hadamard_dim]f64 = undefined;
     for (0..hadamard_dim) |i| {
@@ -184,6 +221,36 @@ pub fn dequantize(w: Width, codebook: Codebook, trellis: []const i16, tiles_k: u
     rotate(wq_f64, k, n, 1);
     for (wq_f64, 0..) |*v, i| v.* *= @floatCast(svh[i % n]);
     @memcpy(out, wq_f64);
+}
+
+/// Production scalar decode: identical EXL3 layout and normalization, with
+/// O(n log n) Hadamard rotations. `dequantize` remains the simple oracle.
+pub fn dequantizeFast(w: Width, codebook: Codebook, trellis: []const i16, tiles_k: usize, tiles_n: usize, suh: []const f16, svh: []const f16, out: []f64, scratch: []f64) void {
+    const k = tiles_k * 16;
+    const n = tiles_n * 16;
+    const wq_f64 = scratch[0 .. k * n];
+    const wq_f16: []f16 = @as([*]f16, @ptrCast(@alignCast(scratch[k * n ..].ptr)))[0 .. k * n];
+    unpack(w, codebook, trellis, tiles_k, tiles_n, wq_f16);
+    for (wq_f64, wq_f16) |*d, s| d.* = @floatCast(s);
+    rotateFast(wq_f64, k, n, 0);
+    for (wq_f64, 0..) |*v, i| v.* *= @floatCast(suh[i / n]);
+    rotateFast(wq_f64, k, n, 1);
+    for (wq_f64, 0..) |*v, i| v.* *= @floatCast(svh[i % n]);
+    @memcpy(out, wq_f64);
+}
+
+test "fast Hadamard rotation matches the direct scalar oracle" {
+    var want: [hadamard_dim * 2]f64 = undefined;
+    for (&want, 0..) |*value, i| value.* = @as(f64, @floatFromInt(@as(i32, @intCast(i % 37)) - 18)) / 7.0;
+    var got = want;
+    rotate(&want, hadamard_dim, 2, 0);
+    rotateFast(&got, hadamard_dim, 2, 0);
+    for (want, got) |a, b| try std.testing.expectApproxEqAbs(a, b, 1e-12);
+    for (&want, 0..) |*value, i| value.* = @as(f64, @floatFromInt(@as(i32, @intCast(i % 41)) - 20)) / 9.0;
+    got = want;
+    rotate(&want, 2, hadamard_dim, 1);
+    rotateFast(&got, 2, hadamard_dim, 1);
+    for (want, got) |a, b| try std.testing.expectApproxEqAbs(a, b, 1e-12);
 }
 
 // Oracle vectors come from tools/exl3_fixture.py and include one public-checkpoint block.
@@ -334,5 +401,12 @@ test "a real mcg 8.00 bpw block unpacks and dequantizes to the oracle's values" 
         max_diff = @max(max_diff, @abs(got - want));
         max_mag = @max(max_mag, @abs(want));
     }
+    try std.testing.expect(max_diff <= 1e-9 * (1.0 + max_mag));
+
+    const fast = try gpa.alloc(f64, k * n);
+    defer gpa.free(fast);
+    dequantizeFast(w, .mcg, trellis, kt, nt, suh, svh, fast, scratch);
+    max_diff = 0;
+    for (fast, dq_want) |got, want| max_diff = @max(max_diff, @abs(got - want));
     try std.testing.expect(max_diff <= 1e-9 * (1.0 + max_mag));
 }

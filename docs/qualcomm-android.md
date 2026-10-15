@@ -154,3 +154,28 @@ within `4.858e-17` of the FP64 oracle. Projection maximum absolute error was
 This still dequantizes on CPU and uploads FP32 weights. The next backend gate
 is to consume the packed EXL3 representation without materializing a complete
 FP32 model copy.
+
+## Full-checkpoint projection probe
+
+`qualcomm-exl3-model-probe` uses TensorFold's portable safetensors reader to
+memory-map the pinned 3.44 GB `UnstableLlama/Qwen3.5-2B-exl3-8.00bpw`
+checkpoint. It validates the 1,071-entry tensor index, reads the real layer-0
+`linear_attn.in_proj_qkv` EXL3 tensors, reconstructs either a 128x128 block or
+the complete 2048x6144 projection, and runs the projection on CPU or HTP.
+
+The production reconstruction uses an O(n log n) Walsh-Hadamard transform.
+The original direct O(n squared) transform remains the independent scalar
+oracle, and both implementations pass the real-checkpoint fixture tolerance.
+
+Three full-projection samples per backend produced these medians:
+
+| Full 2048x6144 EXL3 projection | CPU ms | HTP ms | HTP speedup |
+| --- | ---: | ---: | ---: |
+| batch 1 | 1.765583 | 1.064021 | 1.659x |
+| batch 128 | 27.979927 | 1.173563 | 23.842x |
+
+All 12 samples passed the declared mixed absolute/relative FP32 tolerance. The
+batch-128 trace selected `hmx-tiled`; its maximum absolute error was
+`0.0013365746` against a reference magnitude of `3.4685607` (tolerance
+`0.0022342803`). The checkpoint and on-phone copy both hash to
+`a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f`.
