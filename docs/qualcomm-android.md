@@ -1,9 +1,10 @@
 # Qualcomm Android port
 
-Status: complete position-zero model proof with a persistent decoded-weight
-cache. TensorFold executes all 24 Qwen3.5-2B layers and routes all 150 EXL3
-projections through Qualcomm HTP v79, but it is not yet a sustained multi-token
-generator or a native packed-EXL3 HTP backend.
+Status: complete autoregressive correctness POC with a persistent decoded-weight
+cache. TensorFold executes Qwen3.5-2B and Qwen3.5-4B prompts across every layer,
+carries recurrent and KV state, and routes all EXL3 projections through Qualcomm
+HTP v79. It is not yet a serving runtime, a sustained-performance result, or a
+native packed-EXL3 HTP backend.
 
 The port targets 64-bit Android on Snapdragon, with Qualcomm FastRPC/HTP as the
 first accelerator path. It keeps TensorFold's EXL3/EXLR8 formats, model logic,
@@ -183,16 +184,23 @@ batch-128 trace selected `hmx-tiled`; its maximum absolute error was
 
 ## Complete autoregressive EXL3 forward
 
-`qualcomm-exl3-forward` executes one or more token positions through all 24
-Qwen3.5-2B layers. TensorFold owns the architecture math for the 18 Gated
-DeltaNet layers, six full-attention layers, residuals, RMS norms, MLPs, and
-tied output head. Every one of the 150 quantized projections is reconstructed
-from the pinned EXL3 tensors and dispatched through one persistent GGML CPU or
-Hexagon HTP backend. Across positions it carries the DeltaNet FP32 recurrent
-matrices, BF16 convolution history, and rotated full-attention K/V cache.
+`qualcomm-exl3-forward` executes one or more token positions through Qwen3.5-2B.
+`qualcomm-exl3-forward-4b` builds the same model-profiled source for Qwen3.5-4B,
+including its 32 DeltaNet value heads, 16 DeltaNet key heads, 16 attention heads,
+and four KV heads. TensorFold owns the architecture math for Gated DeltaNet and
+full-attention layers, residuals, RMS norms, MLPs, and the tied output head.
+Every quantized projection is reconstructed from the pinned EXL3 tensors and
+dispatched through one persistent GGML CPU or Hexagon HTP backend. Across
+positions it carries the DeltaNet FP32 recurrent matrices, BF16 convolution
+history, and rotated full-attention K/V cache.
 
 ```text
 zig build qualcomm-exl3-forward -Dtarget=aarch64-linux-android \
+  -Doptimize=ReleaseSafe -Dandroid-libc=/path/to/android-libc-api36.txt \
+  -Dggml-include=/path/to/ggml/include \
+  -Dggml-lib=/path/to/android/ggml/libs
+
+zig build qualcomm-exl3-forward-4b -Dtarget=aarch64-linux-android \
   -Doptimize=ReleaseSafe -Dandroid-libc=/path/to/android-libc-api36.txt \
   -Dggml-include=/path/to/ggml/include \
   -Dggml-lib=/path/to/android/ggml/libs
@@ -288,6 +296,37 @@ comparison. The correctness mode evaluates the scalar output head at every
 teacher-forced prompt position, so its end-to-end generated-token rate is not
 an optimized serving metric. Raw evidence is in
 `recordings/20261015-085918-tensorfold-multitoken-poc/` in the mobile lab.
+
+### Qwen3.5-4B simultaneous two-phone POC
+
+The 4B profile was validated with `UnstableLlama/Qwen3.5-4B-exl3-4.00bpw`,
+SHA-256 `117eec31ed767c3acc4a6b56c37336f2bb56dd6d68daf058cec3d7f108e032d1`.
+It has 32 layers and 200 projections per position. A cold pass created 200
+content-addressed decoded entries; a warm 15-token prompt plus eight-token
+generation made 4,400 trusted cache hits with no miss or reconstruction.
+TensorFold generated the exact same eight IDs as upstream ExLlamaV3:
+`248068,198,90700,8340,25,271,16,13`.
+
+A simultaneous control on a second matching OnePlus 13 used Qwen3.5-4B Q4_0
+with llama.cpp/Hexagon HTP. The two lanes consumed the same 15 token IDs,
+started from a clock-offset-compensated barrier with about 6 ms estimated skew,
+exited zero, and produced the same eight-token text and IDs.
+
+| One exploratory simultaneous run | llama.cpp Q4_0 HTP | TensorFold EXL3 HTP |
+| --- | ---: | ---: |
+| End-to-end wall time | 689.604 ms | 140,533.959 ms |
+| End-to-end generated tokens/s | 11.601 | 0.056926 |
+| Prompt tokens / generated tokens | 15 / 8 | 15 / 8 |
+
+llama.cpp was 203.8x faster in this implementation-level POC. That number is
+not a format or kernel superiority claim: TensorFold reread 313,733,939,200
+bytes from its 13 GiB decoded FP32 cache, rebuilt projection work, and evaluated
+the scalar vocabulary head at every one of 22 positions. llama.cpp used a warm
+resident Q4_0 server. The phones also began at different battery state, and the
+quantizations differ. The result proves functional 4B EXL3 inference on HTP and
+identifies resident packed weights, graph reuse, prompt-head elision, and an
+accelerated output head as the next gates. Raw evidence is in
+`recordings/20261015-095636-qwen35-4b-simultaneous/` in the mobile lab.
 
 ## Matched llama.cpp control
 

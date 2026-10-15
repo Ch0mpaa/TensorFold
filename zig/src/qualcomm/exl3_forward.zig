@@ -7,6 +7,7 @@
 const std = @import("std");
 const exl3 = @import("exl3_format");
 const st = @import("safetensors");
+const profile = @import("model_profile");
 
 extern fn tf_qualcomm_monotonic_ms() f64;
 extern fn tf_qualcomm_peak_rss_kib() usize;
@@ -24,21 +25,26 @@ extern fn tf_qualcomm_backend_matmul_once(
 ) c_int;
 
 const prefix = "model.language_model";
-const hidden = 2048;
-const intermediate = 6144;
-const layers = 24;
-const vocab = 248320;
+const hidden = profile.hidden;
+const intermediate = profile.intermediate;
+const layers = profile.layers;
+const vocab = profile.vocab;
 const eps: f32 = 1e-6;
-const linear_heads = 16;
-const linear_width = 128;
-const linear_state_elems = linear_heads * linear_width * linear_width;
-const conv_channels = 3 * hidden;
+const linear_key_heads = profile.linear_key_heads;
+const linear_value_heads = profile.linear_value_heads;
+const linear_key_width = profile.linear_key_width;
+const linear_value_width = profile.linear_value_width;
+const linear_query_width = linear_key_heads * linear_key_width;
+const linear_output_width = linear_value_heads * linear_value_width;
+const linear_state_elems = linear_value_heads * linear_value_width * linear_key_width;
+const conv_channels = 2 * linear_query_width + linear_output_width;
 const conv_history_rows = 3;
-const attention_heads = 8;
-const kv_heads = 2;
-const attention_width = 256;
+const attention_heads = profile.attention_heads;
+const kv_heads = profile.kv_heads;
+const attention_width = profile.attention_width;
+const attention_query_width = attention_heads * attention_width;
 const kv_width = kv_heads * attention_width;
-const rope_width = 64;
+const rope_width = profile.rope_width;
 const cache_magic = "TFEXL3F1";
 const cache_header_bytes = 64;
 
@@ -413,23 +419,23 @@ fn linearAttention(runner: *Runner, decode: *DecodeState, layer: usize, input: [
     const base = try tensorName(&base_buffer, "{s}.layers.{d}.linear_attn", .{ prefix, layer });
     var projection_buffer: [256]u8 = undefined;
 
-    const qkv = try a.alloc(f32, 3 * hidden);
+    const qkv = try a.alloc(f32, conv_channels);
     defer a.free(qkv);
     try runner.project(try tensorName(&projection_buffer, "{s}.in_proj_qkv", .{base}), input, qkv);
     for (qkv) |*x| x.* = roundBF16(roundF16(x.*));
 
-    const z = try a.alloc(f32, hidden);
+    const z = try a.alloc(f32, linear_output_width);
     defer a.free(z);
     try runner.project(try tensorName(&projection_buffer, "{s}.in_proj_z", .{base}), input, z);
 
-    var a_gate: [16]f32 = undefined;
-    var b_gate: [16]f32 = undefined;
+    var a_gate: [linear_value_heads]f32 = undefined;
+    var b_gate: [linear_value_heads]f32 = undefined;
     try dense(runner.file, try tensorName(&projection_buffer, "{s}.in_proj_a.weight", .{base}), input, &a_gate);
     try dense(runner.file, try tensorName(&projection_buffer, "{s}.in_proj_b.weight", .{base}), input, &b_gate);
 
     const conv_name = try tensorName(&projection_buffer, "{s}.conv1d.weight", .{base});
-    const conv = try require(runner.file, conv_name, .bf16, &.{ 3 * hidden, 1, 4 });
-    const mixed = try a.alloc(f32, 3 * hidden);
+    const conv = try require(runner.file, conv_name, .bf16, &.{ conv_channels, 1, 4 });
+    const mixed = try a.alloc(f32, conv_channels);
     defer a.free(mixed);
     const history = decode.convLayer(layer);
     for (mixed, 0..) |*out, c| {
@@ -444,77 +450,79 @@ fn linearAttention(runner: *Runner, decode: *DecodeState, layer: usize, input: [
     @memcpy(history[2 * conv_channels .. 3 * conv_channels], qkv);
 
     var dt_name: [256]u8 = undefined;
-    const dt = try require(runner.file, try tensorName(&dt_name, "{s}.dt_bias", .{base}), .bf16, &.{16});
+    const dt = try require(runner.file, try tensorName(&dt_name, "{s}.dt_bias", .{base}), .bf16, &.{linear_value_heads});
     var alog_name: [256]u8 = undefined;
-    const alog = try require(runner.file, try tensorName(&alog_name, "{s}.A_log", .{base}), .f32, &.{16});
-    var beta: [16]f32 = undefined;
-    var decay: [16]f32 = undefined;
-    for (0..16) |head| {
+    const alog = try require(runner.file, try tensorName(&alog_name, "{s}.A_log", .{base}), .f32, &.{linear_value_heads});
+    var beta: [linear_value_heads]f32 = undefined;
+    var decay: [linear_value_heads]f32 = undefined;
+    for (0..linear_value_heads) |head| {
         beta[head] = roundBF16(sigmoid(b_gate[head]));
         const s = roundBF16(a_gate[head] + value(dt, head));
         const softplus = roundBF16(@max(s, 0.0) + @log(1.0 + @exp(-@abs(s))));
         decay[head] = @exp(-@exp(value(alog, head)) * softplus);
     }
-    const q = try a.alloc(f32, hidden);
+    const q = try a.alloc(f32, linear_query_width);
     defer a.free(q);
-    const k = try a.alloc(f32, hidden);
+    const k = try a.alloc(f32, linear_query_width);
     defer a.free(k);
-    const v = try a.alloc(f32, hidden);
+    const v = try a.alloc(f32, linear_output_width);
     defer a.free(v);
-    const q_scale = roundBF16(1.0 / 128.0);
-    const k_scale = roundBF16(1.0 / @sqrt(@as(f32, 128.0)));
-    for (0..16) |head| {
+    const q_scale = roundBF16(1.0 / @as(f32, @floatFromInt(linear_key_width)));
+    const k_scale = roundBF16(1.0 / @sqrt(@as(f32, @floatFromInt(linear_key_width))));
+    for (0..linear_key_heads) |head| {
         var qss: f32 = 0;
         var kss: f32 = 0;
-        for (0..128) |d| {
-            const qv = mixed[head * 128 + d];
-            const kv = mixed[hidden + head * 128 + d];
+        for (0..linear_key_width) |d| {
+            const qv = mixed[head * linear_key_width + d];
+            const kv = mixed[linear_query_width + head * linear_key_width + d];
             qss += qv * qv;
             kss += kv * kv;
-            v[head * 128 + d] = mixed[2 * hidden + head * 128 + d];
         }
-        const qinv = 1.0 / @sqrt(qss / 128.0 + eps / 128.0);
-        const kinv = 1.0 / @sqrt(kss / 128.0 + eps / 128.0);
-        for (0..128) |d| {
-            q[head * 128 + d] = roundBF16(q_scale * roundBF16(mixed[head * 128 + d] * qinv));
-            k[head * 128 + d] = roundBF16(k_scale * roundBF16(mixed[hidden + head * 128 + d] * kinv));
+        const width: f32 = @floatFromInt(linear_key_width);
+        const qinv = 1.0 / @sqrt(qss / width + eps / width);
+        const kinv = 1.0 / @sqrt(kss / width + eps / width);
+        for (0..linear_key_width) |d| {
+            q[head * linear_key_width + d] = roundBF16(q_scale * roundBF16(mixed[head * linear_key_width + d] * qinv));
+            k[head * linear_key_width + d] = roundBF16(k_scale * roundBF16(mixed[linear_query_width + head * linear_key_width + d] * kinv));
         }
     }
+    @memcpy(v, mixed[2 * linear_query_width .. conv_channels]);
 
-    const y = try a.alloc(f32, hidden);
+    const y = try a.alloc(f32, linear_output_width);
     defer a.free(y);
     const recurrent = decode.gdnLayer(layer);
-    for (0..16) |head| {
-        for (0..128) |dv| {
-            const row = recurrent[(head * 128 + dv) * 128 ..][0..128];
+    for (0..linear_value_heads) |head| {
+        const key_head = head / (linear_value_heads / linear_key_heads);
+        for (0..linear_value_width) |dv| {
+            const row = recurrent[(head * linear_value_width + dv) * linear_key_width ..][0..linear_key_width];
             var kv_mem: f32 = 0;
-            for (0..128) |dk| {
+            for (0..linear_key_width) |dk| {
                 row[dk] *= decay[head];
-                kv_mem += row[dk] * k[head * 128 + dk];
+                kv_mem += row[dk] * k[key_head * linear_key_width + dk];
             }
-            const delta = (v[head * 128 + dv] - kv_mem) * beta[head];
+            const delta = (v[head * linear_value_width + dv] - kv_mem) * beta[head];
             var out: f32 = 0;
-            for (0..128) |dk| {
-                row[dk] += k[head * 128 + dk] * delta;
-                out += row[dk] * q[head * 128 + dk];
+            for (0..linear_key_width) |dk| {
+                row[dk] += k[key_head * linear_key_width + dk] * delta;
+                out += row[dk] * q[key_head * linear_key_width + dk];
             }
-            y[head * 128 + dv] = roundBF16(out);
+            y[head * linear_value_width + dv] = roundBF16(out);
         }
     }
 
     var norm_name: [256]u8 = undefined;
-    const norm = try require(runner.file, try tensorName(&norm_name, "{s}.norm.weight", .{base}), .f32, &.{128});
-    const gated = try a.alloc(f32, hidden);
+    const norm = try require(runner.file, try tensorName(&norm_name, "{s}.norm.weight", .{base}), .f32, &.{linear_value_width});
+    const gated = try a.alloc(f32, linear_output_width);
     defer a.free(gated);
-    for (0..16) |head| {
+    for (0..linear_value_heads) |head| {
         var ss: f32 = 0;
-        for (0..128) |d| {
-            const x = y[head * 128 + d];
+        for (0..linear_value_width) |d| {
+            const x = y[head * linear_value_width + d];
             ss += x * x;
         }
-        const inv = 1.0 / @sqrt(ss / 128.0 + eps);
-        for (0..128) |d| {
-            const i = head * 128 + d;
+        const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(linear_value_width)) + eps);
+        for (0..linear_value_width) |d| {
+            const i = head * linear_value_width + d;
             gated[i] = roundF16(silu(z[i]) * (value(norm, d) * y[i] * inv));
         }
     }
@@ -524,7 +532,7 @@ fn linearAttention(runner: *Runner, decode: *DecodeState, layer: usize, input: [
 fn headNorm(file: *const st.File, name: []const u8, input: []const f32, heads: usize, output: []f32) !void {
     const tensor = file.get(name) orelse return error.MissingTensor;
     const width = input.len / heads;
-    if (input.len != output.len or width != 256 or tensor.dtype != .bf16 or !tensor.is(.bf16, &.{width})) return error.UnexpectedTensor;
+    if (input.len != output.len or width != attention_width or tensor.dtype != .bf16 or !tensor.is(.bf16, &.{width})) return error.UnexpectedTensor;
     for (0..heads) |head| {
         var ss: f32 = 0;
         for (0..width) |d| {
@@ -557,11 +565,11 @@ fn fullAttention(runner: *Runner, decode: *DecodeState, layer: usize, position: 
     var base_buffer: [256]u8 = undefined;
     const base = try tensorName(&base_buffer, "{s}.layers.{d}.self_attn", .{ prefix, layer });
     var projection_buffer: [256]u8 = undefined;
-    const qraw = try a.alloc(f32, 4096);
+    const qraw = try a.alloc(f32, 2 * attention_query_width);
     defer a.free(qraw);
-    const kraw = try a.alloc(f32, 512);
+    const kraw = try a.alloc(f32, kv_width);
     defer a.free(kraw);
-    const vraw = try a.alloc(f32, 512);
+    const vraw = try a.alloc(f32, kv_width);
     defer a.free(vraw);
     try runner.project(try tensorName(&projection_buffer, "{s}.q_proj", .{base}), input, qraw);
     try runner.project(try tensorName(&projection_buffer, "{s}.k_proj", .{base}), input, kraw);
@@ -570,22 +578,22 @@ fn fullAttention(runner: *Runner, decode: *DecodeState, layer: usize, position: 
     for (kraw) |*x| x.* = roundF16(x.*);
     for (vraw) |*x| x.* = roundF16(x.*);
 
-    const q = try a.alloc(f32, hidden);
+    const q = try a.alloc(f32, attention_query_width);
     defer a.free(q);
-    const gate = try a.alloc(f32, hidden);
+    const gate = try a.alloc(f32, attention_query_width);
     defer a.free(gate);
-    for (0..8) |head| for (0..256) |d| {
-        q[head * 256 + d] = qraw[head * 512 + d];
-        gate[head * 256 + d] = qraw[head * 512 + 256 + d];
+    for (0..attention_heads) |head| for (0..attention_width) |d| {
+        q[head * attention_width + d] = qraw[head * 2 * attention_width + d];
+        gate[head * attention_width + d] = qraw[head * 2 * attention_width + attention_width + d];
     };
-    const qnorm = try a.alloc(f32, hidden);
+    const qnorm = try a.alloc(f32, attention_query_width);
     defer a.free(qnorm);
-    const knorm = try a.alloc(f32, 512);
+    const knorm = try a.alloc(f32, kv_width);
     defer a.free(knorm);
     var norm_buffer: [256]u8 = undefined;
-    try headNorm(runner.file, try tensorName(&norm_buffer, "{s}.q_norm.weight", .{base}), q, 8, qnorm);
-    try headNorm(runner.file, try tensorName(&norm_buffer, "{s}.k_norm.weight", .{base}), kraw, 2, knorm);
-    const qrot = try a.alloc(f32, hidden);
+    try headNorm(runner.file, try tensorName(&norm_buffer, "{s}.q_norm.weight", .{base}), q, attention_heads, qnorm);
+    try headNorm(runner.file, try tensorName(&norm_buffer, "{s}.k_norm.weight", .{base}), kraw, kv_heads, knorm);
+    const qrot = try a.alloc(f32, attention_query_width);
     defer a.free(qrot);
     const krot = try a.alloc(f32, kv_width);
     defer a.free(krot);
@@ -594,7 +602,7 @@ fn fullAttention(runner: *Runner, decode: *DecodeState, layer: usize, position: 
     @memcpy(decode.keyPosition(layer, position), krot);
     @memcpy(decode.valuePosition(layer, position), vraw);
 
-    const attended = try a.alloc(f32, hidden);
+    const attended = try a.alloc(f32, attention_query_width);
     defer a.free(attended);
     const scores = try a.alloc(f32, position + 1);
     defer a.free(scores);
@@ -758,12 +766,12 @@ pub fn main(init: std.process.Init) !u8 {
         if (!forced_next) sequence[position + 1] = top[0].id;
         const step_elapsed = tf_qualcomm_monotonic_ms() - step_started;
         std.debug.print(
-            "{{\"tensorfold\":\"qualcomm-exl3-forward-step\",\"backend\":\"{s}\",\"input_token\":{d},\"position\":{d},\"forced_next\":{},\"layers\":{d},\"projections\":{d},\"head\":\"tied-f16-embedding\",\"next_token\":{d},\"top5\":[[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}]],\"state_f16_fnv1a\":\"{x}\",\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"head_ms\":{d:.3},\"elapsed_ms\":{d:.3},\"passed\":true}}\n",
-            .{ args[1], input_token, position, forced_next, layers, runner.projection_count - projection_start, top[0].id, top[0].id, top[0].logit, top[1].id, top[1].logit, top[2].id, top[2].logit, top[3].id, top[3].logit, top[4].id, top[4].logit, stateHash(normed), runner.projection_ms - compute_start, runner.projection_wall_ms - wall_start, head_ms, step_elapsed },
+            "{{\"tensorfold\":\"qualcomm-exl3-forward-step\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"input_token\":{d},\"position\":{d},\"forced_next\":{},\"layers\":{d},\"projections\":{d},\"head\":\"tied-f16-embedding\",\"next_token\":{d},\"top5\":[[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}]],\"state_f16_fnv1a\":\"{x}\",\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"head_ms\":{d:.3},\"elapsed_ms\":{d:.3},\"passed\":true}}\n",
+            .{ profile.name, args[1], input_token, position, forced_next, layers, runner.projection_count - projection_start, top[0].id, top[0].id, top[0].logit, top[1].id, top[1].logit, top[2].id, top[2].logit, top[3].id, top[3].logit, top[4].id, top[4].logit, stateHash(normed), runner.projection_ms - compute_start, runner.projection_wall_ms - wall_start, head_ms, step_elapsed },
         );
     }
     const elapsed = tf_qualcomm_monotonic_ms() - started;
-    std.debug.print("{{\"tensorfold\":\"qualcomm-exl3-generate\",\"backend\":\"{s}\",\"checkpoint_tensors\":{d},\"prompt_tokens\":{d},\"generated_tokens\":{d},\"positions\":{d},\"tokens\":[", .{ args[1], file.names.count(), prompt_len, steps, positions });
+    std.debug.print("{{\"tensorfold\":\"qualcomm-exl3-generate\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"checkpoint_tensors\":{d},\"prompt_tokens\":{d},\"generated_tokens\":{d},\"positions\":{d},\"tokens\":[", .{ profile.name, args[1], file.names.count(), prompt_len, steps, positions });
     for (sequence, 0..) |generated_token, i| {
         if (i != 0) std.debug.print(",", .{});
         std.debug.print("{d}", .{generated_token});

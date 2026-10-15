@@ -349,6 +349,21 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     const exl3_model_probe_step = b.step("qualcomm-exl3-model-probe", "Build the Android full-checkpoint EXL3 projection probe");
     exl3_model_probe_step.dependOn(&b.addInstallArtifact(exl3_model_probe, .{}).step);
 
+    const exl3_profile_2b = b.addOptions();
+    exl3_profile_2b.addOption([]const u8, "name", "qwen3.5-2b");
+    exl3_profile_2b.addOption(usize, "hidden", 2048);
+    exl3_profile_2b.addOption(usize, "intermediate", 6144);
+    exl3_profile_2b.addOption(usize, "layers", 24);
+    exl3_profile_2b.addOption(usize, "vocab", 248320);
+    exl3_profile_2b.addOption(usize, "linear_key_heads", 16);
+    exl3_profile_2b.addOption(usize, "linear_value_heads", 16);
+    exl3_profile_2b.addOption(usize, "linear_key_width", 128);
+    exl3_profile_2b.addOption(usize, "linear_value_width", 128);
+    exl3_profile_2b.addOption(usize, "attention_heads", 8);
+    exl3_profile_2b.addOption(usize, "kv_heads", 2);
+    exl3_profile_2b.addOption(usize, "attention_width", 256);
+    exl3_profile_2b.addOption(usize, "rope_width", 64);
+
     const exl3_forward_module = b.createModule(.{
         .root_source_file = b.path("zig/src/qualcomm/exl3_forward.zig"),
         .target = target,
@@ -369,6 +384,7 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         .target = target,
         .optimize = optimize,
     }));
+    exl3_forward_module.addOptions("model_profile", exl3_profile_2b);
     if (ggml_include) |include_path|
         exl3_forward_module.addIncludePath(.{ .cwd_relative = include_path });
     if (ggml_lib) |lib_path| {
@@ -385,6 +401,59 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         exl3_forward.setLibCFile(.{ .cwd_relative = libc_file });
     const exl3_forward_step = b.step("qualcomm-exl3-forward", "Build the Android autoregressive Qwen3.5 EXL3 forward path");
     exl3_forward_step.dependOn(&b.addInstallArtifact(exl3_forward, .{}).step);
+
+    const exl3_profile_4b = b.addOptions();
+    exl3_profile_4b.addOption([]const u8, "name", "qwen3.5-4b");
+    exl3_profile_4b.addOption(usize, "hidden", 2560);
+    exl3_profile_4b.addOption(usize, "intermediate", 9216);
+    exl3_profile_4b.addOption(usize, "layers", 32);
+    exl3_profile_4b.addOption(usize, "vocab", 248320);
+    exl3_profile_4b.addOption(usize, "linear_key_heads", 16);
+    exl3_profile_4b.addOption(usize, "linear_value_heads", 32);
+    exl3_profile_4b.addOption(usize, "linear_key_width", 128);
+    exl3_profile_4b.addOption(usize, "linear_value_width", 128);
+    exl3_profile_4b.addOption(usize, "attention_heads", 16);
+    exl3_profile_4b.addOption(usize, "kv_heads", 4);
+    exl3_profile_4b.addOption(usize, "attention_width", 256);
+    exl3_profile_4b.addOption(usize, "rope_width", 64);
+
+    const exl3_forward_4b_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/exl3_forward.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exl3_forward_4b_module.addCSourceFile(.{
+        .file = b.path("zig/src/qualcomm/ggml_bridge.c"),
+        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" },
+    });
+    exl3_forward_4b_module.addImport("exl3_format", b.createModule(.{
+        .root_source_file = b.path("zig/src/core/exl3_format.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    exl3_forward_4b_module.addImport("safetensors", b.createModule(.{
+        .root_source_file = b.path("zig/src/core/safetensors.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    exl3_forward_4b_module.addOptions("model_profile", exl3_profile_4b);
+    if (ggml_include) |include_path|
+        exl3_forward_4b_module.addIncludePath(.{ .cwd_relative = include_path });
+    if (ggml_lib) |lib_path| {
+        exl3_forward_4b_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-base.so" }) });
+        exl3_forward_4b_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-cpu.so" }) });
+        exl3_forward_4b_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-hexagon.so" }) });
+    }
+    const exl3_forward_4b = b.addExecutable(.{
+        .name = "tensorfold-qualcomm-exl3-forward-4b",
+        .linkage = .dynamic,
+        .root_module = exl3_forward_4b_module,
+    });
+    if (android_libc) |libc_file|
+        exl3_forward_4b.setLibCFile(.{ .cwd_relative = libc_file });
+    const exl3_forward_4b_step = b.step("qualcomm-exl3-forward-4b", "Build the Android autoregressive Qwen3.5-4B EXL3 forward path");
+    exl3_forward_4b_step.dependOn(&b.addInstallArtifact(exl3_forward_4b, .{}).step);
 }
 
 /// `zig build native -Dcpu=apple_m1`: tensorfold-native with the Metal engines for the Python package's bundle (a native M5 build traps on M1-M4).
