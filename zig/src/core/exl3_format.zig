@@ -172,6 +172,44 @@ pub fn rotateFast(x: []f64, rows: usize, cols: usize, axis: usize) void {
     }
 }
 
+/// FP32 form of the production rotation. Qualcomm execution consumes FP32
+/// GGML tensors, so keeping the reconstructed matrix in that type avoids an
+/// otherwise very large FP64 staging allocation on mobile devices.
+pub fn rotateFastF32(x: []f32, rows: usize, cols: usize, axis: usize) void {
+    const inv: f32 = 1.0 / std.math.sqrt(@as(f32, hadamard_dim));
+    if (axis == 0) {
+        for (0..cols) |col| {
+            var block_at: usize = 0;
+            while (block_at < rows) : (block_at += hadamard_dim) rotateBlockFastF32(x, cols, block_at, col, axis, inv);
+        }
+    } else {
+        for (0..rows) |row| {
+            var block_at: usize = 0;
+            while (block_at < cols) : (block_at += hadamard_dim) rotateBlockFastF32(x, cols, row, block_at, axis, inv);
+        }
+    }
+}
+
+fn rotateBlockFastF32(x: []f32, cols: usize, base_r: usize, base_c: usize, axis: usize, inv: f32) void {
+    var values: [hadamard_dim]f32 = undefined;
+    for (0..hadamard_dim) |i| values[i] = if (axis == 0) x[(base_r + i) * cols + base_c] else x[base_r * cols + base_c + i];
+    var stride: usize = 1;
+    while (stride < hadamard_dim) : (stride *= 2) {
+        var base: usize = 0;
+        while (base < hadamard_dim) : (base += 2 * stride) {
+            for (0..stride) |i| {
+                const a = values[base + i];
+                const b = values[base + stride + i];
+                values[base + i] = a + b;
+                values[base + stride + i] = a - b;
+            }
+        }
+    }
+    for (values, 0..) |value, i| {
+        if (axis == 0) x[(base_r + i) * cols + base_c] = value * inv else x[base_r * cols + base_c + i] = value * inv;
+    }
+}
+
 fn rotateBlockFast(x: []f64, cols: usize, base_r: usize, base_c: usize, axis: usize, inv: f64) void {
     var values: [hadamard_dim]f64 = undefined;
     for (0..hadamard_dim) |i| values[i] = if (axis == 0) x[(base_r + i) * cols + base_c] else x[base_r * cols + base_c + i];
@@ -239,6 +277,22 @@ pub fn dequantizeFast(w: Width, codebook: Codebook, trellis: []const i16, tiles_
     @memcpy(out, wq_f64);
 }
 
+/// Mobile production decode into FP32. `unpacked` is one FP16 value per
+/// reconstructed matrix element and may be released immediately afterward.
+/// The FP64 decoder above remains the format oracle used by parity tests.
+pub fn dequantizeFastF32(w: Width, codebook: Codebook, trellis: []const i16, tiles_k: usize, tiles_n: usize, suh: []const f16, svh: []const f16, out: []f32, unpacked: []f16) void {
+    const k = tiles_k * 16;
+    const n = tiles_n * 16;
+    std.debug.assert(out.len == k * n);
+    std.debug.assert(unpacked.len == k * n);
+    unpack(w, codebook, trellis, tiles_k, tiles_n, unpacked);
+    for (out, unpacked) |*d, s| d.* = @floatCast(s);
+    rotateFastF32(out, k, n, 0);
+    for (out, 0..) |*v, i| v.* *= @floatCast(suh[i / n]);
+    rotateFastF32(out, k, n, 1);
+    for (out, 0..) |*v, i| v.* *= @floatCast(svh[i % n]);
+}
+
 test "fast Hadamard rotation matches the direct scalar oracle" {
     var want: [hadamard_dim * 2]f64 = undefined;
     for (&want, 0..) |*value, i| value.* = @as(f64, @floatFromInt(@as(i32, @intCast(i % 37)) - 18)) / 7.0;
@@ -251,6 +305,19 @@ test "fast Hadamard rotation matches the direct scalar oracle" {
     rotate(&want, 2, hadamard_dim, 1);
     rotateFast(&got, 2, hadamard_dim, 1);
     for (want, got) |a, b| try std.testing.expectApproxEqAbs(a, b, 1e-12);
+}
+
+test "FP32 fast rotation tracks the FP64 production rotation" {
+    var want: [hadamard_dim * 2]f64 = undefined;
+    var got: [hadamard_dim * 2]f32 = undefined;
+    for (&want, &got, 0..) |*a, *b, i| {
+        const value = @as(f64, @floatFromInt(@as(i32, @intCast(i % 43)) - 21)) / 11.0;
+        a.* = value;
+        b.* = @floatCast(value);
+    }
+    rotateFast(&want, hadamard_dim, 2, 0);
+    rotateFastF32(&got, hadamard_dim, 2, 0);
+    for (want, got) |a, b| try std.testing.expectApproxEqAbs(a, @as(f64, b), 2e-6);
 }
 
 // Oracle vectors come from tools/exl3_fixture.py and include one public-checkpoint block.

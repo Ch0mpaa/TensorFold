@@ -348,6 +348,43 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         exl3_model_probe.setLibCFile(.{ .cwd_relative = libc_file });
     const exl3_model_probe_step = b.step("qualcomm-exl3-model-probe", "Build the Android full-checkpoint EXL3 projection probe");
     exl3_model_probe_step.dependOn(&b.addInstallArtifact(exl3_model_probe, .{}).step);
+
+    const exl3_forward_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/exl3_forward.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    exl3_forward_module.addCSourceFile(.{
+        .file = b.path("zig/src/qualcomm/ggml_bridge.c"),
+        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" },
+    });
+    exl3_forward_module.addImport("exl3_format", b.createModule(.{
+        .root_source_file = b.path("zig/src/core/exl3_format.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    exl3_forward_module.addImport("safetensors", b.createModule(.{
+        .root_source_file = b.path("zig/src/core/safetensors.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    if (ggml_include) |include_path|
+        exl3_forward_module.addIncludePath(.{ .cwd_relative = include_path });
+    if (ggml_lib) |lib_path| {
+        exl3_forward_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-base.so" }) });
+        exl3_forward_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-cpu.so" }) });
+        exl3_forward_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-hexagon.so" }) });
+    }
+    const exl3_forward = b.addExecutable(.{
+        .name = "tensorfold-qualcomm-exl3-forward",
+        .linkage = .dynamic,
+        .root_module = exl3_forward_module,
+    });
+    if (android_libc) |libc_file|
+        exl3_forward.setLibCFile(.{ .cwd_relative = libc_file });
+    const exl3_forward_step = b.step("qualcomm-exl3-forward", "Build the Android one-token Qwen3.5 EXL3 forward path");
+    exl3_forward_step.dependOn(&b.addInstallArtifact(exl3_forward, .{}).step);
 }
 
 /// `zig build native -Dcpu=apple_m1`: tensorfold-native with the Metal engines for the Python package's bundle (a native M5 build traps on M1-M4).

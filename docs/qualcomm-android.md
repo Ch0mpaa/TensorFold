@@ -179,3 +179,35 @@ batch-128 trace selected `hmx-tiled`; its maximum absolute error was
 `0.0013365746` against a reference magnitude of `3.4685607` (tolerance
 `0.0022342803`). The checkpoint and on-phone copy both hash to
 `a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f`.
+
+## Complete one-token EXL3 forward
+
+`qualcomm-exl3-forward` executes token position zero through all 24
+Qwen3.5-2B layers. TensorFold owns the architecture math for the 18 Gated
+DeltaNet layers, six full-attention layers, residuals, RMS norms, MLPs, and
+tied output head. Every one of the 150 quantized projections is reconstructed
+from the pinned EXL3 tensors and dispatched through one persistent GGML CPU or
+Hexagon HTP backend.
+
+```text
+zig build qualcomm-exl3-forward -Dtarget=aarch64-linux-android \
+  -Doptimize=ReleaseSafe -Dandroid-libc=/path/to/android-libc-api36.txt \
+  -Dggml-include=/path/to/ggml/include \
+  -Dggml-lib=/path/to/android/ggml/libs
+
+tensorfold-qualcomm-exl3-forward cpu model.safetensors TOKEN_ID CPU_THREADS
+tensorfold-qualcomm-exl3-forward htp model.safetensors TOKEN_ID CPU_THREADS
+```
+
+For input token `248045` (`<|im_start|>`), both Snapdragon 8 Elite runs
+exited zero and returned next token `846` with the same ordered top-five token
+IDs: `846, 8678, 198, 96746, 2244`. Measured projection compute was 936.409
+ms on CPU and 122.526 ms on HTP, a 7.64x speedup. Peak RSS was about 2.24 GiB.
+
+This initial path reconstructs weights on demand. Reconstruction took about
+46 seconds and dominated the 64.3-second CPU and 62.2-second HTP wall times.
+It is a correctness/bring-up executable, not a generation-speed claim. The
+next runtime step is a persistent decoded-weight cache, followed by direct
+packed-EXL3 kernels. The tied FP16 embedding evaluates the architectural head;
+parity against the duplicated quantized `lm_head` and upstream ExLlamaV3 is a
+separate required gate before multi-token benchmarking.
