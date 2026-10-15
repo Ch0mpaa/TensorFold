@@ -35,6 +35,7 @@ extern fn tf_qualcomm_gdn_step_f32(
     thread_count: usize,
 ) void;
 extern fn tf_qualcomm_dense_f16(weight: [*]const u16, input: [*]const f32, output: [*]f32, rows: usize, columns: usize) void;
+extern fn tf_qualcomm_silu_norm_f16_fast(gate: [*]const f32, input: [*]const f32, norm: [*]const u8, inverse_rms: f32, output: [*]f32, count: usize) void;
 extern fn tf_qualcomm_backend_create(backend_name: [*:0]const u8, cpu_threads: i32) ?*anyopaque;
 extern fn tf_qualcomm_backend_destroy(context: ?*anyopaque) void;
 extern fn tf_qualcomm_backend_matmul_once(
@@ -209,6 +210,7 @@ const Runner = struct {
     use_f16_weights: bool = false,
     use_resident_weights: bool = false,
     use_resident_head: bool = false,
+    fast_activations: bool = false,
     cache_dir: ?[]const u8 = null,
     cache_model_id: ?[]const u8 = null,
     projection_count: usize = 0,
@@ -1046,9 +1048,14 @@ fn linearAttention(runner: *Runner, decode: *DecodeState, layer: usize, input: [
             ss += x * x;
         }
         const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(linear_value_width)) + eps);
-        for (0..linear_value_width) |d| {
-            const i = head * linear_value_width + d;
-            gated[i] = roundF16(silu(z[i]) * (value(norm, d) * y[i] * inv));
+        const at = head * linear_value_width;
+        if (runner.fast_activations) {
+            tf_qualcomm_silu_norm_f16_fast(z[at..].ptr, y[at..].ptr, norm.bytes.ptr, inv, gated[at..].ptr, linear_value_width);
+        } else {
+            for (0..linear_value_width) |d| {
+                const i = at + d;
+                gated[i] = roundF16(silu(z[i]) * (value(norm, d) * y[i] * inv));
+            }
         }
     }
     try runner.project(try tensorName(&projection_buffer, "{s}.out_proj", .{base}), gated, output);
@@ -1207,9 +1214,14 @@ fn linearAttentionBatch(runner: *Runner, decode: *DecodeState, layer: usize, inp
                 ss += x * x;
             }
             const inv = 1.0 / @sqrt(ss / @as(f32, @floatFromInt(linear_value_width)) + eps);
-            for (0..linear_value_width) |d| {
-                const i = head * linear_value_width + d;
-                gated_row[i] = roundF16(silu(z_row[i]) * (value(norm, d) * y_row[i] * inv));
+            const at = head * linear_value_width;
+            if (runner.fast_activations) {
+                tf_qualcomm_silu_norm_f16_fast(z_row[at..].ptr, y_row[at..].ptr, norm.bytes.ptr, inv, gated_row[at..].ptr, linear_value_width);
+            } else {
+                for (0..linear_value_width) |d| {
+                    const i = at + d;
+                    gated_row[i] = roundF16(silu(z_row[i]) * (value(norm, d) * y_row[i] * inv));
+                }
             }
         }
     }
@@ -1560,7 +1572,7 @@ fn stateHash(state: []const f32) u64 {
 pub fn main(init: std.process.Init) !u8 {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 5 or args.len > 11) {
-        std.debug.print("usage: {s} cpu|htp MODEL_SAFETENSORS TOKEN_ID CPU_THREADS [DECODED_CACHE_DIR [MODEL_SHA256 [STEPS [PROMPT_SUFFIX_TOKEN_IDS [serve|serve-resident [REQUESTS]]]]]]\n", .{args[0]});
+        std.debug.print("usage: {s} cpu|htp MODEL_SAFETENSORS TOKEN_ID CPU_THREADS [DECODED_CACHE_DIR [MODEL_SHA256 [STEPS [PROMPT_SUFFIX_TOKEN_IDS [serve|serve-resident|serve-resident-fast [REQUESTS]]]]]]\n", .{args[0]});
         return 64;
     }
     if (!std.mem.eql(u8, args[1], "cpu") and !std.mem.eql(u8, args[1], "htp")) return error.InvalidBackend;
@@ -1568,8 +1580,9 @@ pub fn main(init: std.process.Init) !u8 {
     const threads = try std.fmt.parseInt(i32, args[4], 10);
     const steps = if (args.len >= 8) try std.fmt.parseInt(usize, args[7], 10) else 1;
     const suffix_count = if (args.len >= 9) std.mem.count(u8, args[8], ",") + 1 else 0;
-    const serve_mode = args.len >= 10 and (std.mem.eql(u8, args[9], "serve") or std.mem.eql(u8, args[9], "serve-resident"));
-    const resident_mode = args.len >= 10 and std.mem.eql(u8, args[9], "serve-resident");
+    const fast_activations = args.len >= 10 and std.mem.eql(u8, args[9], "serve-resident-fast");
+    const serve_mode = args.len >= 10 and (std.mem.eql(u8, args[9], "serve") or std.mem.eql(u8, args[9], "serve-resident") or fast_activations);
+    const resident_mode = args.len >= 10 and (std.mem.eql(u8, args[9], "serve-resident") or fast_activations);
     const requests = if (args.len == 11) try std.fmt.parseInt(usize, args[10], 10) else 1;
     if (args.len >= 10 and !serve_mode) return error.InvalidArgument;
     const prompt_len = 1 + suffix_count;
@@ -1590,7 +1603,7 @@ pub fn main(init: std.process.Init) !u8 {
     if (cache_dir) |dir| try std.Io.Dir.cwd().createDirPath(init.io, dir);
     var scratch_arena: std.heap.ArenaAllocator = .init(init.gpa);
     defer scratch_arena.deinit();
-    var runner: Runner = .{ .allocator = scratch_arena.allocator(), .io = init.io, .file = &file, .backend = backend, .cpu_threads = @intCast(threads), .use_f16_weights = serve_mode, .use_resident_weights = resident_mode, .use_resident_head = resident_mode and requests > 1, .cache_dir = cache_dir, .cache_model_id = cache_model_id };
+    var runner: Runner = .{ .allocator = scratch_arena.allocator(), .io = init.io, .file = &file, .backend = backend, .cpu_threads = @intCast(threads), .use_f16_weights = serve_mode, .use_resident_weights = resident_mode, .use_resident_head = resident_mode and requests > 1, .fast_activations = fast_activations, .cache_dir = cache_dir, .cache_model_id = cache_model_id };
     var decode = try DecodeState.init(init.gpa, positions);
     defer decode.deinit(init.gpa);
     const state = try init.gpa.alloc(f32, hidden);
@@ -1721,7 +1734,7 @@ pub fn main(init: std.process.Init) !u8 {
             );
         }
         const elapsed = tf_qualcomm_monotonic_ms() - started;
-        std.debug.print("{{\"tensorfold\":\"qualcomm-exl3-generate\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"request_index\":{d},\"requests\":{d},\"checkpoint_tensors\":{d},\"prompt_tokens\":{d},\"generated_tokens\":{d},\"positions\":{d},\"tokens\":[", .{ profile.name, args[1], request_index, requests, file.names.count(), prompt_len, steps, positions });
+        std.debug.print("{{\"tensorfold\":\"qualcomm-exl3-generate\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"fast_activations\":{},\"request_index\":{d},\"requests\":{d},\"checkpoint_tensors\":{d},\"prompt_tokens\":{d},\"generated_tokens\":{d},\"positions\":{d},\"tokens\":[", .{ profile.name, args[1], runner.fast_activations, request_index, requests, file.names.count(), prompt_len, steps, positions });
         for (sequence, 0..) |generated_token, i| {
             if (i != 0) std.debug.print(",", .{});
             std.debug.print("{d}", .{generated_token});

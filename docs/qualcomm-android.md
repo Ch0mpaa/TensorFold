@@ -414,6 +414,29 @@ HVX/HMX, followed by larger fused layer graphs, is the primary performance
 gate. Raw evidence is in
 `recordings/20261015-121649-tensorfold-4b-htp-gdn/` in the mobile lab.
 
+### Optional fast-activation mode
+
+`serve-resident-fast` keeps the resident-v3 HTP path and replaces only the
+post-Gated-DeltaNet SiLU plus normalization loop with a four-lane ARM NEON
+implementation. Its exponential is an approximation, so this mode is opt-in
+and reports `"fast_activations":true`; the exact `serve-resident` behavior is
+unchanged.
+
+Two six-request fast captures produced ten warmed samples. Their combined
+median was 2,784.231 ms, 1.027% below the published v3 exact median of
+2,813.129 ms. An immediately adjacent six-request exact capture had a
+2,897.857 ms warmed median, making the bracketed reduction 3.921%. The fast
+captures generated the same eight IDs and the same ordered top-five IDs at
+every generated position, but all eight internal FP16 state hashes differed;
+the maximum absolute top-five logit delta was 0.19604. Treat this as a measured
+throughput/quality tradeoff, not an exact-equivalence result.
+
+Projection calls still had a 1,572.544 ms combined warmed median, so direct
+packed-EXL3 execution on HVX/HMX remains the primary performance gate. Building
+that custom HTP operator requires the Qualcomm Hexagon SDK, which is not
+installed in the current Windows lab. Raw evidence is in
+`recordings/20261015-134547-tensorfold-4b-fast-activations/`.
+
 ## Matched llama.cpp control
 
 The control lane uses the same Snapdragon 8 Elite phone and the same

@@ -28,6 +28,12 @@ void tf_qualcomm_dense_f16(const unsigned short *weight,
                            float *output,
                            size_t rows,
                            size_t columns);
+void tf_qualcomm_silu_norm_f16_fast(const float *gate,
+                                    const float *value,
+                                    const unsigned char *norm,
+                                    float inverse_rms,
+                                    float *output,
+                                    size_t count);
 void *tf_qualcomm_backend_create(const char *backend_name, int cpu_threads);
 void tf_qualcomm_backend_destroy(void *context);
 int tf_qualcomm_backend_matmul(void *context,

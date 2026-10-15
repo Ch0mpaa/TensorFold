@@ -280,6 +280,66 @@ void tf_qualcomm_dense_f16(const unsigned short *weight,
     }
 }
 
+static inline float32x4_t tf_fast_exp_f32(float32x4_t x) {
+    x = vmaxq_f32(vdupq_n_f32(-88.3762626647949f), vminq_f32(x, vdupq_n_f32(88.3762626647949f)));
+    float32x4_t fx = vmlaq_n_f32(vdupq_n_f32(0.5f), x, 1.44269504088896341f);
+    int32x4_t emm0 = vcvtq_s32_f32(fx);
+    float32x4_t tmp = vcvtq_f32_s32(emm0);
+    const uint32x4_t correction = vcgtq_f32(tmp, fx);
+    tmp = vsubq_f32(tmp, vreinterpretq_f32_u32(vandq_u32(correction, vreinterpretq_u32_f32(vdupq_n_f32(1.0f)))));
+    fx = tmp;
+    x = vsubq_f32(x, vmulq_n_f32(fx, 0.693359375f));
+    x = vsubq_f32(x, vmulq_n_f32(fx, -2.12194440e-4f));
+    const float32x4_t z = vmulq_f32(x, x);
+    float32x4_t y = vdupq_n_f32(1.9875691500e-4f);
+    y = vmlaq_f32(vdupq_n_f32(1.3981999507e-3f), y, x);
+    y = vmlaq_f32(vdupq_n_f32(8.3334519073e-3f), y, x);
+    y = vmlaq_f32(vdupq_n_f32(4.1665795894e-2f), y, x);
+    y = vmlaq_f32(vdupq_n_f32(1.6666665459e-1f), y, x);
+    y = vmlaq_f32(vdupq_n_f32(5.0000001201e-1f), y, x);
+    y = vmlaq_f32(x, y, z);
+    y = vaddq_f32(y, vdupq_n_f32(1.0f));
+    emm0 = vaddq_s32(vcvtq_s32_f32(fx), vdupq_n_s32(0x7f));
+    emm0 = vshlq_n_s32(emm0, 23);
+    return vmulq_f32(y, vreinterpretq_f32_s32(emm0));
+}
+
+void tf_qualcomm_silu_norm_f16_fast(const float *gate,
+                                    const float *value,
+                                    const unsigned char *norm,
+                                    float inverse_rms,
+                                    float *output,
+                                    size_t count) {
+    const float32x4_t one = vdupq_n_f32(1.0f);
+    const float32x4_t inv = vdupq_n_f32(inverse_rms);
+    size_t i = 0;
+    for (; i + 4 <= count; i += 4) {
+        const float32x4_t g = vld1q_f32(gate + i);
+        const float32x4_t sigmoid = vdivq_f32(one, vaddq_f32(one, tf_fast_exp_f32(vnegq_f32(g))));
+        float norm_values[4];
+        memcpy(norm_values, norm + i * sizeof(float), sizeof(norm_values));
+        const float32x4_t normalized = vmulq_f32(vmulq_f32(vld1q_f32(norm_values), vld1q_f32(value + i)), inv);
+        const float32x4_t activated = vmulq_f32(vmulq_f32(g, sigmoid), normalized);
+        vst1q_f32(output + i, vcvt_f32_f16(vcvt_f16_f32(activated)));
+    }
+    if (i < count) {
+        float gate_tail[4] = { 0 };
+        float value_tail[4] = { 0 };
+        float norm_tail[4] = { 0 };
+        float output_tail[4];
+        const size_t tail = count - i;
+        memcpy(gate_tail, gate + i, tail * sizeof(float));
+        memcpy(value_tail, value + i, tail * sizeof(float));
+        memcpy(norm_tail, norm + i * sizeof(float), tail * sizeof(float));
+        const float32x4_t g = vld1q_f32(gate_tail);
+        const float32x4_t sigmoid = vdivq_f32(one, vaddq_f32(one, tf_fast_exp_f32(vnegq_f32(g))));
+        const float32x4_t normalized = vmulq_f32(vmulq_f32(vld1q_f32(norm_tail), vld1q_f32(value_tail)), inv);
+        const float32x4_t activated = vmulq_f32(vmulq_f32(g, sigmoid), normalized);
+        vst1q_f32(output_tail, vcvt_f32_f16(vcvt_f16_f32(activated)));
+        memcpy(output + i, output_tail, tail * sizeof(float));
+    }
+}
+
 static ggml_backend_t init_hexagon_backend(void) {
     ggml_backend_reg_t registry = ggml_backend_hexagon_reg();
     if (registry == NULL || ggml_backend_reg_dev_count(registry) == 0) {
