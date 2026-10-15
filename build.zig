@@ -153,7 +153,10 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&cost_run.step);
     switch (target.result.os.tag) {
         .macos => metalTargets(b, target, optimize, draft_ids, build_options, test_step),
-        .linux => cuda_build.targets(b, target, optimize, draft_ids, build_options),
+        .linux => if (target.result.abi == .android)
+            qualcommTargets(b, target, optimize)
+        else
+            cuda_build.targets(b, target, optimize, draft_ids, build_options),
         else => {},
     }
     const xgrammar = grammar_build.option(b);
@@ -189,6 +192,58 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&warning_run.step);
     b.step("test-learn-warning", "CPU production-log refusal, backoff and recovery test").dependOn(&warning_run.step);
     grammar_build.steps(b, target, xgrammar);
+}
+
+/// The first Android/Qualcomm bring-up target. Keep it independent of libc and
+/// vendor SDK libraries so it proves Zig code generation and on-device launch
+/// before the FastRPC/HTP boundary is introduced.
+fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
+    const android_libc = b.option([]const u8, "android-libc", "Zig libc configuration for the Android NDK");
+    const smoke = b.addExecutable(.{
+        .name = "tensorfold-qualcomm-smoke",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("zig/src/qualcomm/smoke.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    b.installArtifact(smoke);
+
+    const smoke_step = b.step("qualcomm-smoke", "Build the Android ARM64 Qualcomm bring-up binary");
+    smoke_step.dependOn(&b.addInstallArtifact(smoke, .{}).step);
+
+    const probe = b.addExecutable(.{
+        .name = "tensorfold-qualcomm-probe",
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("zig/src/qualcomm/probe.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    if (android_libc) |libc_file|
+        probe.setLibCFile(.{ .cwd_relative = libc_file });
+    b.installArtifact(probe);
+
+    const probe_step = b.step("qualcomm-probe", "Build the Android Qualcomm FastRPC loader probe");
+    probe_step.dependOn(&b.addInstallArtifact(probe, .{}).step);
+
+    const exl3_test = b.addTest(.{
+        .name = "tensorfold-qualcomm-exl3-test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("zig/src/core/exl3_format.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    exl3_test.linkage = .dynamic;
+    if (android_libc) |libc_file|
+        exl3_test.setLibCFile(.{ .cwd_relative = libc_file });
+
+    const exl3_step = b.step("qualcomm-exl3-test", "Build the Android scalar EXL3 oracle tests");
+    exl3_step.dependOn(&b.addInstallArtifact(exl3_test, .{}).step);
 }
 
 /// `zig build native -Dcpu=apple_m1`: tensorfold-native with the Metal engines for the Python package's bundle (a native M5 build traps on M1-M4).
