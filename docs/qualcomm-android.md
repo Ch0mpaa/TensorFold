@@ -328,6 +328,36 @@ identifies resident packed weights, graph reuse, prompt-head elision, and an
 accelerated output head as the next gates. Raw evidence is in
 `recordings/20261015-095636-qwen35-4b-simultaneous/` in the mobile lab.
 
+### Qwen3.5-4B tuned serving POC
+
+The first serving-oriented tuning pass retained the same 15 prompt token IDs
+and exact eight generated IDs while reducing TensorFold wall time from
+140,533.959 ms to 8,628.986 ms, a 16.286x improvement. It batches the complete
+teacher-forced prompt layer-by-layer, reuses GGML graphs and backend buffers by
+shape, skips the 14 prompt-position vocabulary scans whose next tokens are
+known, and uses a threaded ARM NEON tied head. A persistent EXL3-derived FP16
+execution cache reduces the staged projection traffic from 313.734 GB to
+57.043 GB per request and allows batched prompt matrices to use the F16 HMX
+path.
+
+| Matched 15-token prompt + 8 generated tokens | llama.cpp Q4_0 HTP | TensorFold tuned EXL3 HTP |
+| --- | ---: | ---: |
+| End-to-end wall time | 666.062 ms | 8,628.986 ms |
+| End-to-end generated tokens/s | 12.011 | 0.927 |
+| Projection compute | not exposed | 1,398.517 ms |
+| Projection-call wall time | not exposed | 6,167.799 ms |
+
+The original 203.8x implementation gap is 12.955x after tuning; llama.cpp is
+still faster. All eight generated top-one choices matched upstream ExLlamaV3,
+and six of eight ordered top-five ID lists matched. FP16 staging is therefore
+numerically close but not bit-identical to the FP32 correctness path. It is an
+intermediate execution format, not native packed-EXL3 execution. The next
+performance gate is a packed-EXL3 HTP/HVX/HMX kernel or another resident
+compressed-weight path, because 6.168 seconds of the tuned result remains in
+projection-call wall time while matrix compute itself is 1.399 seconds. Raw
+evidence is in `recordings/20261015-104834-tensorfold-4b-tuned/` in the mobile
+lab.
+
 ## Matched llama.cpp control
 
 The control lane uses the same Snapdragon 8 Elite phone and the same

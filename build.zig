@@ -372,7 +372,7 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     exl3_forward_module.addCSourceFile(.{
         .file = b.path("zig/src/qualcomm/ggml_bridge.c"),
-        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" },
+        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-march=armv8.2-a+fp16" },
     });
     exl3_forward_module.addImport("exl3_format", b.createModule(.{
         .root_source_file = b.path("zig/src/core/exl3_format.zig"),
@@ -425,7 +425,7 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     exl3_forward_4b_module.addCSourceFile(.{
         .file = b.path("zig/src/qualcomm/ggml_bridge.c"),
-        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" },
+        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-march=armv8.2-a+fp16" },
     });
     exl3_forward_4b_module.addImport("exl3_format", b.createModule(.{
         .root_source_file = b.path("zig/src/core/exl3_format.zig"),
