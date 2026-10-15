@@ -120,3 +120,37 @@ one HMX unit, and an 8 MiB VTCM. The largest prefill case selected the
 `091b6a7fc561b78da90a0ed2d524ec995458c657`; its Android shared libraries
 require an API 36 link surface even though TensorFold's standalone smoke,
 FastRPC probe, and scalar EXL3 test remain compatible with API 29.
+
+## Real EXL3 projection bridge
+
+`qualcomm-exl3-projection` advances the bridge from synthetic weights to the
+public-checkpoint `mcg` 8.00-bpw block embedded in TensorFold's checked-in
+oracle fixture. TensorFold's Zig implementation parses the EXL3 record,
+dequantizes and rotates the 128x128 weight, transposes it into projection
+layout, creates deterministic activations, and calculates both the decode and
+projection references. A narrow C ABI passes the dequantized FP32 projection
+to the selected GGML backend.
+
+```text
+zig build qualcomm-exl3-projection -Dtarget=aarch64-linux-android \
+  -Doptimize=ReleaseSafe -Dandroid-libc=/path/to/android-libc-api36.txt \
+  -Dggml-include=/path/to/ggml/include \
+  -Dggml-lib=/path/to/android/ggml/libs
+
+tensorfold-qualcomm-exl3-projection cpu exl3_oracle.bin ITERATIONS BATCH CPU_THREADS
+tensorfold-qualcomm-exl3-projection htp exl3_oracle.bin ITERATIONS BATCH CPU_THREADS
+```
+
+On Snapdragon 8 Elite, all 12 measured samples passed. The EXL3 decode stayed
+within `4.858e-17` of the FP64 oracle. Projection maximum absolute error was
+`8.941e-8` at batch 1 and `2.492e-4` at batch 128. The HTP trace selected
+`hvx-tiled` for batch 1 and `hmx-tiled` for batch 128. Median compute times:
+
+| Real EXL3 block | CPU ms | HTP ms | HTP speedup |
+| --- | ---: | ---: | ---: |
+| batch 1 | 0.479311 | 0.412476 | 1.162x |
+| batch 128 | 0.887531 | 0.426646 | 2.080x |
+
+This still dequantizes on CPU and uploads FP32 weights. The next backend gate
+is to consume the packed EXL3 representation without materializing a complete
+FP32 model copy.
