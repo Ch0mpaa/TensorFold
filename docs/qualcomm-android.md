@@ -209,5 +209,7 @@ This initial path reconstructs weights on demand. Reconstruction took about
 It is a correctness/bring-up executable, not a generation-speed claim. The
 next runtime step is a persistent decoded-weight cache, followed by direct
 packed-EXL3 kernels. The tied FP16 embedding evaluates the architectural head;
-parity against the duplicated quantized `lm_head` and upstream ExLlamaV3 is a
-separate required gate before multi-token benchmarking.
+the pinned upstream ExLlamaV3 implementation, using the checkpoint's
+duplicated quantized `lm_head`, independently returned the same ordered
+top-five IDs. Exact logit parity for that alternative head and multi-token
+state/cache parity remain required gates before generation benchmarking.
