@@ -1,7 +1,8 @@
 # Qualcomm Android port
 
-Status: stage 2 scalar EXL3 correctness. TensorFold is not yet executing EXL3
-model inference on HTP or opening a DSP session.
+Status: stage 3 userspace execution bridge. TensorFold opens a real Qualcomm
+HTP v79 session and executes deterministic matmul graphs on HTP, but is not yet
+executing a complete EXL3 model on HTP.
 
 The port targets 64-bit Android on Snapdragon, with Qualcomm FastRPC/HTP as the
 first accelerator path. It keeps TensorFold's EXL3/EXLR8 formats, model logic,
@@ -77,3 +78,45 @@ zig build qualcomm-exl3-test -Dtarget=aarch64-linux-android -Doptimize=ReleaseSa
 On Snapdragon 8 Elite, the test reproduces all generated oracle cases across
 the three codebooks and supported widths, then unpacks and dequantizes the real
 8.00-bpw fixture within the upstream tolerance.
+
+## CPU/HTP bridge harness
+
+`qualcomm-matmul` is the first execution bridge. TensorFold owns the deterministic
+inputs, graph construction, correctness oracle, timing and JSON result, while the
+selected GGML CPU or Hexagon backend executes the graph. It is an intermediate
+integration target, not the final native EXL3 kernel backend.
+
+```text
+zig build qualcomm-matmul -Dtarget=aarch64-linux-android -Doptimize=ReleaseSafe \
+  -Dandroid-libc=/path/to/android-libc.txt \
+  -Dggml-include=/path/to/ggml/include \
+  -Dggml-lib=/path/to/android/ggml/libs
+
+tensorfold-qualcomm-matmul cpu K M N ITERATIONS CPU_THREADS
+tensorfold-qualcomm-matmul htp K M N ITERATIONS CPU_THREADS
+```
+
+Every result includes the matrix shape, time, throughput and maximum absolute
+error against TensorFold's scalar FP32 reference.
+
+### Snapdragon 8 Elite validation
+
+Phone B (`CPH2655`) ran three samples of each workload through each backend.
+All 24 samples matched the scalar FP32 oracle with zero observed maximum
+absolute error. Times below are the sample medians and cover backend graph
+compute after one warmup; host-to-backend upload and result download are not
+included.
+
+| Workload | Shape `(K,M,N)` | CPU ms | HTP ms | HTP speedup |
+| --- | ---: | ---: | ---: | ---: |
+| decode micro | 256, 256, 1 | 0.736781 | 0.417172 | 1.766x |
+| decode Qwen3.5-4B width | 2560, 2560, 1 | 2.259547 | 0.691000 | 3.270x |
+| prefill micro | 256, 256, 128 | 0.636039 | 0.254089 | 2.503x |
+| prefill Qwen3.5-4B width | 2560, 2560, 128 | 14.061302 | 0.742344 | 18.942x |
+
+The verbose backend trace identified `HTP0`, architecture v79, six HVX units,
+one HMX unit, and an 8 MiB VTCM. The largest prefill case selected the
+`hmx-tiled` kernel. The exact backend source was pinned at
+`091b6a7fc561b78da90a0ed2d524ec995458c657`; its Android shared libraries
+require an API 36 link surface even though TensorFold's standalone smoke,
+FastRPC probe, and scalar EXL3 test remain compatible with API 29.

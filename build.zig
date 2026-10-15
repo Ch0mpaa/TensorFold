@@ -199,6 +199,8 @@ pub fn build(b: *std.Build) void {
 /// before the FastRPC/HTP boundary is introduced.
 fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
     const android_libc = b.option([]const u8, "android-libc", "Zig libc configuration for the Android NDK");
+    const ggml_include = b.option([]const u8, "ggml-include", "Path containing ggml.h and backend headers");
+    const ggml_lib = b.option([]const u8, "ggml-lib", "Path containing Android GGML backend libraries");
     const smoke = b.addExecutable(.{
         .name = "tensorfold-qualcomm-smoke",
         .root_module = b.createModule(.{
@@ -244,6 +246,37 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
 
     const exl3_step = b.step("qualcomm-exl3-test", "Build the Android scalar EXL3 oracle tests");
     exl3_step.dependOn(&b.addInstallArtifact(exl3_test, .{}).step);
+
+    const matmul_module = b.createModule(.{
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    matmul_module.addCSourceFile(.{
+        .file = b.path("zig/src/qualcomm/ggml_matmul.c"),
+        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" },
+    });
+    if (ggml_include) |include_path|
+        matmul_module.addIncludePath(.{ .cwd_relative = include_path });
+    if (ggml_lib) |lib_path| {
+        // Pass the shared objects as linker inputs instead of `-l` names. On a
+        // Windows host Zig otherwise encodes the resolved drive-qualified path
+        // as `-l:D:\...`, which Android's LLD cannot interpret.
+        matmul_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-base.so" }) });
+        matmul_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-cpu.so" }) });
+        matmul_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-hexagon.so" }) });
+    }
+
+    const matmul = b.addExecutable(.{
+        .name = "tensorfold-qualcomm-matmul",
+        .linkage = .dynamic,
+        .root_module = matmul_module,
+    });
+    if (android_libc) |libc_file|
+        matmul.setLibCFile(.{ .cwd_relative = libc_file });
+
+    const matmul_step = b.step("qualcomm-matmul", "Build the TensorFold CPU/Hexagon matmul harness");
+    matmul_step.dependOn(&b.addInstallArtifact(matmul, .{}).step);
 }
 
 /// `zig build native -Dcpu=apple_m1`: tensorfold-native with the Metal engines for the Python package's bundle (a native M5 build traps on M1-M4).
