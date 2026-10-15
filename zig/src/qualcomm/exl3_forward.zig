@@ -104,6 +104,21 @@ extern fn tf_qualcomm_backend_mlp_f16_resident_once(
     compute_ms: *f64,
     weights_uploaded: *c_int,
 ) c_int;
+extern fn tf_qualcomm_backend_gdn_f32_resident_once(
+    context: ?*anyopaque,
+    slot_id: usize,
+    width: usize,
+    heads: usize,
+    n: usize,
+    query: [*]const f32,
+    key: [*]const f32,
+    value_input: [*]const f32,
+    log_decay: [*]const f32,
+    beta: [*]const f32,
+    initial_state: ?[*]const f32,
+    output: [*]f32,
+    compute_ms: *f64,
+) c_int;
 
 const prefix = "model.language_model";
 const hidden = profile.hidden;
@@ -225,6 +240,9 @@ const Runner = struct {
     resident_head_hits: usize = 0,
     resident_head_fallbacks: usize = 0,
     resident_head_compute_ms: f64 = 0,
+    resident_gdn_loaded: [layers]bool = @splat(false),
+    resident_gdn_hits: usize = 0,
+    resident_gdn_compute_ms: f64 = 0,
 
     fn resetMetrics(self: *Runner) void {
         self.projection_count = 0;
@@ -254,6 +272,9 @@ const Runner = struct {
         self.resident_head_hits = 0;
         self.resident_head_fallbacks = 0;
         self.resident_head_compute_ms = 0;
+        self.resident_gdn_loaded = @splat(false);
+        self.resident_gdn_hits = 0;
+        self.resident_gdn_compute_ms = 0;
     }
 
     const CachedWeight = struct {
@@ -676,6 +697,39 @@ const Runner = struct {
         }
     }
 
+    fn gdnResident(self: *Runner, layer: usize, count: usize, query: []const f32, key: []const f32, value_input: []const f32, log_decay: []const f32, beta: []const f32, initial_state: []const f32, output: []f32) !void {
+        const expanded_len = count * linear_output_width;
+        if (query.len != count * linear_query_width or key.len != count * linear_query_width or
+            value_input.len != expanded_len or log_decay.len != count * linear_value_heads or
+            beta.len != count * linear_value_heads or output.len != expanded_len) return error.UnexpectedTensor;
+        const expanded_query = try self.allocator.alloc(f32, expanded_len);
+        defer self.allocator.free(expanded_query);
+        const expanded_key = try self.allocator.alloc(f32, expanded_len);
+        defer self.allocator.free(expanded_key);
+        const values_per_key = linear_value_heads / linear_key_heads;
+        for (0..count) |position| {
+            for (0..linear_value_heads) |head| {
+                const key_head = head / values_per_key;
+                const source = (position * linear_key_heads + key_head) * linear_key_width;
+                const target = (position * linear_value_heads + head) * linear_value_width;
+                @memcpy(expanded_query[target..][0..linear_value_width], query[source..][0..linear_key_width]);
+                @memcpy(expanded_key[target..][0..linear_value_width], key[source..][0..linear_key_width]);
+            }
+        }
+        var compute_ms: f64 = 0;
+        const state_ptr: ?[*]const f32 = if (self.resident_gdn_loaded[layer]) null else initial_state.ptr;
+        const status = tf_qualcomm_backend_gdn_f32_resident_once(self.backend, layer, linear_value_width, linear_value_heads, count, expanded_query.ptr, expanded_key.ptr, value_input.ptr, log_decay.ptr, beta.ptr, state_ptr, output.ptr, &compute_ms);
+        if (status != 0) {
+            std.debug.print("resident GDN bridge failed: status {d}, layer {d}, tokens {d}\n", .{ status, layer, count });
+            return error.BackendRunFailed;
+        }
+        self.resident_gdn_loaded[layer] = true;
+        self.resident_gdn_hits += 1;
+        self.resident_gdn_compute_ms += compute_ms;
+        const undo_scale = @sqrt(@as(f32, @floatFromInt(linear_value_width)));
+        for (output) |*x| x.* = roundBF16(x.* * undo_scale);
+    }
+
     fn convertSaveRunF16(self: *Runner, key: [32]u8, k: usize, m: usize, weight: []const f32, input: []const f32, output: []f32) !void {
         const converted = try self.allocator.alloc(u16, weight.len);
         defer self.allocator.free(converted);
@@ -844,6 +898,13 @@ const DecodeState = struct {
         self.* = undefined;
     }
 
+    fn reset(self: *DecodeState, reset_gdn: bool) void {
+        if (reset_gdn) @memset(self.gdn, 0.0);
+        @memset(self.conv, 0.0);
+        @memset(self.keys, 0.0);
+        @memset(self.values, 0.0);
+    }
+
     fn gdnLayer(self: *DecodeState, layer: usize) []f32 {
         const start = layer * linear_state_elems;
         return self.gdn[start .. start + linear_state_elems];
@@ -913,12 +974,12 @@ fn linearAttention(runner: *Runner, decode: *DecodeState, layer: usize, input: [
     var alog_name: [256]u8 = undefined;
     const alog = try require(runner.file, try tensorName(&alog_name, "{s}.A_log", .{base}), .f32, &.{linear_value_heads});
     var beta: [linear_value_heads]f32 = undefined;
-    var decay: [linear_value_heads]f32 = undefined;
+    var log_decay: [linear_value_heads]f32 = undefined;
     for (0..linear_value_heads) |head| {
         beta[head] = roundBF16(sigmoid(b_gate[head]));
         const s = roundBF16(a_gate[head] + value(dt, head));
         const softplus = roundBF16(@max(s, 0.0) + @log(1.0 + @exp(-@abs(s))));
-        decay[head] = @exp(-@exp(value(alog, head)) * softplus);
+        log_decay[head] = -@exp(value(alog, head)) * softplus;
     }
     const q = try a.alloc(f32, linear_query_width);
     defer a.free(q);
@@ -951,16 +1012,16 @@ fn linearAttention(runner: *Runner, decode: *DecodeState, layer: usize, input: [
     defer a.free(y);
     const recurrent = decode.gdnLayer(layer);
     if (runner.use_resident_weights) {
-        tf_qualcomm_gdn_step_f32(recurrent.ptr, q.ptr, k.ptr, v.ptr, &beta, &decay, y.ptr, linear_key_heads, linear_value_heads, linear_key_width, linear_value_width, runner.cpu_threads);
-        for (y) |*out| out.* = roundBF16(out.*);
+        try runner.gdnResident(layer, 1, q, k, v, &log_decay, &beta, recurrent, y);
     } else {
         for (0..linear_value_heads) |head| {
+            const decay = @exp(log_decay[head]);
             const key_head = head / (linear_value_heads / linear_key_heads);
             for (0..linear_value_width) |dv| {
                 const row = recurrent[(head * linear_value_width + dv) * linear_key_width ..][0..linear_key_width];
                 var kv_mem: f32 = 0;
                 for (0..linear_key_width) |dk| {
-                    row[dk] *= decay[head];
+                    row[dk] *= decay;
                     kv_mem += row[dk] * k[key_head * linear_key_width + dk];
                 }
                 const delta = (v[head * linear_value_width + dv] - kv_mem) * beta[head];
@@ -1062,6 +1123,10 @@ fn linearAttentionBatch(runner: *Runner, decode: *DecodeState, layer: usize, inp
     defer a.free(v);
     const y = try a.alloc(f32, count * linear_output_width);
     defer a.free(y);
+    const beta = try a.alloc(f32, count * linear_value_heads);
+    defer a.free(beta);
+    const log_decay = try a.alloc(f32, count * linear_value_heads);
+    defer a.free(log_decay);
     const recurrent = decode.gdnLayer(layer);
     const q_scale = roundBF16(1.0 / @as(f32, @floatFromInt(linear_key_width)));
     const k_scale = roundBF16(1.0 / @sqrt(@as(f32, @floatFromInt(linear_key_width))));
@@ -1070,7 +1135,6 @@ fn linearAttentionBatch(runner: *Runner, decode: *DecodeState, layer: usize, inp
         const q_row = q[position * linear_query_width ..][0..linear_query_width];
         const k_row = k[position * linear_query_width ..][0..linear_query_width];
         const v_row = v[position * linear_output_width ..][0..linear_output_width];
-        const y_row = y[position * linear_output_width ..][0..linear_output_width];
         for (0..linear_key_heads) |head| {
             var qss: f32 = 0;
             var kss: f32 = 0;
@@ -1091,25 +1155,39 @@ fn linearAttentionBatch(runner: *Runner, decode: *DecodeState, layer: usize, inp
         @memcpy(v_row, mixed_row[2 * linear_query_width .. conv_channels]);
         for (0..linear_value_heads) |head| {
             const gate_index = position * linear_value_heads + head;
-            const beta = roundBF16(sigmoid(b_gate[gate_index]));
+            beta[gate_index] = roundBF16(sigmoid(b_gate[gate_index]));
             const s = roundBF16(a_gate[gate_index] + value(dt, head));
             const softplus = roundBF16(@max(s, 0.0) + @log(1.0 + @exp(-@abs(s))));
-            const decay = @exp(-@exp(value(alog, head)) * softplus);
-            const key_head = head / (linear_value_heads / linear_key_heads);
-            for (0..linear_value_width) |dv| {
-                const row = recurrent[(head * linear_value_width + dv) * linear_key_width ..][0..linear_key_width];
-                var kv_mem: f32 = 0;
-                for (0..linear_key_width) |dk| {
-                    row[dk] *= decay;
-                    kv_mem += row[dk] * k_row[key_head * linear_key_width + dk];
+            log_decay[gate_index] = -@exp(value(alog, head)) * softplus;
+        }
+    }
+    if (runner.use_resident_weights) {
+        try runner.gdnResident(layer, count, q, k, v, log_decay, beta, recurrent, y);
+    } else {
+        for (0..count) |position| {
+            const q_row = q[position * linear_query_width ..][0..linear_query_width];
+            const k_row = k[position * linear_query_width ..][0..linear_query_width];
+            const v_row = v[position * linear_output_width ..][0..linear_output_width];
+            const y_row = y[position * linear_output_width ..][0..linear_output_width];
+            for (0..linear_value_heads) |head| {
+                const gate_index = position * linear_value_heads + head;
+                const decay = @exp(log_decay[gate_index]);
+                const key_head = head / (linear_value_heads / linear_key_heads);
+                for (0..linear_value_width) |dv| {
+                    const row = recurrent[(head * linear_value_width + dv) * linear_key_width ..][0..linear_key_width];
+                    var kv_mem: f32 = 0;
+                    for (0..linear_key_width) |dk| {
+                        row[dk] *= decay;
+                        kv_mem += row[dk] * k_row[key_head * linear_key_width + dk];
+                    }
+                    const delta = (v_row[head * linear_value_width + dv] - kv_mem) * beta[gate_index];
+                    var result: f32 = 0;
+                    for (0..linear_key_width) |dk| {
+                        row[dk] += k_row[key_head * linear_key_width + dk] * delta;
+                        result += row[dk] * q_row[key_head * linear_key_width + dk];
+                    }
+                    y_row[head * linear_value_width + dv] = roundBF16(result);
                 }
-                const delta = (v_row[head * linear_value_width + dv] - kv_mem) * beta;
-                var result: f32 = 0;
-                for (0..linear_key_width) |dk| {
-                    row[dk] += k_row[key_head * linear_key_width + dk] * delta;
-                    result += row[dk] * q_row[key_head * linear_key_width + dk];
-                }
-                y_row[head * linear_value_width + dv] = roundBF16(result);
             }
         }
     }
@@ -1510,16 +1588,24 @@ pub fn main(init: std.process.Init) !u8 {
         for (id) |c| if (!std.ascii.isHex(c)) return error.InvalidModelSha256;
     }
     if (cache_dir) |dir| try std.Io.Dir.cwd().createDirPath(init.io, dir);
-    var runner: Runner = .{ .allocator = init.gpa, .io = init.io, .file = &file, .backend = backend, .cpu_threads = @intCast(threads), .use_f16_weights = serve_mode, .use_resident_weights = resident_mode, .use_resident_head = resident_mode and requests > 1, .cache_dir = cache_dir, .cache_model_id = cache_model_id };
+    var scratch_arena: std.heap.ArenaAllocator = .init(init.gpa);
+    defer scratch_arena.deinit();
+    var runner: Runner = .{ .allocator = scratch_arena.allocator(), .io = init.io, .file = &file, .backend = backend, .cpu_threads = @intCast(threads), .use_f16_weights = serve_mode, .use_resident_weights = resident_mode, .use_resident_head = resident_mode and requests > 1, .cache_dir = cache_dir, .cache_model_id = cache_model_id };
+    var decode = try DecodeState.init(init.gpa, positions);
+    defer decode.deinit(init.gpa);
+    const state = try init.gpa.alloc(f32, hidden);
+    defer init.gpa.free(state);
+    const normed = try init.gpa.alloc(f32, hidden);
+    defer init.gpa.free(normed);
+    const update = try init.gpa.alloc(f32, hidden);
+    defer init.gpa.free(update);
+    const sequence = try init.gpa.alloc(usize, positions + 1);
+    defer init.gpa.free(sequence);
+
     for (0..requests) |request_index| {
         runner.resetMetrics();
         const started = tf_qualcomm_monotonic_ms();
-        var decode = try DecodeState.init(init.gpa, positions);
-
-        const state = try init.gpa.alloc(f32, hidden);
-        const normed = try init.gpa.alloc(f32, hidden);
-        const update = try init.gpa.alloc(f32, hidden);
-        const sequence = try init.gpa.alloc(usize, positions + 1);
+        decode.reset(!runner.use_resident_weights);
         sequence[0] = token;
         if (args.len >= 9) {
             var suffix = std.mem.splitScalar(u8, args[8], ',');
@@ -1549,6 +1635,7 @@ pub fn main(init: std.process.Init) !u8 {
                 for (row, 0..) |*x, d| x.* = f16Value(embedding.bytes, sequence[position] * hidden + d);
             }
             for (0..layers) |layer| {
+                _ = scratch_arena.reset(.retain_capacity);
                 const input_norm = try tensorName(&name_buffer, "{s}.layers.{d}.input_layernorm.weight", .{ prefix, layer });
                 for (0..prompt_len) |position| {
                     try rmsNorm(&file, input_norm, prompt_states[position * hidden ..][0..hidden], prompt_normed[position * hidden ..][0..hidden], 1.0);
@@ -1595,6 +1682,7 @@ pub fn main(init: std.process.Init) !u8 {
             for (state, 0..) |*x, d| x.* = f16Value(embedding.bytes, input_token * hidden + d);
             runner.resident_slot_cursor = 0;
             for (0..layers) |layer| {
+                _ = scratch_arena.reset(.retain_capacity);
                 const input_norm = try tensorName(&name_buffer, "{s}.layers.{d}.input_layernorm.weight", .{ prefix, layer });
                 try rmsNorm(&file, input_norm, state, normed, 1.0);
                 if ((layer + 1) % 4 == 0) {
@@ -1639,14 +1727,13 @@ pub fn main(init: std.process.Init) !u8 {
             std.debug.print("{d}", .{generated_token});
         }
         std.debug.print(
-            "],\"projections\":{d},\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"weight_convert_ms\":{d:.3},\"head_ms\":{d:.3},\"heads_skipped\":{d},\"dequant_ms\":{d:.3},\"cache_hash_ms\":{d:.3},\"cache_read_ms\":{d:.3},\"cache_write_ms\":{d:.3},\"cache_hits\":{d},\"cache_trusted_hits\":{d},\"cache_misses\":{d},\"cache_aliases_created\":{d},\"cache_bytes_read\":{d},\"cache_bytes_written\":{d},\"f16_cache_hits\":{d},\"f16_cache_misses\":{d},\"f16_cache_bytes_read\":{d},\"f16_cache_bytes_written\":{d},\"resident_weight_uploads\":{d},\"resident_weight_hits\":{d},\"resident_weight_fallbacks\":{d},\"resident_weight_bytes_uploaded\":{d},\"resident_head_uploads\":{d},\"resident_head_hits\":{d},\"resident_head_fallbacks\":{d},\"resident_head_compute_ms\":{d:.3},\"elapsed_ms\":{d:.3},\"positions_per_second\":{d:.6},\"end_to_end_generated_tokens_per_second\":{d:.6},\"peak_rss_kib\":{d},\"passed\":true}}\n",
-            .{ runner.projection_count, runner.projection_ms, runner.projection_wall_ms, runner.weight_convert_ms, total_head_ms, skipped_heads, runner.dequant_ms, runner.cache_hash_ms, runner.cache_read_ms, runner.cache_write_ms, runner.cache_hits, runner.cache_trusted_hits, runner.cache_misses, runner.cache_aliases_created, runner.cache_bytes_read, runner.cache_bytes_written, runner.f16_cache_hits, runner.f16_cache_misses, runner.f16_cache_bytes_read, runner.f16_cache_bytes_written, runner.resident_weight_uploads, runner.resident_weight_hits, runner.resident_weight_fallbacks, runner.resident_weight_bytes_uploaded, runner.resident_head_uploads, runner.resident_head_hits, runner.resident_head_fallbacks, runner.resident_head_compute_ms, elapsed, @as(f64, @floatFromInt(positions)) * 1000.0 / elapsed, @as(f64, @floatFromInt(steps)) * 1000.0 / elapsed, tf_qualcomm_peak_rss_kib() },
+            "],\"projections\":{d},\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"weight_convert_ms\":{d:.3},\"head_ms\":{d:.3},\"heads_skipped\":{d},\"dequant_ms\":{d:.3},\"cache_hash_ms\":{d:.3},\"cache_read_ms\":{d:.3},\"cache_write_ms\":{d:.3},\"cache_hits\":{d},\"cache_trusted_hits\":{d},\"cache_misses\":{d},\"cache_aliases_created\":{d},\"cache_bytes_read\":{d},\"cache_bytes_written\":{d},\"f16_cache_hits\":{d},\"f16_cache_misses\":{d},\"f16_cache_bytes_read\":{d},\"f16_cache_bytes_written\":{d},\"resident_weight_uploads\":{d},\"resident_weight_hits\":{d},\"resident_weight_fallbacks\":{d},\"resident_weight_bytes_uploaded\":{d},\"resident_head_uploads\":{d},\"resident_head_hits\":{d},\"resident_head_fallbacks\":{d},\"resident_head_compute_ms\":{d:.3}",
+            .{ runner.projection_count, runner.projection_ms, runner.projection_wall_ms, runner.weight_convert_ms, total_head_ms, skipped_heads, runner.dequant_ms, runner.cache_hash_ms, runner.cache_read_ms, runner.cache_write_ms, runner.cache_hits, runner.cache_trusted_hits, runner.cache_misses, runner.cache_aliases_created, runner.cache_bytes_read, runner.cache_bytes_written, runner.f16_cache_hits, runner.f16_cache_misses, runner.f16_cache_bytes_read, runner.f16_cache_bytes_written, runner.resident_weight_uploads, runner.resident_weight_hits, runner.resident_weight_fallbacks, runner.resident_weight_bytes_uploaded, runner.resident_head_uploads, runner.resident_head_hits, runner.resident_head_fallbacks, runner.resident_head_compute_ms },
         );
-        decode.deinit(init.gpa);
-        init.gpa.free(sequence);
-        init.gpa.free(update);
-        init.gpa.free(normed);
-        init.gpa.free(state);
+        std.debug.print(
+            ",\"resident_gdn_hits\":{d},\"resident_gdn_compute_ms\":{d:.3},\"elapsed_ms\":{d:.3},\"positions_per_second\":{d:.6},\"end_to_end_generated_tokens_per_second\":{d:.6},\"peak_rss_kib\":{d},\"passed\":true}}\n",
+            .{ runner.resident_gdn_hits, runner.resident_gdn_compute_ms, elapsed, @as(f64, @floatFromInt(positions)) * 1000.0 / elapsed, @as(f64, @floatFromInt(steps)) * 1000.0 / elapsed, tf_qualcomm_peak_rss_kib() },
+        );
     }
     return 0;
 }

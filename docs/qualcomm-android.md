@@ -384,6 +384,36 @@ comparison rather than an intrinsic format result: TensorFold executes from a
 Q4_0. Raw evidence is in
 `recordings/20261015-115427-tensorfold-4b-resident-v2/` in the mobile lab.
 
+### Resident-runtime v3: Gated DeltaNet on HTP
+
+The third serving pass moves the complete Gated DeltaNet recurrent update and
+its state from per-layer ARM work to the Hexagon backend's native fused
+`GATED_DELTA_NET` operator. Each linear-attention layer owns a resident HTP
+state tensor shared by its batched-prompt and decode graphs. The prompt graph
+processes all 15 tokens in one call; subsequent one-token graphs update the
+same state in place. A retained scratch arena also removes most temporary
+allocation churn between layers and requests.
+
+| Same 15-token prompt + 8 generated tokens | Wall time | Original TensorFold speedup |
+| --- | ---: | ---: |
+| v3 cold request | 6,822.401 ms | 20.599x |
+| v3 warmed range, five samples | 2,673.233-2,896.908 ms | 48.512-52.571x |
+| v3 warmed median | 2,813.129 ms | 49.956x |
+
+All six requests generated `248068,198,90700,8340,25,271,16,13`. Each request
+made 192 resident Gated DeltaNet calls; warmed GDN compute was
+127.002-140.631 ms (133.269 ms median). Warm requests retained 1,600 resident
+projection hits with zero weight uploads, cache reads, or fallbacks. Relative
+to v2, warm median latency fell 18.656%. The remaining gap to the existing
+666.062 ms llama.cpp control is 4.224x.
+
+This still is not native packed-EXL3 execution. Projection calls alone retain
+a 1,546.191 ms warmed median and all projection weights remain in the 7.13 GB
+EXL3-derived FP16 staging representation. Direct trellis decode/projection on
+HVX/HMX, followed by larger fused layer graphs, is the primary performance
+gate. Raw evidence is in
+`recordings/20261015-121649-tensorfold-4b-htp-gdn/` in the mobile lab.
+
 ## Matched llama.cpp control
 
 The control lane uses the same Snapdragon 8 Elite phone and the same

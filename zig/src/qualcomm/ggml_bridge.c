@@ -360,6 +360,30 @@ struct tf_qualcomm_resident_mlp_slot {
     int weights_loaded;
 };
 
+struct tf_qualcomm_resident_gdn_slot {
+    size_t width;
+    size_t heads;
+    size_t batch_n;
+    struct ggml_context *ctx;
+    struct ggml_tensor *state;
+    struct ggml_tensor *batch_query;
+    struct ggml_tensor *batch_key;
+    struct ggml_tensor *batch_value;
+    struct ggml_tensor *batch_log_decay;
+    struct ggml_tensor *batch_beta;
+    struct ggml_tensor *batch_result;
+    struct ggml_cgraph *batch_graph;
+    struct ggml_tensor *decode_query;
+    struct ggml_tensor *decode_key;
+    struct ggml_tensor *decode_value;
+    struct ggml_tensor *decode_log_decay;
+    struct ggml_tensor *decode_beta;
+    struct ggml_tensor *decode_result;
+    struct ggml_cgraph *decode_graph;
+    ggml_backend_buffer_t buffer;
+    int initialized;
+};
+
 struct tf_qualcomm_backend {
     ggml_backend_t backend;
     struct tf_qualcomm_matmul_slot slots[TF_QUALCOMM_MATMUL_SLOTS];
@@ -367,6 +391,7 @@ struct tf_qualcomm_backend {
     struct tf_qualcomm_resident_slot resident_slots[TF_QUALCOMM_RESIDENT_SLOTS];
     struct tf_qualcomm_resident_group_slot resident_group_slots[TF_QUALCOMM_RESIDENT_SLOTS];
     struct tf_qualcomm_resident_mlp_slot resident_mlp_slots[TF_QUALCOMM_RESIDENT_SLOTS];
+    struct tf_qualcomm_resident_gdn_slot resident_gdn_slots[TF_QUALCOMM_RESIDENT_SLOTS];
 };
 
 void *tf_qualcomm_backend_create(const char *backend_name, int cpu_threads) {
@@ -411,6 +436,10 @@ void tf_qualcomm_backend_destroy(void *opaque) {
         if (context->resident_mlp_slots[i].initialized) {
             ggml_backend_buffer_free(context->resident_mlp_slots[i].buffer);
             ggml_free(context->resident_mlp_slots[i].ctx);
+        }
+        if (context->resident_gdn_slots[i].initialized) {
+            ggml_backend_buffer_free(context->resident_gdn_slots[i].buffer);
+            ggml_free(context->resident_gdn_slots[i].ctx);
         }
     }
     ggml_backend_free(context->backend);
@@ -868,6 +897,158 @@ int tf_qualcomm_backend_mlp_f16_resident_once(void *opaque,
     }
     const double stopped = monotonic_ms();
     ggml_backend_tensor_get(output_tensor, output, 0, output_width * n * sizeof(*output));
+    *compute_ms = stopped - started;
+    return 0;
+}
+
+static struct ggml_cgraph *build_gdn_graph(struct ggml_context *ctx,
+                                           struct ggml_tensor *state,
+                                           size_t width,
+                                           size_t heads,
+                                           size_t n,
+                                           struct ggml_tensor **query,
+                                           struct ggml_tensor **key,
+                                           struct ggml_tensor **value,
+                                           struct ggml_tensor **log_decay,
+                                           struct ggml_tensor **beta,
+                                           struct ggml_tensor **result) {
+    *query = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, (int64_t) width, (int64_t) heads, (int64_t) n, 1);
+    *key = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, (int64_t) width, (int64_t) heads, (int64_t) n, 1);
+    *value = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, (int64_t) width, (int64_t) heads, (int64_t) n, 1);
+    *log_decay = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, (int64_t) heads, (int64_t) n, 1);
+    *beta = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 1, (int64_t) heads, (int64_t) n, 1);
+    *result = ggml_gated_delta_net(ctx, *query, *key, *value, *log_decay, *beta, state, 1);
+    const size_t output_bytes = width * heads * n * sizeof(float);
+    struct ggml_tensor *new_state = ggml_view_4d(ctx,
+                                                 *result,
+                                                 (int64_t) width,
+                                                 (int64_t) width,
+                                                 (int64_t) heads,
+                                                 1,
+                                                 width * sizeof(float),
+                                                 width * width * sizeof(float),
+                                                 width * width * heads * sizeof(float),
+                                                 output_bytes);
+    struct ggml_tensor *state_copy = ggml_cpy(ctx, new_state, state);
+    struct ggml_cgraph *graph = ggml_new_graph_custom(ctx, 16, false);
+    ggml_build_forward_expand(graph, state_copy);
+    return graph;
+}
+
+static struct tf_qualcomm_resident_gdn_slot *get_resident_gdn_slot(struct tf_qualcomm_backend *context,
+                                                                   size_t slot_id,
+                                                                   size_t width,
+                                                                   size_t heads,
+                                                                   size_t n) {
+    if (slot_id >= TF_QUALCOMM_RESIDENT_SLOTS) {
+        return NULL;
+    }
+    struct tf_qualcomm_resident_gdn_slot *slot = &context->resident_gdn_slots[slot_id];
+    if (slot->initialized) {
+        if (slot->width != width || slot->heads != heads || (n != slot->batch_n && n != 1)) {
+            return NULL;
+        }
+        return slot;
+    }
+
+    const struct ggml_init_params params = {
+        .mem_size = 2u * 1024u * 1024u,
+        .mem_buffer = NULL,
+        .no_alloc = true,
+    };
+    slot->ctx = ggml_init(params);
+    if (slot->ctx == NULL) {
+        return NULL;
+    }
+    slot->state = ggml_new_tensor_4d(slot->ctx, GGML_TYPE_F32, (int64_t) width, (int64_t) width, (int64_t) heads, 1);
+    slot->batch_graph = build_gdn_graph(slot->ctx,
+                                        slot->state,
+                                        width,
+                                        heads,
+                                        n,
+                                        &slot->batch_query,
+                                        &slot->batch_key,
+                                        &slot->batch_value,
+                                        &slot->batch_log_decay,
+                                        &slot->batch_beta,
+                                        &slot->batch_result);
+    if (n != 1) {
+        slot->decode_graph = build_gdn_graph(slot->ctx,
+                                             slot->state,
+                                             width,
+                                             heads,
+                                             1,
+                                             &slot->decode_query,
+                                             &slot->decode_key,
+                                             &slot->decode_value,
+                                             &slot->decode_log_decay,
+                                             &slot->decode_beta,
+                                             &slot->decode_result);
+    }
+    slot->buffer = ggml_backend_alloc_ctx_tensors(slot->ctx, context->backend);
+    if (slot->buffer == NULL) {
+        ggml_free(slot->ctx);
+        memset(slot, 0, sizeof(*slot));
+        return NULL;
+    }
+    slot->width = width;
+    slot->heads = heads;
+    slot->batch_n = n;
+    slot->initialized = 1;
+    return slot;
+}
+
+int tf_qualcomm_backend_gdn_f32_resident_once(void *opaque,
+                                              size_t slot_id,
+                                              size_t width,
+                                              size_t heads,
+                                              size_t n,
+                                              const float *query,
+                                              const float *key,
+                                              const float *value,
+                                              const float *log_decay,
+                                              const float *beta,
+                                              const float *initial_state,
+                                              float *output,
+                                              double *compute_ms) {
+    if (opaque == NULL || query == NULL || key == NULL || value == NULL || log_decay == NULL || beta == NULL ||
+        output == NULL || compute_ms == NULL || width == 0 || heads == 0 || n == 0) {
+        return 1;
+    }
+    struct tf_qualcomm_backend *context = opaque;
+    struct tf_qualcomm_resident_gdn_slot *slot = get_resident_gdn_slot(context, slot_id, width, heads, n);
+    if (slot == NULL) {
+        return 2;
+    }
+    if (initial_state != NULL) {
+        ggml_backend_tensor_set(slot->state, initial_state, 0, width * width * heads * sizeof(*initial_state));
+    }
+
+    struct ggml_tensor *query_tensor = n == slot->batch_n ? slot->batch_query : slot->decode_query;
+    struct ggml_tensor *key_tensor = n == slot->batch_n ? slot->batch_key : slot->decode_key;
+    struct ggml_tensor *value_tensor = n == slot->batch_n ? slot->batch_value : slot->decode_value;
+    struct ggml_tensor *decay_tensor = n == slot->batch_n ? slot->batch_log_decay : slot->decode_log_decay;
+    struct ggml_tensor *beta_tensor = n == slot->batch_n ? slot->batch_beta : slot->decode_beta;
+    struct ggml_tensor *result_tensor = n == slot->batch_n ? slot->batch_result : slot->decode_result;
+    struct ggml_cgraph *graph = n == slot->batch_n ? slot->batch_graph : slot->decode_graph;
+    if (query_tensor == NULL || key_tensor == NULL || value_tensor == NULL || decay_tensor == NULL || beta_tensor == NULL ||
+        result_tensor == NULL || graph == NULL) {
+        return 3;
+    }
+
+    const size_t vector_bytes = width * heads * n * sizeof(*query);
+    const size_t scalar_bytes = heads * n * sizeof(*log_decay);
+    ggml_backend_tensor_set(query_tensor, query, 0, vector_bytes);
+    ggml_backend_tensor_set(key_tensor, key, 0, vector_bytes);
+    ggml_backend_tensor_set(value_tensor, value, 0, vector_bytes);
+    ggml_backend_tensor_set(decay_tensor, log_decay, 0, scalar_bytes);
+    ggml_backend_tensor_set(beta_tensor, beta, 0, scalar_bytes);
+    const double started = monotonic_ms();
+    if (ggml_backend_graph_compute(context->backend, graph) != GGML_STATUS_SUCCESS) {
+        return 4;
+    }
+    const double stopped = monotonic_ms();
+    ggml_backend_tensor_get(result_tensor, output, 0, vector_bytes);
     *compute_ms = stopped - started;
     return 0;
 }
