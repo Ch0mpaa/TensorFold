@@ -73,15 +73,16 @@ void tf_qualcomm_backend_destroy(void *opaque) {
     free(context);
 }
 
-int tf_qualcomm_backend_matmul(void *opaque,
-                               size_t k,
-                               size_t m,
-                               size_t n,
-                               size_t iterations,
-                               const float *weight,
-                               const float *input,
-                               float *output,
-                               double *ms_per_iteration) {
+static int backend_matmul(void *opaque,
+                          size_t k,
+                          size_t m,
+                          size_t n,
+                          size_t iterations,
+                          int warmup,
+                          const float *weight,
+                          const float *input,
+                          float *output,
+                          double *ms_per_iteration) {
     if (opaque == NULL || iterations == 0) {
         return 1;
     }
@@ -109,7 +110,7 @@ int tf_qualcomm_backend_matmul(void *opaque,
     }
     ggml_backend_tensor_set(a, weight, 0, k * m * sizeof(*weight));
     ggml_backend_tensor_set(b, input, 0, k * n * sizeof(*input));
-    if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
+    if (warmup && ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
         ggml_backend_buffer_free(buffer);
         ggml_free(ctx);
         return 4;
@@ -128,6 +129,29 @@ int tf_qualcomm_backend_matmul(void *opaque,
     ggml_backend_buffer_free(buffer);
     ggml_free(ctx);
     return 0;
+}
+
+int tf_qualcomm_backend_matmul(void *opaque,
+                               size_t k,
+                               size_t m,
+                               size_t n,
+                               size_t iterations,
+                               const float *weight,
+                               const float *input,
+                               float *output,
+                               double *ms_per_iteration) {
+    return backend_matmul(opaque, k, m, n, iterations, 1, weight, input, output, ms_per_iteration);
+}
+
+int tf_qualcomm_backend_matmul_once(void *opaque,
+                                    size_t k,
+                                    size_t m,
+                                    size_t n,
+                                    const float *weight,
+                                    const float *input,
+                                    float *output,
+                                    double *compute_ms) {
+    return backend_matmul(opaque, k, m, n, 1, 0, weight, input, output, compute_ms);
 }
 
 int tf_qualcomm_matmul(const char *backend_name,

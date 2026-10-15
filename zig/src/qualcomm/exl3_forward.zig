@@ -1,7 +1,8 @@
 //! A deliberately small, auditable Qwen3.5-2B EXL3 decode path for Qualcomm
 //! Android bring-up. It executes token position zero end-to-end and keeps the
 //! model math in TensorFold while routing every quantized projection through
-//! either GGML CPU or Hexagon HTP.
+//! either GGML CPU or Hexagon HTP. An optional content-addressed cache keeps
+//! decoded row-major weights between runs so EXL3 reconstruction is paid once.
 
 const std = @import("std");
 const exl3 = @import("exl3_format");
@@ -11,16 +12,15 @@ extern fn tf_qualcomm_monotonic_ms() f64;
 extern fn tf_qualcomm_peak_rss_kib() usize;
 extern fn tf_qualcomm_backend_create(backend_name: [*:0]const u8, cpu_threads: i32) ?*anyopaque;
 extern fn tf_qualcomm_backend_destroy(context: ?*anyopaque) void;
-extern fn tf_qualcomm_backend_matmul(
+extern fn tf_qualcomm_backend_matmul_once(
     context: ?*anyopaque,
     k: usize,
     m: usize,
     n: usize,
-    iterations: usize,
     weight: [*]const f32,
     input: [*]const f32,
     output: [*]f32,
-    ms_per_iteration: *f64,
+    compute_ms: *f64,
 ) c_int;
 
 const prefix = "model.language_model";
@@ -29,6 +29,8 @@ const intermediate = 6144;
 const layers = 24;
 const vocab = 248320;
 const eps: f32 = 1e-6;
+const cache_magic = "TFEXL3F1";
+const cache_header_bytes = 64;
 
 fn f16Value(bytes: []const u8, index: usize) f32 {
     const bits = std.mem.readInt(u16, bytes[index * 2 ..][0..2], .little);
@@ -86,11 +88,167 @@ fn tensorName(buffer: []u8, comptime format: []const u8, args: anytype) ![]const
 
 const Runner = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     file: *const st.File,
     backend: ?*anyopaque,
+    cache_dir: ?[]const u8 = null,
+    cache_model_id: ?[]const u8 = null,
     projection_count: usize = 0,
     projection_ms: f64 = 0,
+    projection_wall_ms: f64 = 0,
     dequant_ms: f64 = 0,
+    cache_hash_ms: f64 = 0,
+    cache_read_ms: f64 = 0,
+    cache_write_ms: f64 = 0,
+    cache_hits: usize = 0,
+    cache_misses: usize = 0,
+    cache_bytes_read: usize = 0,
+    cache_bytes_written: usize = 0,
+    cache_trusted_hits: usize = 0,
+    cache_aliases_created: usize = 0,
+
+    const CachedWeight = struct {
+        file: std.Io.File,
+        map: std.Io.File.MemoryMap,
+        weight: []const f32,
+
+        fn close(self: *CachedWeight, io: std.Io) void {
+            self.map.destroy(io);
+            self.file.close(io);
+            self.* = undefined;
+        }
+    };
+
+    fn projectionKey(
+        trellis_tensor: st.Tensor,
+        suh_tensor: st.Tensor,
+        svh_tensor: st.Tensor,
+        mcg_tensor: st.Tensor,
+        k: usize,
+        m: usize,
+        words: usize,
+    ) [32]u8 {
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        hash.update("TensorFold EXL3 decoded row-major f32 cache v1\n");
+        var dimensions: [24]u8 = undefined;
+        std.mem.writeInt(u64, dimensions[0..8], k, .little);
+        std.mem.writeInt(u64, dimensions[8..16], m, .little);
+        std.mem.writeInt(u64, dimensions[16..24], words, .little);
+        hash.update(&dimensions);
+        hash.update(trellis_tensor.bytes);
+        hash.update(suh_tensor.bytes);
+        hash.update(svh_tensor.bytes);
+        hash.update(mcg_tensor.bytes);
+        var key: [32]u8 = undefined;
+        hash.final(&key);
+        return key;
+    }
+
+    fn trustedProjectionKey(model_id: []const u8, base: []const u8, k: usize, m: usize, words: usize) [32]u8 {
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        hash.update("TensorFold EXL3 decoded row-major f32 trusted cache v1\n");
+        hash.update(model_id);
+        hash.update("\n");
+        hash.update(base);
+        var dimensions: [24]u8 = undefined;
+        std.mem.writeInt(u64, dimensions[0..8], k, .little);
+        std.mem.writeInt(u64, dimensions[8..16], m, .little);
+        std.mem.writeInt(u64, dimensions[16..24], words, .little);
+        hash.update(&dimensions);
+        var key: [32]u8 = undefined;
+        hash.final(&key);
+        return key;
+    }
+
+    fn cachePath(self: *Runner, key: [32]u8) !?[]u8 {
+        const dir = self.cache_dir orelse return null;
+        return try std.fmt.allocPrint(self.allocator, "{s}/{s}.tfexl3-f32", .{ dir, std.fmt.bytesToHex(key, .lower) });
+    }
+
+    fn cacheHeader(key: [32]u8, k: usize, m: usize, payload_bytes: usize) [cache_header_bytes]u8 {
+        var header: [cache_header_bytes]u8 = @splat(0);
+        @memcpy(header[0..cache_magic.len], cache_magic);
+        std.mem.writeInt(u64, header[8..16], k, .little);
+        std.mem.writeInt(u64, header[16..24], m, .little);
+        std.mem.writeInt(u64, header[24..32], payload_bytes, .little);
+        @memcpy(header[32..64], &key);
+        return header;
+    }
+
+    fn loadCached(self: *Runner, key: [32]u8, k: usize, m: usize) !?CachedWeight {
+        const path = try self.cachePath(key) orelse return null;
+        defer self.allocator.free(path);
+        var file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return null;
+        var file_owned = true;
+        defer if (file_owned) file.close(self.io);
+        const payload_bytes = try std.math.mul(usize, try std.math.mul(usize, k, m), @sizeOf(f32));
+        const whole_bytes = try std.math.add(usize, cache_header_bytes, payload_bytes);
+        if ((file.length(self.io) catch return null) != whole_bytes) return null;
+        const started = tf_qualcomm_monotonic_ms();
+        var map = std.Io.File.MemoryMap.create(self.io, file, .{
+            .len = whole_bytes,
+            .protection = .{ .read = true, .write = false },
+            .populate = false,
+        }) catch return null;
+        var map_owned = true;
+        defer if (map_owned) map.destroy(self.io);
+        const want = cacheHeader(key, k, m, payload_bytes);
+        // The final 32 bytes record the content key that created the payload.
+        // A trusted model-ID alias is a hard link to that same immutable file,
+        // so validate format and geometry here; filename identity is checked by
+        // either the full content hash or the caller-supplied model SHA-256.
+        if (!std.mem.eql(u8, map.memory[0..32], want[0..32])) return null;
+        const payload = map.memory[cache_header_bytes..];
+        const weight = std.mem.bytesAsSlice(f32, payload);
+        self.cache_read_ms += tf_qualcomm_monotonic_ms() - started;
+        self.cache_hits += 1;
+        self.cache_bytes_read += payload_bytes;
+        file_owned = false;
+        map_owned = false;
+        return .{ .file = file, .map = map, .weight = weight };
+    }
+
+    fn saveCached(self: *Runner, key: [32]u8, k: usize, m: usize, weight: []const f32) !void {
+        const path = try self.cachePath(key) orelse return;
+        defer self.allocator.free(path);
+        const temp = try std.fmt.allocPrint(self.allocator, "{s}.{d}.tmp", .{ path, std.c.getpid() });
+        defer self.allocator.free(temp);
+        const payload = std.mem.sliceAsBytes(weight);
+        const header = cacheHeader(key, k, m, payload.len);
+        const started = tf_qualcomm_monotonic_ms();
+        var file = try std.Io.Dir.cwd().createFile(self.io, temp, .{ .truncate = true });
+        errdefer std.Io.Dir.cwd().deleteFile(self.io, temp) catch {};
+        defer file.close(self.io);
+        try file.writePositionalAll(self.io, &header, 0);
+        try file.writePositionalAll(self.io, payload, cache_header_bytes);
+        try file.setLength(self.io, cache_header_bytes + payload.len);
+        file.sync(self.io) catch {};
+        try std.Io.Dir.cwd().rename(temp, std.Io.Dir.cwd(), path, self.io);
+        self.cache_write_ms += tf_qualcomm_monotonic_ms() - started;
+        self.cache_bytes_written += payload.len;
+    }
+
+    fn linkCached(self: *Runner, content_key: [32]u8, trusted_key: [32]u8) !void {
+        const content_path = try self.cachePath(content_key) orelse return;
+        defer self.allocator.free(content_path);
+        const trusted_path = try self.cachePath(trusted_key) orelse return;
+        defer self.allocator.free(trusted_path);
+        std.Io.Dir.cwd().hardLink(content_path, std.Io.Dir.cwd(), trusted_path, self.io, .{}) catch |err| switch (err) {
+            error.PathAlreadyExists => return,
+            else => return err,
+        };
+        self.cache_aliases_created += 1;
+    }
+
+    fn runWeight(self: *Runner, k: usize, m: usize, weight: []const f32, input: []const f32, output: []f32) !void {
+        var ms: f64 = 0;
+        const started = tf_qualcomm_monotonic_ms();
+        const status = tf_qualcomm_backend_matmul_once(self.backend, k, m, 1, weight.ptr, input.ptr, output.ptr, &ms);
+        self.projection_wall_ms += tf_qualcomm_monotonic_ms() - started;
+        if (status != 0) return error.BridgeFailed;
+        self.projection_ms += ms;
+        self.projection_count += 1;
+    }
 
     fn project(self: *Runner, base: []const u8, input: []const f32, output: []f32) !void {
         var name_buffer: [256]u8 = undefined;
@@ -108,6 +266,28 @@ const Runner = struct {
         const svh_tensor = try require(self.file, try tensorName(&name_buffer, "{s}.svh", .{base}), .f16, &.{m});
         const mcg_tensor = try require(self.file, try tensorName(&name_buffer, "{s}.mcg", .{base}), .i32, &.{});
         if (std.mem.readInt(u32, mcg_tensor.bytes[0..4], .little) != exl3.McgMul) return error.UnexpectedCodebook;
+
+        var cache_key: ?[32]u8 = null;
+        if (self.cache_dir != null) {
+            const trusted_key = if (self.cache_model_id) |model_id| trustedProjectionKey(model_id, base, k, m, words) else null;
+            if (trusted_key) |key| if (try self.loadCached(key, k, m)) |loaded_value| {
+                self.cache_trusted_hits += 1;
+                var loaded = loaded_value;
+                defer loaded.close(self.io);
+                return self.runWeight(k, m, loaded.weight, input, output);
+            };
+            const hash_started = tf_qualcomm_monotonic_ms();
+            const key = projectionKey(trellis_tensor, suh_tensor, svh_tensor, mcg_tensor, k, m, words);
+            self.cache_hash_ms += tf_qualcomm_monotonic_ms() - hash_started;
+            cache_key = key;
+            if (try self.loadCached(key, k, m)) |loaded_value| {
+                if (trusted_key) |alias| try self.linkCached(key, alias);
+                var loaded = loaded_value;
+                defer loaded.close(self.io);
+                return self.runWeight(k, m, loaded.weight, input, output);
+            }
+            self.cache_misses += 1;
+        }
 
         const trellis = try self.allocator.alloc(i16, trellis_tensor.numel());
         defer self.allocator.free(trellis);
@@ -134,12 +314,11 @@ const Runner = struct {
         for (0..m) |out_col| for (0..k) |inner| {
             weight[out_col * k + inner] = decoded[inner * m + out_col];
         };
-
-        var ms: f64 = 0;
-        const status = tf_qualcomm_backend_matmul(self.backend, k, m, 1, 1, weight.ptr, input.ptr, output.ptr, &ms);
-        if (status != 0) return error.BridgeFailed;
-        self.projection_ms += ms;
-        self.projection_count += 1;
+        if (cache_key) |key| try self.saveCached(key, k, m, weight);
+        if (cache_key) |key| if (self.cache_model_id) |model_id| {
+            try self.linkCached(key, trustedProjectionKey(model_id, base, k, m, words));
+        };
+        try self.runWeight(k, m, weight, input, output);
     }
 };
 
@@ -374,8 +553,8 @@ fn stateHash(state: []const f32) u64 {
 
 pub fn main(init: std.process.Init) !u8 {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len != 5) {
-        std.debug.print("usage: {s} cpu|htp MODEL_SAFETENSORS TOKEN_ID CPU_THREADS\n", .{args[0]});
+    if (args.len < 5 or args.len > 7) {
+        std.debug.print("usage: {s} cpu|htp MODEL_SAFETENSORS TOKEN_ID CPU_THREADS [DECODED_CACHE_DIR [MODEL_SHA256]]\n", .{args[0]});
         return 64;
     }
     if (!std.mem.eql(u8, args[1], "cpu") and !std.mem.eql(u8, args[1], "htp")) return error.InvalidBackend;
@@ -388,7 +567,14 @@ pub fn main(init: std.process.Init) !u8 {
     const embedding = try require(&file, prefix ++ ".embed_tokens.weight", .f16, &.{ vocab, hidden });
     const backend = tf_qualcomm_backend_create(args[1].ptr, threads) orelse return error.BackendInitFailed;
     defer tf_qualcomm_backend_destroy(backend);
-    var runner: Runner = .{ .allocator = init.gpa, .file = &file, .backend = backend };
+    const cache_dir: ?[]const u8 = if (args.len >= 6) args[5] else null;
+    const cache_model_id: ?[]const u8 = if (args.len == 7) args[6] else null;
+    if (cache_model_id) |id| {
+        if (id.len != 64) return error.InvalidModelSha256;
+        for (id) |c| if (!std.ascii.isHex(c)) return error.InvalidModelSha256;
+    }
+    if (cache_dir) |dir| try std.Io.Dir.cwd().createDirPath(init.io, dir);
+    var runner: Runner = .{ .allocator = init.gpa, .io = init.io, .file = &file, .backend = backend, .cache_dir = cache_dir, .cache_model_id = cache_model_id };
     const started = tf_qualcomm_monotonic_ms();
 
     const state = try init.gpa.alloc(f32, hidden);
@@ -417,11 +603,13 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     try rmsNorm(&file, prefix ++ ".norm.weight", state, normed, 1.0);
+    const head_started = tf_qualcomm_monotonic_ms();
     const top = try tiedHead(&file, normed);
+    const head_ms = tf_qualcomm_monotonic_ms() - head_started;
     const elapsed = tf_qualcomm_monotonic_ms() - started;
     std.debug.print(
-        "{{\"tensorfold\":\"qualcomm-exl3-forward\",\"backend\":\"{s}\",\"checkpoint_tensors\":{d},\"input_token\":{d},\"position\":0,\"layers\":{d},\"projections\":{d},\"head\":\"tied-f16-embedding\",\"next_token\":{d},\"top5\":[[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}]],\"state_f16_fnv1a\":\"{x}\",\"matmul_compute_ms\":{d:.3},\"dequant_ms\":{d:.3},\"elapsed_ms\":{d:.3},\"peak_rss_kib\":{d},\"passed\":true}}\n",
-        .{ args[1], file.names.count(), token, layers, runner.projection_count, top[0].id, top[0].id, top[0].logit, top[1].id, top[1].logit, top[2].id, top[2].logit, top[3].id, top[3].logit, top[4].id, top[4].logit, stateHash(normed), runner.projection_ms, runner.dequant_ms, elapsed, tf_qualcomm_peak_rss_kib() },
+        "{{\"tensorfold\":\"qualcomm-exl3-forward\",\"backend\":\"{s}\",\"checkpoint_tensors\":{d},\"input_token\":{d},\"position\":0,\"layers\":{d},\"projections\":{d},\"head\":\"tied-f16-embedding\",\"next_token\":{d},\"top5\":[[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}]],\"state_f16_fnv1a\":\"{x}\",\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"head_ms\":{d:.3},\"dequant_ms\":{d:.3},\"cache_hash_ms\":{d:.3},\"cache_read_ms\":{d:.3},\"cache_write_ms\":{d:.3},\"cache_hits\":{d},\"cache_trusted_hits\":{d},\"cache_misses\":{d},\"cache_aliases_created\":{d},\"cache_bytes_read\":{d},\"cache_bytes_written\":{d},\"elapsed_ms\":{d:.3},\"peak_rss_kib\":{d},\"passed\":true}}\n",
+        .{ args[1], file.names.count(), token, layers, runner.projection_count, top[0].id, top[0].id, top[0].logit, top[1].id, top[1].logit, top[2].id, top[2].logit, top[3].id, top[3].logit, top[4].id, top[4].logit, stateHash(normed), runner.projection_ms, runner.projection_wall_ms, head_ms, runner.dequant_ms, runner.cache_hash_ms, runner.cache_read_ms, runner.cache_write_ms, runner.cache_hits, runner.cache_trusted_hits, runner.cache_misses, runner.cache_aliases_created, runner.cache_bytes_read, runner.cache_bytes_written, elapsed, tf_qualcomm_peak_rss_kib() },
     );
     return 0;
 }

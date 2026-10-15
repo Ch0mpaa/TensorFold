@@ -15,6 +15,14 @@ int tf_qualcomm_backend_matmul(void *context,
                                const float *input,
                                float *output,
                                double *ms_per_iteration);
+int tf_qualcomm_backend_matmul_once(void *context,
+                                    size_t k,
+                                    size_t m,
+                                    size_t n,
+                                    const float *weight,
+                                    const float *input,
+                                    float *output,
+                                    double *compute_ms);
 
 int tf_qualcomm_matmul(const char *backend_name,
                        size_t k,

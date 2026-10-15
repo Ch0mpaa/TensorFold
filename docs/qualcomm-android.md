@@ -1,8 +1,9 @@
 # Qualcomm Android port
 
-Status: stage 3 userspace execution bridge. TensorFold opens a real Qualcomm
-HTP v79 session and executes deterministic matmul graphs on HTP, but is not yet
-executing a complete EXL3 model on HTP.
+Status: complete position-zero model proof with a persistent decoded-weight
+cache. TensorFold executes all 24 Qwen3.5-2B layers and routes all 150 EXL3
+projections through Qualcomm HTP v79, but it is not yet a sustained multi-token
+generator or a native packed-EXL3 HTP backend.
 
 The port targets 64-bit Android on Snapdragon, with Qualcomm FastRPC/HTP as the
 first accelerator path. It keeps TensorFold's EXL3/EXLR8 formats, model logic,
@@ -197,6 +198,7 @@ zig build qualcomm-exl3-forward -Dtarget=aarch64-linux-android \
 
 tensorfold-qualcomm-exl3-forward cpu model.safetensors TOKEN_ID CPU_THREADS
 tensorfold-qualcomm-exl3-forward htp model.safetensors TOKEN_ID CPU_THREADS
+tensorfold-qualcomm-exl3-forward htp model.safetensors TOKEN_ID CPU_THREADS CACHE_DIR MODEL_SHA256
 ```
 
 For input token `248045` (`<|im_start|>`), both Snapdragon 8 Elite runs
@@ -213,6 +215,44 @@ the pinned upstream ExLlamaV3 implementation, using the checkpoint's
 duplicated quantized `lm_head`, independently returned the same ordered
 top-five IDs. Exact logit parity for that alternative head and multi-token
 state/cache parity remain required gates before generation benchmarking.
+
+### Persistent decoded-weight cache
+
+The optional cache stores each reconstructed projection as immutable row-major
+FP32. The safe default content-addresses every entry from its complete EXL3
+trellis and side tensors. Supplying the checkpoint's independently verified
+SHA-256 enables a faster alias key: on its first use TensorFold verifies the
+content-addressed entry and creates a hard link, and subsequent process starts
+can avoid rescanning the packed tensor. The cache header validates format,
+geometry, and payload length; partial files are never published because writes
+are synced and renamed into place.
+
+On Phone B, the pinned Qwen3.5-2B checkpoint produced 150 content entries with
+5,486,149,632 payload bytes (5.1 GiB apparent disk usage). Three final warm
+runs per backend, after removing the one-shot path's redundant benchmark
+warm-up execution, measured:
+
+| Cached complete forward | CPU median | HTP median | HTP speedup |
+| --- | ---: | ---: | ---: |
+| End-to-end | 2,117.835 ms | 1,685.276 ms | 1.257x |
+| Projection-call wall time | 1,630.119 ms | 1,086.248 ms | 1.501x |
+| Matrix compute | 426.206 ms | 169.033 ms | 2.521x |
+
+All final runs had 150 trusted hits, zero misses, zero reconstruction/hash
+time, and the same backend-specific state hashes and top-five tokens as the
+uncached proof. The HTP median is 36.91x faster than the earlier 62,201.270 ms
+uncached HTP result. Peak process RSS fell from roughly 2.35 GiB to roughly
+1.02 GiB because warm entries are mapped one projection at a time instead of
+holding reconstruction scratch and transposed copies together.
+
+This remains a complete single-position correctness pass, not tokens/second:
+the Gated DeltaNet recurrent state and attention KV cache are not yet carried
+across positions. Profiling also shows only 169.033 ms of the 1,086.248 ms HTP
+projection wall median is matrix compute; repeated graph creation and FP32
+weight upload now dominate. Resident packed-EXL3 weights, an accelerated
+quantized output head (the scalar tied head costs about 407 ms), and multi-token
+state are the next runtime gates. Raw evidence is in
+`recordings/20261015-080827-tensorfold-decoded-cache/` in the mobile lab.
 
 ## Matched llama.cpp control
 
