@@ -1,5 +1,5 @@
 //! A deliberately small, auditable Qwen3.5-2B EXL3 decode path for Qualcomm
-//! Android bring-up. It executes token position zero end-to-end and keeps the
+//! Android bring-up. It executes autoregressive decode end-to-end and keeps the
 //! model math in TensorFold while routing every quantized projection through
 //! either GGML CPU or Hexagon HTP. An optional content-addressed cache keeps
 //! decoded row-major weights between runs so EXL3 reconstruction is paid once.
@@ -29,6 +29,16 @@ const intermediate = 6144;
 const layers = 24;
 const vocab = 248320;
 const eps: f32 = 1e-6;
+const linear_heads = 16;
+const linear_width = 128;
+const linear_state_elems = linear_heads * linear_width * linear_width;
+const conv_channels = 3 * hidden;
+const conv_history_rows = 3;
+const attention_heads = 8;
+const kv_heads = 2;
+const attention_width = 256;
+const kv_width = kv_heads * attention_width;
+const rope_width = 64;
 const cache_magic = "TFEXL3F1";
 const cache_header_bytes = 64;
 
@@ -345,7 +355,59 @@ fn residualAdd(hidden_state: []f32, update: []const f32) void {
     for (hidden_state, update) |*h, u| h.* = roundF16(h.* + u);
 }
 
-fn linearAttention(runner: *Runner, layer: usize, input: []const f32, output: []f32) !void {
+const DecodeState = struct {
+    gdn: []f32,
+    conv: []f32,
+    keys: []f32,
+    values: []f32,
+    max_positions: usize,
+
+    fn init(allocator: std.mem.Allocator, max_positions: usize) !DecodeState {
+        const gdn = try allocator.alloc(f32, layers * linear_state_elems);
+        errdefer allocator.free(gdn);
+        const conv = try allocator.alloc(f32, layers * conv_history_rows * conv_channels);
+        errdefer allocator.free(conv);
+        const keys = try allocator.alloc(f32, layers * max_positions * kv_width);
+        errdefer allocator.free(keys);
+        const values = try allocator.alloc(f32, layers * max_positions * kv_width);
+        errdefer allocator.free(values);
+        @memset(gdn, 0.0);
+        @memset(conv, 0.0);
+        @memset(keys, 0.0);
+        @memset(values, 0.0);
+        return .{ .gdn = gdn, .conv = conv, .keys = keys, .values = values, .max_positions = max_positions };
+    }
+
+    fn deinit(self: *DecodeState, allocator: std.mem.Allocator) void {
+        allocator.free(self.values);
+        allocator.free(self.keys);
+        allocator.free(self.conv);
+        allocator.free(self.gdn);
+        self.* = undefined;
+    }
+
+    fn gdnLayer(self: *DecodeState, layer: usize) []f32 {
+        const start = layer * linear_state_elems;
+        return self.gdn[start .. start + linear_state_elems];
+    }
+
+    fn convLayer(self: *DecodeState, layer: usize) []f32 {
+        const start = layer * conv_history_rows * conv_channels;
+        return self.conv[start .. start + conv_history_rows * conv_channels];
+    }
+
+    fn keyPosition(self: *DecodeState, layer: usize, position: usize) []f32 {
+        const start = (layer * self.max_positions + position) * kv_width;
+        return self.keys[start .. start + kv_width];
+    }
+
+    fn valuePosition(self: *DecodeState, layer: usize, position: usize) []f32 {
+        const start = (layer * self.max_positions + position) * kv_width;
+        return self.values[start .. start + kv_width];
+    }
+};
+
+fn linearAttention(runner: *Runner, decode: *DecodeState, layer: usize, input: []const f32, output: []f32) !void {
     const a = runner.allocator;
     var base_buffer: [256]u8 = undefined;
     const base = try tensorName(&base_buffer, "{s}.layers.{d}.linear_attn", .{ prefix, layer });
@@ -369,11 +431,17 @@ fn linearAttention(runner: *Runner, layer: usize, input: []const f32, output: []
     const conv = try require(runner.file, conv_name, .bf16, &.{ 3 * hidden, 1, 4 });
     const mixed = try a.alloc(f32, 3 * hidden);
     defer a.free(mixed);
+    const history = decode.convLayer(layer);
     for (mixed, 0..) |*out, c| {
-        const conv_value = roundBF16(value(conv, c * 4 + 3) * qkv[c]);
+        var sum: f32 = value(conv, c * 4 + 3) * qkv[c];
+        for (0..conv_history_rows) |tap| sum += value(conv, c * 4 + tap) * history[tap * conv_channels + c];
+        const conv_value = roundBF16(sum);
         const conv_sigmoid = roundBF16(sigmoid(conv_value));
         out.* = roundBF16(conv_value * conv_sigmoid);
     }
+    std.mem.copyForwards(f32, history[0 * conv_channels .. 1 * conv_channels], history[1 * conv_channels .. 2 * conv_channels]);
+    std.mem.copyForwards(f32, history[1 * conv_channels .. 2 * conv_channels], history[2 * conv_channels .. 3 * conv_channels]);
+    @memcpy(history[2 * conv_channels .. 3 * conv_channels], qkv);
 
     var dt_name: [256]u8 = undefined;
     const dt = try require(runner.file, try tensorName(&dt_name, "{s}.dt_bias", .{base}), .bf16, &.{16});
@@ -387,10 +455,6 @@ fn linearAttention(runner: *Runner, layer: usize, input: []const f32, output: []
         const softplus = roundBF16(@max(s, 0.0) + @log(1.0 + @exp(-@abs(s))));
         decay[head] = @exp(-@exp(value(alog, head)) * softplus);
     }
-    // Position zero starts from an all-zero recurrent state. `decay` is still
-    // computed above so the complete gate path is validated, but it cancels
-    // out of this first state update.
-
     const q = try a.alloc(f32, hidden);
     defer a.free(q);
     const k = try a.alloc(f32, hidden);
@@ -419,11 +483,23 @@ fn linearAttention(runner: *Runner, layer: usize, input: []const f32, output: []
 
     const y = try a.alloc(f32, hidden);
     defer a.free(y);
+    const recurrent = decode.gdnLayer(layer);
     for (0..16) |head| {
-        var qk: f32 = 0;
-        for (0..128) |d| qk += q[head * 128 + d] * k[head * 128 + d];
-        const carried_state: f32 = 0.0 * decay[head];
-        for (0..128) |d| y[head * 128 + d] = roundBF16((carried_state + v[head * 128 + d] * beta[head]) * qk);
+        for (0..128) |dv| {
+            const row = recurrent[(head * 128 + dv) * 128 ..][0..128];
+            var kv_mem: f32 = 0;
+            for (0..128) |dk| {
+                row[dk] *= decay[head];
+                kv_mem += row[dk] * k[head * 128 + dk];
+            }
+            const delta = (v[head * 128 + dv] - kv_mem) * beta[head];
+            var out: f32 = 0;
+            for (0..128) |dk| {
+                row[dk] += k[head * 128 + dk] * delta;
+                out += row[dk] * q[head * 128 + dk];
+            }
+            y[head * 128 + dv] = roundBF16(out);
+        }
     }
 
     var norm_name: [256]u8 = undefined;
@@ -460,7 +536,23 @@ fn headNorm(file: *const st.File, name: []const u8, input: []const f32, heads: u
     }
 }
 
-fn fullAttention(runner: *Runner, layer: usize, input: []const f32, output: []f32) !void {
+fn rotateHalf(input: []const f32, output: []f32, position: usize) void {
+    @memcpy(output, input);
+    for (0..input.len / attention_width) |head| {
+        const base = head * attention_width;
+        for (0..rope_width / 2) |i| {
+            const angle = @as(f32, @floatFromInt(position)) * std.math.pow(f32, 10_000_000.0, -@as(f32, @floatFromInt(i)) / @as(f32, rope_width / 2));
+            const c = @cos(angle);
+            const s = @sin(angle);
+            const av = input[base + i];
+            const bv = input[base + rope_width / 2 + i];
+            output[base + i] = roundF16(av * c - bv * s);
+            output[base + rope_width / 2 + i] = roundF16(bv * c + av * s);
+        }
+    }
+}
+
+fn fullAttention(runner: *Runner, decode: *DecodeState, layer: usize, position: usize, input: []const f32, output: []f32) !void {
     const a = runner.allocator;
     var base_buffer: [256]u8 = undefined;
     const base = try tensorName(&base_buffer, "{s}.layers.{d}.self_attn", .{ prefix, layer });
@@ -493,14 +585,44 @@ fn fullAttention(runner: *Runner, layer: usize, input: []const f32, output: []f3
     var norm_buffer: [256]u8 = undefined;
     try headNorm(runner.file, try tensorName(&norm_buffer, "{s}.q_norm.weight", .{base}), q, 8, qnorm);
     try headNorm(runner.file, try tensorName(&norm_buffer, "{s}.k_norm.weight", .{base}), kraw, 2, knorm);
-    // RoPE at position zero is identity. A one-key softmax is exactly one, so
-    // attention output is V repeated across each group of four query heads.
+    const qrot = try a.alloc(f32, hidden);
+    defer a.free(qrot);
+    const krot = try a.alloc(f32, kv_width);
+    defer a.free(krot);
+    rotateHalf(qnorm, qrot, position);
+    rotateHalf(knorm, krot, position);
+    @memcpy(decode.keyPosition(layer, position), krot);
+    @memcpy(decode.valuePosition(layer, position), vraw);
+
     const attended = try a.alloc(f32, hidden);
     defer a.free(attended);
-    for (0..8) |query_head| for (0..256) |d| {
-        const i = query_head * 256 + d;
-        attended[i] = roundF16(vraw[(query_head / 4) * 256 + d] * sigmoid(gate[i]));
-    };
+    const scores = try a.alloc(f32, position + 1);
+    defer a.free(scores);
+    for (0..attention_heads) |query_head| {
+        const kv_head = query_head / (attention_heads / kv_heads);
+        var maximum = -std.math.inf(f32);
+        for (0..position + 1) |token_position| {
+            const cached_key = decode.keyPosition(layer, token_position);
+            var score: f32 = 0;
+            for (0..attention_width) |d| score += qrot[query_head * attention_width + d] * cached_key[kv_head * attention_width + d];
+            scores[token_position] = score / 16.0;
+            maximum = @max(maximum, scores[token_position]);
+        }
+        var denominator: f32 = 0;
+        for (scores) |*score| {
+            score.* = @exp(score.* - maximum);
+            denominator += score.*;
+        }
+        for (0..attention_width) |d| {
+            var sum: f32 = 0;
+            for (0..position + 1) |token_position| {
+                const cached_value = decode.valuePosition(layer, token_position);
+                sum += scores[token_position] / denominator * cached_value[kv_head * attention_width + d];
+            }
+            const i = query_head * attention_width + d;
+            attended[i] = roundF16(roundF16(sum) * sigmoid(gate[i]));
+        }
+    }
     try runner.project(try tensorName(&projection_buffer, "{s}.o_proj", .{base}), attended, output);
 }
 
@@ -553,14 +675,18 @@ fn stateHash(state: []const f32) u64 {
 
 pub fn main(init: std.process.Init) !u8 {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len < 5 or args.len > 7) {
-        std.debug.print("usage: {s} cpu|htp MODEL_SAFETENSORS TOKEN_ID CPU_THREADS [DECODED_CACHE_DIR [MODEL_SHA256]]\n", .{args[0]});
+    if (args.len < 5 or args.len > 9) {
+        std.debug.print("usage: {s} cpu|htp MODEL_SAFETENSORS TOKEN_ID CPU_THREADS [DECODED_CACHE_DIR [MODEL_SHA256 [STEPS [PROMPT_SUFFIX_TOKEN_IDS]]]]\n", .{args[0]});
         return 64;
     }
     if (!std.mem.eql(u8, args[1], "cpu") and !std.mem.eql(u8, args[1], "htp")) return error.InvalidBackend;
     const token = try std.fmt.parseInt(usize, args[3], 10);
     const threads = try std.fmt.parseInt(i32, args[4], 10);
-    if (token >= vocab or threads <= 0) return error.InvalidArgument;
+    const steps = if (args.len >= 8) try std.fmt.parseInt(usize, args[7], 10) else 1;
+    const suffix_count = if (args.len == 9) std.mem.count(u8, args[8], ",") + 1 else 0;
+    const prompt_len = 1 + suffix_count;
+    const positions = prompt_len + steps - 1;
+    if (token >= vocab or threads <= 0 or steps == 0 or steps > 32 or prompt_len > 128) return error.InvalidArgument;
 
     var file = try st.File.open(init.gpa, init.io, args[2]);
     defer file.close(init.io);
@@ -568,7 +694,7 @@ pub fn main(init: std.process.Init) !u8 {
     const backend = tf_qualcomm_backend_create(args[1].ptr, threads) orelse return error.BackendInitFailed;
     defer tf_qualcomm_backend_destroy(backend);
     const cache_dir: ?[]const u8 = if (args.len >= 6) args[5] else null;
-    const cache_model_id: ?[]const u8 = if (args.len == 7) args[6] else null;
+    const cache_model_id: ?[]const u8 = if (args.len >= 7) args[6] else null;
     if (cache_model_id) |id| {
         if (id.len != 64) return error.InvalidModelSha256;
         for (id) |c| if (!std.ascii.isHex(c)) return error.InvalidModelSha256;
@@ -576,40 +702,75 @@ pub fn main(init: std.process.Init) !u8 {
     if (cache_dir) |dir| try std.Io.Dir.cwd().createDirPath(init.io, dir);
     var runner: Runner = .{ .allocator = init.gpa, .io = init.io, .file = &file, .backend = backend, .cache_dir = cache_dir, .cache_model_id = cache_model_id };
     const started = tf_qualcomm_monotonic_ms();
+    var decode = try DecodeState.init(init.gpa, positions);
+    defer decode.deinit(init.gpa);
 
     const state = try init.gpa.alloc(f32, hidden);
     defer init.gpa.free(state);
-    for (state, 0..) |*x, d| x.* = f16Value(embedding.bytes, token * hidden + d);
     const normed = try init.gpa.alloc(f32, hidden);
     defer init.gpa.free(normed);
     const update = try init.gpa.alloc(f32, hidden);
     defer init.gpa.free(update);
-    var name_buffer: [256]u8 = undefined;
-
-    for (0..layers) |layer| {
-        const input_norm = try tensorName(&name_buffer, "{s}.layers.{d}.input_layernorm.weight", .{ prefix, layer });
-        try rmsNorm(&file, input_norm, state, normed, 1.0);
-        if ((layer + 1) % 4 == 0) {
-            try fullAttention(&runner, layer, normed, update);
-        } else {
-            try linearAttention(&runner, layer, normed, update);
+    const sequence = try init.gpa.alloc(usize, positions + 1);
+    defer init.gpa.free(sequence);
+    sequence[0] = token;
+    if (args.len == 9) {
+        var suffix = std.mem.splitScalar(u8, args[8], ',');
+        var i: usize = 1;
+        while (suffix.next()) |encoded| : (i += 1) {
+            const suffix_token = try std.fmt.parseInt(usize, encoded, 10);
+            if (suffix_token >= vocab) return error.InvalidArgument;
+            sequence[i] = suffix_token;
         }
-        residualAdd(state, update);
-        const post_norm = try tensorName(&name_buffer, "{s}.layers.{d}.post_attention_layernorm.weight", .{ prefix, layer });
-        try rmsNorm(&file, post_norm, state, normed, 1.0);
-        try mlp(&runner, layer, normed, update);
-        residualAdd(state, update);
-        std.debug.print("tensorfold forward {s}: layer {d}/{d}, projections {d}\n", .{ args[1], layer + 1, layers, runner.projection_count });
     }
+    var name_buffer: [256]u8 = undefined;
+    var total_head_ms: f64 = 0;
 
-    try rmsNorm(&file, prefix ++ ".norm.weight", state, normed, 1.0);
-    const head_started = tf_qualcomm_monotonic_ms();
-    const top = try tiedHead(&file, normed);
-    const head_ms = tf_qualcomm_monotonic_ms() - head_started;
+    for (0..positions) |position| {
+        const input_token = sequence[position];
+        const step_started = tf_qualcomm_monotonic_ms();
+        const projection_start = runner.projection_count;
+        const compute_start = runner.projection_ms;
+        const wall_start = runner.projection_wall_ms;
+        for (state, 0..) |*x, d| x.* = f16Value(embedding.bytes, input_token * hidden + d);
+        for (0..layers) |layer| {
+            const input_norm = try tensorName(&name_buffer, "{s}.layers.{d}.input_layernorm.weight", .{ prefix, layer });
+            try rmsNorm(&file, input_norm, state, normed, 1.0);
+            if ((layer + 1) % 4 == 0) {
+                try fullAttention(&runner, &decode, layer, position, normed, update);
+            } else {
+                try linearAttention(&runner, &decode, layer, normed, update);
+            }
+            residualAdd(state, update);
+            const post_norm = try tensorName(&name_buffer, "{s}.layers.{d}.post_attention_layernorm.weight", .{ prefix, layer });
+            try rmsNorm(&file, post_norm, state, normed, 1.0);
+            try mlp(&runner, layer, normed, update);
+            residualAdd(state, update);
+            std.debug.print("tensorfold forward {s}: position {d}, layer {d}/{d}, projections {d}\n", .{ args[1], position, layer + 1, layers, runner.projection_count });
+        }
+
+        try rmsNorm(&file, prefix ++ ".norm.weight", state, normed, 1.0);
+        const head_started = tf_qualcomm_monotonic_ms();
+        const top = try tiedHead(&file, normed);
+        const head_ms = tf_qualcomm_monotonic_ms() - head_started;
+        total_head_ms += head_ms;
+        const forced_next = position + 1 < prompt_len;
+        if (!forced_next) sequence[position + 1] = top[0].id;
+        const step_elapsed = tf_qualcomm_monotonic_ms() - step_started;
+        std.debug.print(
+            "{{\"tensorfold\":\"qualcomm-exl3-forward-step\",\"backend\":\"{s}\",\"input_token\":{d},\"position\":{d},\"forced_next\":{},\"layers\":{d},\"projections\":{d},\"head\":\"tied-f16-embedding\",\"next_token\":{d},\"top5\":[[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}]],\"state_f16_fnv1a\":\"{x}\",\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"head_ms\":{d:.3},\"elapsed_ms\":{d:.3},\"passed\":true}}\n",
+            .{ args[1], input_token, position, forced_next, layers, runner.projection_count - projection_start, top[0].id, top[0].id, top[0].logit, top[1].id, top[1].logit, top[2].id, top[2].logit, top[3].id, top[3].logit, top[4].id, top[4].logit, stateHash(normed), runner.projection_ms - compute_start, runner.projection_wall_ms - wall_start, head_ms, step_elapsed },
+        );
+    }
     const elapsed = tf_qualcomm_monotonic_ms() - started;
+    std.debug.print("{{\"tensorfold\":\"qualcomm-exl3-generate\",\"backend\":\"{s}\",\"checkpoint_tensors\":{d},\"prompt_tokens\":{d},\"generated_tokens\":{d},\"positions\":{d},\"tokens\":[", .{ args[1], file.names.count(), prompt_len, steps, positions });
+    for (sequence, 0..) |generated_token, i| {
+        if (i != 0) std.debug.print(",", .{});
+        std.debug.print("{d}", .{generated_token});
+    }
     std.debug.print(
-        "{{\"tensorfold\":\"qualcomm-exl3-forward\",\"backend\":\"{s}\",\"checkpoint_tensors\":{d},\"input_token\":{d},\"position\":0,\"layers\":{d},\"projections\":{d},\"head\":\"tied-f16-embedding\",\"next_token\":{d},\"top5\":[[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}]],\"state_f16_fnv1a\":\"{x}\",\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"head_ms\":{d:.3},\"dequant_ms\":{d:.3},\"cache_hash_ms\":{d:.3},\"cache_read_ms\":{d:.3},\"cache_write_ms\":{d:.3},\"cache_hits\":{d},\"cache_trusted_hits\":{d},\"cache_misses\":{d},\"cache_aliases_created\":{d},\"cache_bytes_read\":{d},\"cache_bytes_written\":{d},\"elapsed_ms\":{d:.3},\"peak_rss_kib\":{d},\"passed\":true}}\n",
-        .{ args[1], file.names.count(), token, layers, runner.projection_count, top[0].id, top[0].id, top[0].logit, top[1].id, top[1].logit, top[2].id, top[2].logit, top[3].id, top[3].logit, top[4].id, top[4].logit, stateHash(normed), runner.projection_ms, runner.projection_wall_ms, head_ms, runner.dequant_ms, runner.cache_hash_ms, runner.cache_read_ms, runner.cache_write_ms, runner.cache_hits, runner.cache_trusted_hits, runner.cache_misses, runner.cache_aliases_created, runner.cache_bytes_read, runner.cache_bytes_written, elapsed, tf_qualcomm_peak_rss_kib() },
+        "],\"projections\":{d},\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"head_ms\":{d:.3},\"dequant_ms\":{d:.3},\"cache_hash_ms\":{d:.3},\"cache_read_ms\":{d:.3},\"cache_write_ms\":{d:.3},\"cache_hits\":{d},\"cache_trusted_hits\":{d},\"cache_misses\":{d},\"cache_aliases_created\":{d},\"cache_bytes_read\":{d},\"cache_bytes_written\":{d},\"elapsed_ms\":{d:.3},\"positions_per_second\":{d:.6},\"end_to_end_generated_tokens_per_second\":{d:.6},\"peak_rss_kib\":{d},\"passed\":true}}\n",
+        .{ runner.projection_count, runner.projection_ms, runner.projection_wall_ms, total_head_ms, runner.dequant_ms, runner.cache_hash_ms, runner.cache_read_ms, runner.cache_write_ms, runner.cache_hits, runner.cache_trusted_hits, runner.cache_misses, runner.cache_aliases_created, runner.cache_bytes_read, runner.cache_bytes_written, elapsed, @as(f64, @floatFromInt(positions)) * 1000.0 / elapsed, @as(f64, @floatFromInt(steps)) * 1000.0 / elapsed, tf_qualcomm_peak_rss_kib() },
     );
     return 0;
 }

@@ -181,14 +181,15 @@ batch-128 trace selected `hmx-tiled`; its maximum absolute error was
 `0.0022342803`). The checkpoint and on-phone copy both hash to
 `a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f`.
 
-## Complete one-token EXL3 forward
+## Complete autoregressive EXL3 forward
 
-`qualcomm-exl3-forward` executes token position zero through all 24
+`qualcomm-exl3-forward` executes one or more token positions through all 24
 Qwen3.5-2B layers. TensorFold owns the architecture math for the 18 Gated
 DeltaNet layers, six full-attention layers, residuals, RMS norms, MLPs, and
 tied output head. Every one of the 150 quantized projections is reconstructed
 from the pinned EXL3 tensors and dispatched through one persistent GGML CPU or
-Hexagon HTP backend.
+Hexagon HTP backend. Across positions it carries the DeltaNet FP32 recurrent
+matrices, BF16 convolution history, and rotated full-attention K/V cache.
 
 ```text
 zig build qualcomm-exl3-forward -Dtarget=aarch64-linux-android \
@@ -199,7 +200,14 @@ zig build qualcomm-exl3-forward -Dtarget=aarch64-linux-android \
 tensorfold-qualcomm-exl3-forward cpu model.safetensors TOKEN_ID CPU_THREADS
 tensorfold-qualcomm-exl3-forward htp model.safetensors TOKEN_ID CPU_THREADS
 tensorfold-qualcomm-exl3-forward htp model.safetensors TOKEN_ID CPU_THREADS CACHE_DIR MODEL_SHA256
+tensorfold-qualcomm-exl3-forward htp model.safetensors TOKEN_ID CPU_THREADS CACHE_DIR MODEL_SHA256 STEPS PROMPT_SUFFIX_TOKEN_IDS
 ```
+
+`STEPS` is the number of greedy output tokens. The optional comma-separated
+prompt suffix follows the initial `TOKEN_ID`; it makes a teacher-forced prompt
+before greedy generation. The executable limits a proof run to 128 prompt and
+32 generated tokens. Each position emits a JSON correctness record and the
+last line summarizes the complete run.
 
 For input token `248045` (`<|im_start|>`), both Snapdragon 8 Elite runs
 exited zero and returned next token `846` with the same ordered top-five token
@@ -245,14 +253,41 @@ uncached HTP result. Peak process RSS fell from roughly 2.35 GiB to roughly
 1.02 GiB because warm entries are mapped one projection at a time instead of
 holding reconstruction scratch and transposed copies together.
 
-This remains a complete single-position correctness pass, not tokens/second:
-the Gated DeltaNet recurrent state and attention KV cache are not yet carried
-across positions. Profiling also shows only 169.033 ms of the 1,086.248 ms HTP
-projection wall median is matrix compute; repeated graph creation and FP32
-weight upload now dominate. Resident packed-EXL3 weights, an accelerated
-quantized output head (the scalar tied head costs about 407 ms), and multi-token
-state are the next runtime gates. Raw evidence is in
-`recordings/20261015-080827-tensorfold-decoded-cache/` in the mobile lab.
+Profiling also shows only 169.033 ms of the 1,086.248 ms HTP projection wall
+median is matrix compute; repeated graph creation and FP32 weight upload now
+dominate. Resident packed-EXL3 weights and an accelerated quantized output
+head (the scalar tied head costs about 407 ms) are the next runtime gates. Raw
+evidence is in `recordings/20261015-080827-tensorfold-decoded-cache/` in the
+mobile lab.
+
+### Multi-token Qualcomm POC
+
+The first autoregressive proof used the exact 15-token Qwen3.5 chat template
+for `What is 2+2?` and greedily produced eight tokens. Both Snapdragon CPU and
+HTP produced the identical 23-token sequence as pinned upstream ExLlamaV3,
+including the generated text prefix `<think>\nThinking Process:\n\n1.`. The
+greedy top-one token matched at all 22 evaluated positions; the complete
+ordered top five matched at 19 positions. The remaining three differences
+were lower-rank swaps from the tied FP16 architectural head versus the
+checkpoint's duplicated quantized EXL3 `lm_head`; maximum matched-logit
+absolute difference was 0.281.
+
+One controlled POC capture per backend measured:
+
+| 15-token prompt + 8 generated tokens | CPU | HTP | HTP speedup |
+| --- | ---: | ---: | ---: |
+| End-to-end | 46,893.059 ms | 28,967.271 ms | 1.619x |
+| Projection-call wall time | 36,870.362 ms | 18,290.011 ms | 2.016x |
+| Matrix compute | 10,015.526 ms | 3,764.632 ms | 2.660x |
+| Evaluated positions/s | 0.469 | 0.759 | 1.619x |
+
+Every run made 3,300 projection calls with 3,300 trusted cache hits, zero
+misses, and zero dequantization time. This is a correctness POC and a single
+exploratory timing capture, not a sustained benchmark or a llama.cpp speed
+comparison. The correctness mode evaluates the scalar output head at every
+teacher-forced prompt position, so its end-to-end generated-token rate is not
+an optimized serving metric. Raw evidence is in
+`recordings/20261015-085918-tensorfold-multitoken-poc/` in the mobile lab.
 
 ## Matched llama.cpp control
 

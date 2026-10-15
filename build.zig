@@ -383,7 +383,7 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     if (android_libc) |libc_file|
         exl3_forward.setLibCFile(.{ .cwd_relative = libc_file });
-    const exl3_forward_step = b.step("qualcomm-exl3-forward", "Build the Android one-token Qwen3.5 EXL3 forward path");
+    const exl3_forward_step = b.step("qualcomm-exl3-forward", "Build the Android autoregressive Qwen3.5 EXL3 forward path");
     exl3_forward_step.dependOn(&b.addInstallArtifact(exl3_forward, .{}).step);
 }
 
