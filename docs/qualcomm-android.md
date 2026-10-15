@@ -358,6 +358,32 @@ projection-call wall time while matrix compute itself is 1.399 seconds. Raw
 evidence is in `recordings/20261015-104834-tensorfold-4b-tuned/` in the mobile
 lab.
 
+### Resident-runtime v2
+
+The next pass keeps each FP16 projection resident in the Qualcomm backend,
+shares one weight copy between prompt and decode graphs, groups independent
+projections with a common input, and fuses each MLP's gate, up, SiLU/multiply,
+and down operations into one HTP graph. ARM NEON handles the small gate
+matvecs and the Gated DeltaNet recurrent update. Repeated-request mode keeps
+the backend alive so cold residency setup and warmed execution are reported
+separately. The tied FP16 vocabulary head is also resident on HTP after the
+first request.
+
+| Same 15-token prompt + 8 generated tokens | Wall time | Original TensorFold speedup |
+| --- | ---: | ---: |
+| v2 cold single request | 7,062.013 ms | 19.900x |
+| v2 warmed range, four samples | 3,384.374-3,513.147 ms | 40.006-41.525x |
+| v2 warmed median | 3,458.323 ms | 40.636x |
+
+Every capture generated `248068,198,90700,8340,25,271,16,13`. Each warmed
+request made 1,600 resident projection hits with zero weight uploads, cache
+reads, or fallbacks. Against the existing 666.062 ms warmed llama.cpp Q4_0
+control, the warmed median gap is 5.192x. This is still an implementation-level
+comparison rather than an intrinsic format result: TensorFold executes from a
+7.13 GB EXL3-derived FP16 staging representation, while llama.cpp uses resident
+Q4_0. Raw evidence is in
+`recordings/20261015-115427-tensorfold-4b-resident-v2/` in the mobile lab.
+
 ## Matched llama.cpp control
 
 The control lane uses the same Snapdragon 8 Elite phone and the same

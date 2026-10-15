@@ -144,6 +144,142 @@ int tf_qualcomm_tied_head_f16(const unsigned short *embedding,
     return 0;
 }
 
+struct tf_gdn_worker {
+    float *recurrent;
+    const float *query;
+    const float *key;
+    const float *value;
+    const float *beta;
+    const float *decay;
+    float *output;
+    size_t key_heads;
+    size_t value_heads;
+    size_t key_width;
+    size_t value_width;
+    size_t begin_head;
+    size_t end_head;
+};
+
+static void *gdn_worker_main(void *opaque) {
+    struct tf_gdn_worker *worker = opaque;
+    const size_t values_per_key = worker->value_heads / worker->key_heads;
+    for (size_t head = worker->begin_head; head < worker->end_head; ++head) {
+        const size_t key_head = head / values_per_key;
+        const float *key_row = worker->key + key_head * worker->key_width;
+        const float *query_row = worker->query + key_head * worker->key_width;
+        const float32x4_t decay_vector = vdupq_n_f32(worker->decay[head]);
+        for (size_t dv = 0; dv < worker->value_width; ++dv) {
+            float *row = worker->recurrent + (head * worker->value_width + dv) * worker->key_width;
+            float32x4_t memory_sum = vdupq_n_f32(0.0f);
+            size_t dk = 0;
+            for (; dk + 4 <= worker->key_width; dk += 4) {
+                float32x4_t state = vmulq_f32(vld1q_f32(row + dk), decay_vector);
+                vst1q_f32(row + dk, state);
+                memory_sum = vfmaq_f32(memory_sum, state, vld1q_f32(key_row + dk));
+            }
+            float memory = vaddvq_f32(memory_sum);
+            for (; dk < worker->key_width; ++dk) {
+                row[dk] *= worker->decay[head];
+                memory += row[dk] * key_row[dk];
+            }
+
+            const float delta = (worker->value[head * worker->value_width + dv] - memory) * worker->beta[head];
+            const float32x4_t delta_vector = vdupq_n_f32(delta);
+            float32x4_t output_sum = vdupq_n_f32(0.0f);
+            dk = 0;
+            for (; dk + 4 <= worker->key_width; dk += 4) {
+                float32x4_t state = vfmaq_f32(vld1q_f32(row + dk), vld1q_f32(key_row + dk), delta_vector);
+                vst1q_f32(row + dk, state);
+                output_sum = vfmaq_f32(output_sum, state, vld1q_f32(query_row + dk));
+            }
+            float result = vaddvq_f32(output_sum);
+            for (; dk < worker->key_width; ++dk) {
+                row[dk] += key_row[dk] * delta;
+                result += row[dk] * query_row[dk];
+            }
+            worker->output[head * worker->value_width + dv] = result;
+        }
+    }
+    return NULL;
+}
+
+void tf_qualcomm_gdn_step_f32(float *recurrent,
+                              const float *query,
+                              const float *key,
+                              const float *value,
+                              const float *beta,
+                              const float *decay,
+                              float *output,
+                              size_t key_heads,
+                              size_t value_heads,
+                              size_t key_width,
+                              size_t value_width,
+                              size_t thread_count) {
+    if (thread_count == 0) {
+        thread_count = 1;
+    }
+    if (thread_count > 8) {
+        thread_count = 8;
+    }
+    if (thread_count > value_heads) {
+        thread_count = value_heads;
+    }
+    pthread_t threads[8];
+    struct tf_gdn_worker workers[8];
+    for (size_t i = 0; i < thread_count; ++i) {
+        workers[i] = (struct tf_gdn_worker) {
+            .recurrent = recurrent,
+            .query = query,
+            .key = key,
+            .value = value,
+            .beta = beta,
+            .decay = decay,
+            .output = output,
+            .key_heads = key_heads,
+            .value_heads = value_heads,
+            .key_width = key_width,
+            .value_width = value_width,
+            .begin_head = value_heads * i / thread_count,
+            .end_head = value_heads * (i + 1) / thread_count,
+        };
+    }
+    size_t created = 0;
+    for (; created < thread_count; ++created) {
+        if (pthread_create(&threads[created], NULL, gdn_worker_main, &workers[created]) != 0) {
+            break;
+        }
+    }
+    for (size_t i = created; i < thread_count; ++i) {
+        gdn_worker_main(&workers[i]);
+    }
+    for (size_t i = 0; i < created; ++i) {
+        pthread_join(threads[i], NULL);
+    }
+}
+
+void tf_qualcomm_dense_f16(const unsigned short *weight,
+                           const float *input,
+                           float *output,
+                           size_t rows,
+                           size_t columns) {
+    for (size_t row = 0; row < rows; ++row) {
+        const float16_t *row_weight = (const float16_t *) (weight + row * columns);
+        float32x4_t sum0 = vdupq_n_f32(0.0f);
+        float32x4_t sum1 = vdupq_n_f32(0.0f);
+        size_t column = 0;
+        for (; column + 8 <= columns; column += 8) {
+            const float16x8_t packed = vld1q_f16(row_weight + column);
+            sum0 = vfmaq_f32(sum0, vcvt_f32_f16(vget_low_f16(packed)), vld1q_f32(input + column));
+            sum1 = vfmaq_f32(sum1, vcvt_f32_f16(vget_high_f16(packed)), vld1q_f32(input + column + 4));
+        }
+        float result = vaddvq_f32(sum0) + vaddvq_f32(sum1);
+        for (; column < columns; ++column) {
+            result += (float) row_weight[column] * input[column];
+        }
+        output[row] = result;
+    }
+}
+
 static ggml_backend_t init_hexagon_backend(void) {
     ggml_backend_reg_t registry = ggml_backend_hexagon_reg();
     if (registry == NULL || ggml_backend_reg_dev_count(registry) == 0) {
@@ -153,6 +289,7 @@ static ggml_backend_t init_hexagon_backend(void) {
 }
 
 #define TF_QUALCOMM_MATMUL_SLOTS 16
+#define TF_QUALCOMM_RESIDENT_SLOTS 256
 
 struct tf_qualcomm_matmul_slot {
     size_t k;
@@ -165,12 +302,71 @@ struct tf_qualcomm_matmul_slot {
     struct ggml_tensor *output;
     struct ggml_cgraph *graph;
     ggml_backend_buffer_t buffer;
+    int initialized;
+};
+
+struct tf_qualcomm_resident_slot {
+    size_t k;
+    size_t m;
+    size_t batch_n;
+    struct ggml_context *ctx;
+    struct ggml_tensor *weight;
+    struct ggml_tensor *batch_input;
+    struct ggml_tensor *batch_output;
+    struct ggml_cgraph *batch_graph;
+    struct ggml_tensor *decode_input;
+    struct ggml_tensor *decode_output;
+    struct ggml_cgraph *decode_graph;
+    ggml_backend_buffer_t buffer;
+    int initialized;
+    int weight_loaded;
+};
+
+struct tf_qualcomm_resident_group_slot {
+    size_t k;
+    size_t m[3];
+    size_t matrix_count;
+    size_t batch_n;
+    struct ggml_context *ctx;
+    struct ggml_tensor *weight[3];
+    struct ggml_tensor *batch_input;
+    struct ggml_tensor *batch_output[3];
+    struct ggml_cgraph *batch_graph;
+    struct ggml_tensor *decode_input;
+    struct ggml_tensor *decode_output[3];
+    struct ggml_cgraph *decode_graph;
+    ggml_backend_buffer_t buffer;
+    int initialized;
+    int weights_loaded;
+};
+
+struct tf_qualcomm_resident_mlp_slot {
+    size_t input_width;
+    size_t intermediate_width;
+    size_t output_width;
+    size_t batch_n;
+    struct ggml_context *ctx;
+    struct ggml_tensor *gate_weight;
+    struct ggml_tensor *up_weight;
+    struct ggml_tensor *down_weight;
+    struct ggml_tensor *batch_input;
+    struct ggml_tensor *batch_output;
+    struct ggml_cgraph *batch_graph;
+    struct ggml_tensor *decode_input;
+    struct ggml_tensor *decode_output;
+    struct ggml_cgraph *decode_graph;
+    ggml_backend_buffer_t buffer;
+    int initialized;
+    int weights_loaded;
 };
 
 struct tf_qualcomm_backend {
     ggml_backend_t backend;
     struct tf_qualcomm_matmul_slot slots[TF_QUALCOMM_MATMUL_SLOTS];
     size_t slot_count;
+    struct tf_qualcomm_resident_slot resident_slots[TF_QUALCOMM_RESIDENT_SLOTS];
+    struct tf_qualcomm_resident_group_slot resident_group_slots[TF_QUALCOMM_RESIDENT_SLOTS];
+    struct tf_qualcomm_resident_mlp_slot resident_mlp_slots[TF_QUALCOMM_RESIDENT_SLOTS];
 };
 
 void *tf_qualcomm_backend_create(const char *backend_name, int cpu_threads) {
@@ -202,6 +398,20 @@ void tf_qualcomm_backend_destroy(void *opaque) {
     for (size_t i = 0; i < context->slot_count; ++i) {
         ggml_backend_buffer_free(context->slots[i].buffer);
         ggml_free(context->slots[i].ctx);
+    }
+    for (size_t i = 0; i < TF_QUALCOMM_RESIDENT_SLOTS; ++i) {
+        if (context->resident_slots[i].initialized) {
+            ggml_backend_buffer_free(context->resident_slots[i].buffer);
+            ggml_free(context->resident_slots[i].ctx);
+        }
+        if (context->resident_group_slots[i].initialized) {
+            ggml_backend_buffer_free(context->resident_group_slots[i].buffer);
+            ggml_free(context->resident_group_slots[i].ctx);
+        }
+        if (context->resident_mlp_slots[i].initialized) {
+            ggml_backend_buffer_free(context->resident_mlp_slots[i].buffer);
+            ggml_free(context->resident_mlp_slots[i].ctx);
+        }
     }
     ggml_backend_free(context->backend);
     free(context);
@@ -247,7 +457,57 @@ static struct tf_qualcomm_matmul_slot *get_matmul_slot(struct tf_qualcomm_backen
     slot->m = m;
     slot->n = n;
     slot->weight_type = weight_type;
+    slot->initialized = 1;
     context->slot_count += 1;
+    return slot;
+}
+
+static struct tf_qualcomm_resident_slot *get_resident_matmul_slot(struct tf_qualcomm_backend *context,
+                                                                  size_t slot_id,
+                                                                  size_t k,
+                                                                  size_t m,
+                                                                  size_t n) {
+    if (slot_id >= TF_QUALCOMM_RESIDENT_SLOTS) {
+        return NULL;
+    }
+    struct tf_qualcomm_resident_slot *slot = &context->resident_slots[slot_id];
+    if (slot->initialized) {
+        if (slot->k != k || slot->m != m || (n != slot->batch_n && n != 1)) {
+            return NULL;
+        }
+        return slot;
+    }
+
+    const struct ggml_init_params params = {
+        .mem_size = 1024u * 1024u,
+        .mem_buffer = NULL,
+        .no_alloc = true,
+    };
+    slot->ctx = ggml_init(params);
+    if (slot->ctx == NULL) {
+        return NULL;
+    }
+    slot->weight = ggml_new_tensor_2d(slot->ctx, GGML_TYPE_F16, (int64_t) k, (int64_t) m);
+    slot->batch_input = ggml_new_tensor_2d(slot->ctx, GGML_TYPE_F32, (int64_t) k, (int64_t) n);
+    slot->batch_output = ggml_mul_mat(slot->ctx, slot->weight, slot->batch_input);
+    slot->batch_graph = ggml_new_graph_custom(slot->ctx, 8, false);
+    ggml_build_forward_expand(slot->batch_graph, slot->batch_output);
+    if (n != 1) {
+        slot->decode_input = ggml_new_tensor_2d(slot->ctx, GGML_TYPE_F32, (int64_t) k, 1);
+        slot->decode_output = ggml_mul_mat(slot->ctx, slot->weight, slot->decode_input);
+        slot->decode_graph = ggml_new_graph_custom(slot->ctx, 8, false);
+        ggml_build_forward_expand(slot->decode_graph, slot->decode_output);
+    }
+    slot->buffer = ggml_backend_alloc_ctx_tensors(slot->ctx, context->backend);
+    if (slot->buffer == NULL) {
+        ggml_free(slot->ctx);
+        memset(slot, 0, sizeof(*slot));
+        return NULL;
+    }
+    slot->k = k;
+    slot->m = m;
+    slot->batch_n = n;
+    slot->initialized = 1;
     return slot;
 }
 
@@ -330,6 +590,286 @@ int tf_qualcomm_backend_matmul_f16_once(void *opaque,
                                         float *output,
                                         double *compute_ms) {
     return backend_matmul_typed(opaque, k, m, n, 1, 0, GGML_TYPE_F16, weight, input, output, compute_ms);
+}
+
+int tf_qualcomm_backend_matmul_f16_resident_once(void *opaque,
+                                                 size_t slot_id,
+                                                 size_t k,
+                                                 size_t m,
+                                                 size_t n,
+                                                 const unsigned short *weight,
+                                                 const float *input,
+                                                 float *output,
+                                                 double *compute_ms,
+                                                 int *weight_uploaded) {
+    if (opaque == NULL || input == NULL || output == NULL || compute_ms == NULL || weight_uploaded == NULL) {
+        return 1;
+    }
+    struct tf_qualcomm_backend *context = opaque;
+    struct tf_qualcomm_resident_slot *slot = get_resident_matmul_slot(context, slot_id, k, m, n);
+    if (slot == NULL) {
+        return 2;
+    }
+    *weight_uploaded = 0;
+    if (!slot->weight_loaded) {
+        if (weight == NULL) {
+            return 3;
+        }
+        ggml_backend_tensor_set(slot->weight, weight, 0, ggml_row_size(GGML_TYPE_F16, k) * m);
+        slot->weight_loaded = 1;
+        *weight_uploaded = 1;
+    }
+    struct ggml_tensor *input_tensor = n == slot->batch_n ? slot->batch_input : slot->decode_input;
+    struct ggml_tensor *output_tensor = n == slot->batch_n ? slot->batch_output : slot->decode_output;
+    struct ggml_cgraph *graph = n == slot->batch_n ? slot->batch_graph : slot->decode_graph;
+    if (input_tensor == NULL || output_tensor == NULL || graph == NULL) {
+        return 4;
+    }
+    ggml_backend_tensor_set(input_tensor, input, 0, k * n * sizeof(*input));
+    const double started = monotonic_ms();
+    if (ggml_backend_graph_compute(context->backend, graph) != GGML_STATUS_SUCCESS) {
+        return 5;
+    }
+    const double stopped = monotonic_ms();
+    ggml_backend_tensor_get(output_tensor, output, 0, m * n * sizeof(*output));
+    *compute_ms = stopped - started;
+    return 0;
+}
+
+static struct tf_qualcomm_resident_group_slot *get_resident_group_slot(struct tf_qualcomm_backend *context,
+                                                                       size_t slot_id,
+                                                                       size_t matrix_count,
+                                                                       size_t k,
+                                                                       const size_t m[3],
+                                                                       size_t n) {
+    if (slot_id >= TF_QUALCOMM_RESIDENT_SLOTS || matrix_count < 2 || matrix_count > 3) {
+        return NULL;
+    }
+    struct tf_qualcomm_resident_group_slot *slot = &context->resident_group_slots[slot_id];
+    if (slot->initialized) {
+        if (slot->k != k || slot->matrix_count != matrix_count || (n != slot->batch_n && n != 1)) {
+            return NULL;
+        }
+        for (size_t i = 0; i < matrix_count; ++i) {
+            if (slot->m[i] != m[i]) {
+                return NULL;
+            }
+        }
+        return slot;
+    }
+
+    const struct ggml_init_params params = {
+        .mem_size = 2u * 1024u * 1024u,
+        .mem_buffer = NULL,
+        .no_alloc = true,
+    };
+    slot->ctx = ggml_init(params);
+    if (slot->ctx == NULL) {
+        return NULL;
+    }
+    slot->batch_input = ggml_new_tensor_2d(slot->ctx, GGML_TYPE_F32, (int64_t) k, (int64_t) n);
+    slot->batch_graph = ggml_new_graph_custom(slot->ctx, 16, false);
+    for (size_t i = 0; i < matrix_count; ++i) {
+        slot->weight[i] = ggml_new_tensor_2d(slot->ctx, GGML_TYPE_F16, (int64_t) k, (int64_t) m[i]);
+        slot->batch_output[i] = ggml_mul_mat(slot->ctx, slot->weight[i], slot->batch_input);
+        ggml_build_forward_expand(slot->batch_graph, slot->batch_output[i]);
+    }
+    if (n != 1) {
+        slot->decode_input = ggml_new_tensor_2d(slot->ctx, GGML_TYPE_F32, (int64_t) k, 1);
+        slot->decode_graph = ggml_new_graph_custom(slot->ctx, 16, false);
+        for (size_t i = 0; i < matrix_count; ++i) {
+            slot->decode_output[i] = ggml_mul_mat(slot->ctx, slot->weight[i], slot->decode_input);
+            ggml_build_forward_expand(slot->decode_graph, slot->decode_output[i]);
+        }
+    }
+    slot->buffer = ggml_backend_alloc_ctx_tensors(slot->ctx, context->backend);
+    if (slot->buffer == NULL) {
+        ggml_free(slot->ctx);
+        memset(slot, 0, sizeof(*slot));
+        return NULL;
+    }
+    slot->k = k;
+    slot->matrix_count = matrix_count;
+    slot->batch_n = n;
+    for (size_t i = 0; i < matrix_count; ++i) {
+        slot->m[i] = m[i];
+    }
+    slot->initialized = 1;
+    return slot;
+}
+
+int tf_qualcomm_backend_matmul_f16_resident_group_once(void *opaque,
+                                                       size_t slot_id,
+                                                       size_t matrix_count,
+                                                       size_t k,
+                                                       size_t m0,
+                                                       size_t m1,
+                                                       size_t m2,
+                                                       size_t n,
+                                                       const unsigned short *weight0,
+                                                       const unsigned short *weight1,
+                                                       const unsigned short *weight2,
+                                                       const float *input,
+                                                       float *output0,
+                                                       float *output1,
+                                                       float *output2,
+                                                       double *compute_ms,
+                                                       int *weights_uploaded) {
+    if (opaque == NULL || input == NULL || output0 == NULL || output1 == NULL || compute_ms == NULL || weights_uploaded == NULL) {
+        return 1;
+    }
+    const size_t m[3] = { m0, m1, m2 };
+    const uint16_t *weights[3] = { weight0, weight1, weight2 };
+    float *outputs[3] = { output0, output1, output2 };
+    if (matrix_count == 3 && output2 == NULL) {
+        return 1;
+    }
+    struct tf_qualcomm_backend *context = opaque;
+    struct tf_qualcomm_resident_group_slot *slot = get_resident_group_slot(context, slot_id, matrix_count, k, m, n);
+    if (slot == NULL) {
+        return 2;
+    }
+    *weights_uploaded = 0;
+    if (!slot->weights_loaded) {
+        for (size_t i = 0; i < matrix_count; ++i) {
+            if (weights[i] == NULL) {
+                return 3;
+            }
+            ggml_backend_tensor_set(slot->weight[i], weights[i], 0, ggml_row_size(GGML_TYPE_F16, k) * m[i]);
+        }
+        slot->weights_loaded = 1;
+        *weights_uploaded = 1;
+    }
+
+    struct ggml_tensor *input_tensor = n == slot->batch_n ? slot->batch_input : slot->decode_input;
+    struct ggml_tensor **output_tensors = n == slot->batch_n ? slot->batch_output : slot->decode_output;
+    struct ggml_cgraph *graph = n == slot->batch_n ? slot->batch_graph : slot->decode_graph;
+    if (input_tensor == NULL || graph == NULL) {
+        return 4;
+    }
+    ggml_backend_tensor_set(input_tensor, input, 0, k * n * sizeof(*input));
+    const double started = monotonic_ms();
+    if (ggml_backend_graph_compute(context->backend, graph) != GGML_STATUS_SUCCESS) {
+        return 5;
+    }
+    const double stopped = monotonic_ms();
+    for (size_t i = 0; i < matrix_count; ++i) {
+        ggml_backend_tensor_get(output_tensors[i], outputs[i], 0, m[i] * n * sizeof(*outputs[i]));
+    }
+    *compute_ms = stopped - started;
+    return 0;
+}
+
+static struct tf_qualcomm_resident_mlp_slot *get_resident_mlp_slot(struct tf_qualcomm_backend *context,
+                                                                   size_t slot_id,
+                                                                   size_t input_width,
+                                                                   size_t intermediate_width,
+                                                                   size_t output_width,
+                                                                   size_t n) {
+    if (slot_id >= TF_QUALCOMM_RESIDENT_SLOTS) {
+        return NULL;
+    }
+    struct tf_qualcomm_resident_mlp_slot *slot = &context->resident_mlp_slots[slot_id];
+    if (slot->initialized) {
+        if (slot->input_width != input_width || slot->intermediate_width != intermediate_width ||
+            slot->output_width != output_width || (n != slot->batch_n && n != 1)) {
+            return NULL;
+        }
+        return slot;
+    }
+
+    const struct ggml_init_params params = {
+        .mem_size = 2u * 1024u * 1024u,
+        .mem_buffer = NULL,
+        .no_alloc = true,
+    };
+    slot->ctx = ggml_init(params);
+    if (slot->ctx == NULL) {
+        return NULL;
+    }
+    slot->gate_weight = ggml_new_tensor_2d(slot->ctx, GGML_TYPE_F16, (int64_t) input_width, (int64_t) intermediate_width);
+    slot->up_weight = ggml_new_tensor_2d(slot->ctx, GGML_TYPE_F16, (int64_t) input_width, (int64_t) intermediate_width);
+    slot->down_weight = ggml_new_tensor_2d(slot->ctx, GGML_TYPE_F16, (int64_t) intermediate_width, (int64_t) output_width);
+
+    slot->batch_input = ggml_new_tensor_2d(slot->ctx, GGML_TYPE_F32, (int64_t) input_width, (int64_t) n);
+    struct ggml_tensor *batch_gate = ggml_mul_mat(slot->ctx, slot->gate_weight, slot->batch_input);
+    struct ggml_tensor *batch_up = ggml_mul_mat(slot->ctx, slot->up_weight, slot->batch_input);
+    struct ggml_tensor *batch_activated = ggml_mul(slot->ctx, ggml_silu(slot->ctx, batch_gate), batch_up);
+    slot->batch_output = ggml_mul_mat(slot->ctx, slot->down_weight, batch_activated);
+    slot->batch_graph = ggml_new_graph_custom(slot->ctx, 16, false);
+    ggml_build_forward_expand(slot->batch_graph, slot->batch_output);
+
+    if (n != 1) {
+        slot->decode_input = ggml_new_tensor_2d(slot->ctx, GGML_TYPE_F32, (int64_t) input_width, 1);
+        struct ggml_tensor *decode_gate = ggml_mul_mat(slot->ctx, slot->gate_weight, slot->decode_input);
+        struct ggml_tensor *decode_up = ggml_mul_mat(slot->ctx, slot->up_weight, slot->decode_input);
+        struct ggml_tensor *decode_activated = ggml_mul(slot->ctx, ggml_silu(slot->ctx, decode_gate), decode_up);
+        slot->decode_output = ggml_mul_mat(slot->ctx, slot->down_weight, decode_activated);
+        slot->decode_graph = ggml_new_graph_custom(slot->ctx, 16, false);
+        ggml_build_forward_expand(slot->decode_graph, slot->decode_output);
+    }
+    slot->buffer = ggml_backend_alloc_ctx_tensors(slot->ctx, context->backend);
+    if (slot->buffer == NULL) {
+        ggml_free(slot->ctx);
+        memset(slot, 0, sizeof(*slot));
+        return NULL;
+    }
+    slot->input_width = input_width;
+    slot->intermediate_width = intermediate_width;
+    slot->output_width = output_width;
+    slot->batch_n = n;
+    slot->initialized = 1;
+    return slot;
+}
+
+int tf_qualcomm_backend_mlp_f16_resident_once(void *opaque,
+                                              size_t slot_id,
+                                              size_t input_width,
+                                              size_t intermediate_width,
+                                              size_t output_width,
+                                              size_t n,
+                                              const unsigned short *gate_weight,
+                                              const unsigned short *up_weight,
+                                              const unsigned short *down_weight,
+                                              const float *input,
+                                              float *output,
+                                              double *compute_ms,
+                                              int *weights_uploaded) {
+    if (opaque == NULL || input == NULL || output == NULL || compute_ms == NULL || weights_uploaded == NULL) {
+        return 1;
+    }
+    struct tf_qualcomm_backend *context = opaque;
+    struct tf_qualcomm_resident_mlp_slot *slot = get_resident_mlp_slot(context, slot_id, input_width, intermediate_width, output_width, n);
+    if (slot == NULL) {
+        return 2;
+    }
+    *weights_uploaded = 0;
+    if (!slot->weights_loaded) {
+        if (gate_weight == NULL || up_weight == NULL || down_weight == NULL) {
+            return 3;
+        }
+        ggml_backend_tensor_set(slot->gate_weight, gate_weight, 0, ggml_row_size(GGML_TYPE_F16, input_width) * intermediate_width);
+        ggml_backend_tensor_set(slot->up_weight, up_weight, 0, ggml_row_size(GGML_TYPE_F16, input_width) * intermediate_width);
+        ggml_backend_tensor_set(slot->down_weight, down_weight, 0, ggml_row_size(GGML_TYPE_F16, intermediate_width) * output_width);
+        slot->weights_loaded = 1;
+        *weights_uploaded = 1;
+    }
+
+    struct ggml_tensor *input_tensor = n == slot->batch_n ? slot->batch_input : slot->decode_input;
+    struct ggml_tensor *output_tensor = n == slot->batch_n ? slot->batch_output : slot->decode_output;
+    struct ggml_cgraph *graph = n == slot->batch_n ? slot->batch_graph : slot->decode_graph;
+    if (input_tensor == NULL || output_tensor == NULL || graph == NULL) {
+        return 4;
+    }
+    ggml_backend_tensor_set(input_tensor, input, 0, input_width * n * sizeof(*input));
+    const double started = monotonic_ms();
+    if (ggml_backend_graph_compute(context->backend, graph) != GGML_STATUS_SUCCESS) {
+        return 5;
+    }
+    const double stopped = monotonic_ms();
+    ggml_backend_tensor_get(output_tensor, output, 0, output_width * n * sizeof(*output));
+    *compute_ms = stopped - started;
+    return 0;
 }
 
 int tf_qualcomm_matmul(const char *backend_name,

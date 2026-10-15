@@ -20,6 +20,21 @@ extern fn tf_qualcomm_tied_head_f16(
     top_ids: *[5]usize,
     top_logits: *[5]f32,
 ) c_int;
+extern fn tf_qualcomm_gdn_step_f32(
+    recurrent: [*]f32,
+    query: [*]const f32,
+    key: [*]const f32,
+    value: [*]const f32,
+    beta: [*]const f32,
+    decay: [*]const f32,
+    output: [*]f32,
+    key_heads: usize,
+    value_heads: usize,
+    key_width: usize,
+    value_width: usize,
+    thread_count: usize,
+) void;
+extern fn tf_qualcomm_dense_f16(weight: [*]const u16, input: [*]const f32, output: [*]f32, rows: usize, columns: usize) void;
 extern fn tf_qualcomm_backend_create(backend_name: [*:0]const u8, cpu_threads: i32) ?*anyopaque;
 extern fn tf_qualcomm_backend_destroy(context: ?*anyopaque) void;
 extern fn tf_qualcomm_backend_matmul_once(
@@ -42,6 +57,52 @@ extern fn tf_qualcomm_backend_matmul_f16_once(
     input: [*]const f32,
     output: [*]f32,
     compute_ms: *f64,
+) c_int;
+extern fn tf_qualcomm_backend_matmul_f16_resident_once(
+    context: ?*anyopaque,
+    slot_id: usize,
+    k: usize,
+    m: usize,
+    n: usize,
+    weight: ?[*]const u16,
+    input: [*]const f32,
+    output: [*]f32,
+    compute_ms: *f64,
+    weight_uploaded: *c_int,
+) c_int;
+extern fn tf_qualcomm_backend_matmul_f16_resident_group_once(
+    context: ?*anyopaque,
+    slot_id: usize,
+    matrix_count: usize,
+    k: usize,
+    m0: usize,
+    m1: usize,
+    m2: usize,
+    n: usize,
+    weight0: ?[*]const u16,
+    weight1: ?[*]const u16,
+    weight2: ?[*]const u16,
+    input: [*]const f32,
+    output0: [*]f32,
+    output1: [*]f32,
+    output2: ?[*]f32,
+    compute_ms: *f64,
+    weights_uploaded: *c_int,
+) c_int;
+extern fn tf_qualcomm_backend_mlp_f16_resident_once(
+    context: ?*anyopaque,
+    slot_id: usize,
+    input_width: usize,
+    intermediate_width: usize,
+    output_width: usize,
+    n: usize,
+    gate_weight: ?[*]const u16,
+    up_weight: ?[*]const u16,
+    down_weight: ?[*]const u16,
+    input: [*]const f32,
+    output: [*]f32,
+    compute_ms: *f64,
+    weights_uploaded: *c_int,
 ) c_int;
 
 const prefix = "model.language_model";
@@ -68,6 +129,7 @@ const rope_width = profile.rope_width;
 const cache_magic = "TFEXL3F1";
 const f16_cache_magic = "TFEXL3H1";
 const cache_header_bytes = 64;
+const projections_per_position = layers * 6 + layers / 4;
 
 fn f16Value(bytes: []const u8, index: usize) f32 {
     const bits = std.mem.readInt(u16, bytes[index * 2 ..][0..2], .little);
@@ -128,7 +190,10 @@ const Runner = struct {
     io: std.Io,
     file: *const st.File,
     backend: ?*anyopaque,
+    cpu_threads: usize,
     use_f16_weights: bool = false,
+    use_resident_weights: bool = false,
+    use_resident_head: bool = false,
     cache_dir: ?[]const u8 = null,
     cache_model_id: ?[]const u8 = null,
     projection_count: usize = 0,
@@ -149,6 +214,47 @@ const Runner = struct {
     f16_cache_misses: usize = 0,
     f16_cache_bytes_read: usize = 0,
     f16_cache_bytes_written: usize = 0,
+    resident_loaded: [projections_per_position]bool = @splat(false),
+    resident_slot_cursor: usize = 0,
+    resident_weight_uploads: usize = 0,
+    resident_weight_hits: usize = 0,
+    resident_weight_fallbacks: usize = 0,
+    resident_weight_bytes_uploaded: usize = 0,
+    resident_head_loaded: bool = false,
+    resident_head_uploads: usize = 0,
+    resident_head_hits: usize = 0,
+    resident_head_fallbacks: usize = 0,
+    resident_head_compute_ms: f64 = 0,
+
+    fn resetMetrics(self: *Runner) void {
+        self.projection_count = 0;
+        self.projection_ms = 0;
+        self.projection_wall_ms = 0;
+        self.weight_convert_ms = 0;
+        self.dequant_ms = 0;
+        self.cache_hash_ms = 0;
+        self.cache_read_ms = 0;
+        self.cache_write_ms = 0;
+        self.cache_hits = 0;
+        self.cache_misses = 0;
+        self.cache_bytes_read = 0;
+        self.cache_bytes_written = 0;
+        self.cache_trusted_hits = 0;
+        self.cache_aliases_created = 0;
+        self.f16_cache_hits = 0;
+        self.f16_cache_misses = 0;
+        self.f16_cache_bytes_read = 0;
+        self.f16_cache_bytes_written = 0;
+        self.resident_weight_uploads = 0;
+        self.resident_weight_hits = 0;
+        self.resident_weight_fallbacks = 0;
+        self.resident_weight_bytes_uploaded = 0;
+        self.resident_slot_cursor = 0;
+        self.resident_head_uploads = 0;
+        self.resident_head_hits = 0;
+        self.resident_head_fallbacks = 0;
+        self.resident_head_compute_ms = 0;
+    }
 
     const CachedWeight = struct {
         file: std.Io.File,
@@ -173,6 +279,26 @@ const Runner = struct {
             self.* = undefined;
         }
     };
+
+    const ResidentProjection = struct {
+        k: usize,
+        m: usize,
+        key: [32]u8,
+    };
+
+    fn residentProjection(self: *Runner, base: []const u8) !ResidentProjection {
+        var name_buffer: [256]u8 = undefined;
+        const trellis_tensor = self.file.get(try tensorName(&name_buffer, "{s}.trellis", .{base})) orelse return error.MissingTensor;
+        if (trellis_tensor.dtype != .i16 or trellis_tensor.rank != 3) return error.UnexpectedTensor;
+        const tiles_k = trellis_tensor.dim(0);
+        const tiles_m = trellis_tensor.dim(1);
+        const words = trellis_tensor.dim(2);
+        if (words % 8 != 0) return error.UnexpectedTensor;
+        const k = tiles_k * 16;
+        const m = tiles_m * 16;
+        const model_id = self.cache_model_id orelse return error.InvalidModelSha256;
+        return .{ .k = k, .m = m, .key = f16ProjectionKey(model_id, base, k, m, words) };
+    }
 
     fn projectionKey(
         trellis_tensor: st.Tensor,
@@ -383,17 +509,171 @@ const Runner = struct {
         self.projection_count += 1;
     }
 
+    fn runResidentWeightF16(self: *Runner, slot_id: usize, k: usize, m: usize, weight: ?[]const u16, input: []const f32, output: []f32) bool {
+        const n = input.len / k;
+        var ms: f64 = 0;
+        var uploaded: c_int = 0;
+        const weight_ptr: ?[*]const u16 = if (weight) |words| words.ptr else null;
+        const status = tf_qualcomm_backend_matmul_f16_resident_once(self.backend, slot_id, k, m, n, weight_ptr, input.ptr, output.ptr, &ms, &uploaded);
+        if (status != 0) {
+            self.resident_weight_fallbacks += 1;
+            self.resident_loaded[slot_id] = false;
+            return false;
+        }
+        self.projection_ms += ms;
+        self.projection_count += 1;
+        self.resident_slot_cursor += 1;
+        if (uploaded != 0) {
+            self.resident_loaded[slot_id] = true;
+            self.resident_weight_uploads += 1;
+            self.resident_weight_bytes_uploaded += k * m * @sizeOf(u16);
+        } else {
+            self.resident_weight_hits += 1;
+        }
+        return true;
+    }
+
     fn runWeightF16(self: *Runner, k: usize, m: usize, weight: []const u16, input: []const f32, output: []f32) !void {
         if (input.len == 0 or input.len % k != 0) return error.UnexpectedTensor;
         const n = input.len / k;
         if (weight.len != k * m or output.len != m * n) return error.UnexpectedTensor;
-        var ms: f64 = 0;
         const started = tf_qualcomm_monotonic_ms();
+        const slot_id = self.resident_slot_cursor;
+        if (self.use_resident_weights and self.runResidentWeightF16(slot_id, k, m, weight, input, output)) {
+            self.projection_wall_ms += tf_qualcomm_monotonic_ms() - started;
+            return;
+        }
+        var ms: f64 = 0;
         const status = tf_qualcomm_backend_matmul_f16_once(self.backend, k, m, n, weight.ptr, input.ptr, output.ptr, &ms);
         self.projection_wall_ms += tf_qualcomm_monotonic_ms() - started;
         if (status != 0) return error.BridgeFailed;
         self.projection_ms += ms;
         self.projection_count += 1;
+        if (self.use_resident_weights) self.resident_slot_cursor += 1;
+    }
+
+    fn projectPairResident(self: *Runner, base0: []const u8, base1: []const u8, input: []const f32, output0: []f32, output1: []f32) !void {
+        const p0 = try self.residentProjection(base0);
+        const p1 = try self.residentProjection(base1);
+        if (p0.k != p1.k or input.len == 0 or input.len % p0.k != 0) return error.UnexpectedTensor;
+        const n = input.len / p0.k;
+        if (output0.len != p0.m * n or output1.len != p1.m * n) return error.UnexpectedTensor;
+        const slot = self.resident_slot_cursor;
+        var loaded0: ?CachedF16Weight = null;
+        defer if (loaded0) |*loaded| loaded.close(self.io);
+        var loaded1: ?CachedF16Weight = null;
+        defer if (loaded1) |*loaded| loaded.close(self.io);
+        if (!self.resident_loaded[slot]) {
+            loaded0 = try self.loadCachedF16(p0.key, p0.k, p0.m) orelse return error.MissingResidentWeight;
+            loaded1 = try self.loadCachedF16(p1.key, p1.k, p1.m) orelse return error.MissingResidentWeight;
+        }
+        const weight0: ?[*]const u16 = if (loaded0) |loaded| loaded.weight.ptr else null;
+        const weight1: ?[*]const u16 = if (loaded1) |loaded| loaded.weight.ptr else null;
+        var ms: f64 = 0;
+        var uploaded: c_int = 0;
+        const started = tf_qualcomm_monotonic_ms();
+        const status = tf_qualcomm_backend_matmul_f16_resident_group_once(self.backend, slot, 2, p0.k, p0.m, p1.m, 0, n, weight0, weight1, null, input.ptr, output0.ptr, output1.ptr, null, &ms, &uploaded);
+        self.projection_wall_ms += tf_qualcomm_monotonic_ms() - started;
+        if (status != 0) {
+            std.debug.print("resident pair bridge failed: status {d}, slot {d}, k {d}, m {d}/{d}, n {d}\n", .{ status, slot, p0.k, p0.m, p1.m, n });
+            return error.BridgeFailed;
+        }
+        self.projection_ms += ms;
+        self.projection_count += 2;
+        self.resident_slot_cursor += 1;
+        if (uploaded != 0) {
+            self.resident_loaded[slot] = true;
+            self.resident_weight_uploads += 2;
+            self.resident_weight_bytes_uploaded += (p0.k * p0.m + p1.k * p1.m) * @sizeOf(u16);
+        } else {
+            self.resident_weight_hits += 2;
+        }
+    }
+
+    fn projectTripleResident(self: *Runner, base0: []const u8, base1: []const u8, base2: []const u8, input: []const f32, output0: []f32, output1: []f32, output2: []f32) !void {
+        const p0 = try self.residentProjection(base0);
+        const p1 = try self.residentProjection(base1);
+        const p2 = try self.residentProjection(base2);
+        if (p0.k != p1.k or p0.k != p2.k or input.len == 0 or input.len % p0.k != 0) return error.UnexpectedTensor;
+        const n = input.len / p0.k;
+        if (output0.len != p0.m * n or output1.len != p1.m * n or output2.len != p2.m * n) return error.UnexpectedTensor;
+        const slot = self.resident_slot_cursor;
+        var loaded0: ?CachedF16Weight = null;
+        defer if (loaded0) |*loaded| loaded.close(self.io);
+        var loaded1: ?CachedF16Weight = null;
+        defer if (loaded1) |*loaded| loaded.close(self.io);
+        var loaded2: ?CachedF16Weight = null;
+        defer if (loaded2) |*loaded| loaded.close(self.io);
+        if (!self.resident_loaded[slot]) {
+            loaded0 = try self.loadCachedF16(p0.key, p0.k, p0.m) orelse return error.MissingResidentWeight;
+            loaded1 = try self.loadCachedF16(p1.key, p1.k, p1.m) orelse return error.MissingResidentWeight;
+            loaded2 = try self.loadCachedF16(p2.key, p2.k, p2.m) orelse return error.MissingResidentWeight;
+        }
+        const weight0: ?[*]const u16 = if (loaded0) |loaded| loaded.weight.ptr else null;
+        const weight1: ?[*]const u16 = if (loaded1) |loaded| loaded.weight.ptr else null;
+        const weight2: ?[*]const u16 = if (loaded2) |loaded| loaded.weight.ptr else null;
+        var ms: f64 = 0;
+        var uploaded: c_int = 0;
+        const started = tf_qualcomm_monotonic_ms();
+        const status = tf_qualcomm_backend_matmul_f16_resident_group_once(self.backend, slot, 3, p0.k, p0.m, p1.m, p2.m, n, weight0, weight1, weight2, input.ptr, output0.ptr, output1.ptr, output2.ptr, &ms, &uploaded);
+        self.projection_wall_ms += tf_qualcomm_monotonic_ms() - started;
+        if (status != 0) {
+            std.debug.print("resident triple bridge failed: status {d}, slot {d}, k {d}, m {d}/{d}/{d}, n {d}\n", .{ status, slot, p0.k, p0.m, p1.m, p2.m, n });
+            return error.BridgeFailed;
+        }
+        self.projection_ms += ms;
+        self.projection_count += 3;
+        self.resident_slot_cursor += 1;
+        if (uploaded != 0) {
+            self.resident_loaded[slot] = true;
+            self.resident_weight_uploads += 3;
+            self.resident_weight_bytes_uploaded += (p0.k * p0.m + p1.k * p1.m + p2.k * p2.m) * @sizeOf(u16);
+        } else {
+            self.resident_weight_hits += 3;
+        }
+    }
+
+    fn mlpResident(self: *Runner, gate_base: []const u8, up_base: []const u8, down_base: []const u8, input: []const f32, output: []f32) !void {
+        const gate = try self.residentProjection(gate_base);
+        const up = try self.residentProjection(up_base);
+        const down = try self.residentProjection(down_base);
+        if (gate.k != up.k or gate.m != up.m or down.k != gate.m or input.len == 0 or input.len % gate.k != 0) return error.UnexpectedTensor;
+        const n = input.len / gate.k;
+        if (output.len != down.m * n) return error.UnexpectedTensor;
+        const slot = self.resident_slot_cursor;
+        var gate_loaded: ?CachedF16Weight = null;
+        defer if (gate_loaded) |*loaded| loaded.close(self.io);
+        var up_loaded: ?CachedF16Weight = null;
+        defer if (up_loaded) |*loaded| loaded.close(self.io);
+        var down_loaded: ?CachedF16Weight = null;
+        defer if (down_loaded) |*loaded| loaded.close(self.io);
+        if (!self.resident_loaded[slot]) {
+            gate_loaded = try self.loadCachedF16(gate.key, gate.k, gate.m) orelse return error.MissingResidentWeight;
+            up_loaded = try self.loadCachedF16(up.key, up.k, up.m) orelse return error.MissingResidentWeight;
+            down_loaded = try self.loadCachedF16(down.key, down.k, down.m) orelse return error.MissingResidentWeight;
+        }
+        const gate_weight: ?[*]const u16 = if (gate_loaded) |loaded| loaded.weight.ptr else null;
+        const up_weight: ?[*]const u16 = if (up_loaded) |loaded| loaded.weight.ptr else null;
+        const down_weight: ?[*]const u16 = if (down_loaded) |loaded| loaded.weight.ptr else null;
+        var ms: f64 = 0;
+        var uploaded: c_int = 0;
+        const started = tf_qualcomm_monotonic_ms();
+        const status = tf_qualcomm_backend_mlp_f16_resident_once(self.backend, slot, gate.k, gate.m, down.m, n, gate_weight, up_weight, down_weight, input.ptr, output.ptr, &ms, &uploaded);
+        self.projection_wall_ms += tf_qualcomm_monotonic_ms() - started;
+        if (status != 0) {
+            std.debug.print("resident MLP bridge failed: status {d}, slot {d}, widths {d}/{d}/{d}, n {d}\n", .{ status, slot, gate.k, gate.m, down.m, n });
+            return error.BridgeFailed;
+        }
+        self.projection_ms += ms;
+        self.projection_count += 3;
+        self.resident_slot_cursor += 1;
+        if (uploaded != 0) {
+            self.resident_loaded[slot] = true;
+            self.resident_weight_uploads += 3;
+            self.resident_weight_bytes_uploaded += (gate.k * gate.m + up.k * up.m + down.k * down.m) * @sizeOf(u16);
+        } else {
+            self.resident_weight_hits += 3;
+        }
     }
 
     fn convertSaveRunF16(self: *Runner, key: [32]u8, k: usize, m: usize, weight: []const f32, input: []const f32, output: []f32) !void {
@@ -427,6 +707,14 @@ const Runner = struct {
             f16ProjectionKey(model_id, base, k, m, words)
         else
             null else null;
+        const resident_slot = self.resident_slot_cursor;
+        if (self.use_resident_weights and self.resident_loaded[resident_slot]) {
+            const started = tf_qualcomm_monotonic_ms();
+            if (self.runResidentWeightF16(resident_slot, k, m, null, input, output)) {
+                self.projection_wall_ms += tf_qualcomm_monotonic_ms() - started;
+                return;
+            }
+        }
         if (f16_key) |key| {
             if (try self.loadCachedF16(key, k, m)) |loaded_value| {
                 var loaded = loaded_value;
@@ -497,9 +785,14 @@ const Runner = struct {
     }
 };
 
-fn dense(file: *const st.File, name: []const u8, input: []const f32, output: []f32) !void {
-    const tensor = file.get(name) orelse return error.MissingTensor;
+fn dense(runner: *Runner, name: []const u8, input: []const f32, output: []f32) !void {
+    const tensor = runner.file.get(name) orelse return error.MissingTensor;
     if (tensor.dtype != .f16 or tensor.rank != 2 or tensor.dim(0) != output.len or tensor.dim(1) != input.len) return error.UnexpectedTensor;
+    if (runner.use_resident_weights) {
+        const words: [*]const u16 = @ptrCast(@alignCast(tensor.bytes.ptr));
+        tf_qualcomm_dense_f16(words, input.ptr, output.ptr, output.len, input.len);
+        return;
+    }
     for (output, 0..) |*out, row| {
         var sum: f32 = 0;
         for (input, 0..) |x, col| sum += f16Value(tensor.bytes, row * input.len + col) * x;
@@ -580,17 +873,24 @@ fn linearAttention(runner: *Runner, decode: *DecodeState, layer: usize, input: [
 
     const qkv = try a.alloc(f32, conv_channels);
     defer a.free(qkv);
-    try runner.project(try tensorName(&projection_buffer, "{s}.in_proj_qkv", .{base}), input, qkv);
-    for (qkv) |*x| x.* = roundBF16(roundF16(x.*));
-
     const z = try a.alloc(f32, linear_output_width);
     defer a.free(z);
-    try runner.project(try tensorName(&projection_buffer, "{s}.in_proj_z", .{base}), input, z);
+    var qkv_name_buffer: [256]u8 = undefined;
+    var z_name_buffer: [256]u8 = undefined;
+    const qkv_name = try tensorName(&qkv_name_buffer, "{s}.in_proj_qkv", .{base});
+    const z_name = try tensorName(&z_name_buffer, "{s}.in_proj_z", .{base});
+    if (runner.use_resident_weights) {
+        try runner.projectPairResident(qkv_name, z_name, input, qkv, z);
+    } else {
+        try runner.project(qkv_name, input, qkv);
+        try runner.project(z_name, input, z);
+    }
+    for (qkv) |*x| x.* = roundBF16(roundF16(x.*));
 
     var a_gate: [linear_value_heads]f32 = undefined;
     var b_gate: [linear_value_heads]f32 = undefined;
-    try dense(runner.file, try tensorName(&projection_buffer, "{s}.in_proj_a.weight", .{base}), input, &a_gate);
-    try dense(runner.file, try tensorName(&projection_buffer, "{s}.in_proj_b.weight", .{base}), input, &b_gate);
+    try dense(runner, try tensorName(&projection_buffer, "{s}.in_proj_a.weight", .{base}), input, &a_gate);
+    try dense(runner, try tensorName(&projection_buffer, "{s}.in_proj_b.weight", .{base}), input, &b_gate);
 
     const conv_name = try tensorName(&projection_buffer, "{s}.conv1d.weight", .{base});
     const conv = try require(runner.file, conv_name, .bf16, &.{ conv_channels, 1, 4 });
@@ -650,22 +950,27 @@ fn linearAttention(runner: *Runner, decode: *DecodeState, layer: usize, input: [
     const y = try a.alloc(f32, linear_output_width);
     defer a.free(y);
     const recurrent = decode.gdnLayer(layer);
-    for (0..linear_value_heads) |head| {
-        const key_head = head / (linear_value_heads / linear_key_heads);
-        for (0..linear_value_width) |dv| {
-            const row = recurrent[(head * linear_value_width + dv) * linear_key_width ..][0..linear_key_width];
-            var kv_mem: f32 = 0;
-            for (0..linear_key_width) |dk| {
-                row[dk] *= decay[head];
-                kv_mem += row[dk] * k[key_head * linear_key_width + dk];
+    if (runner.use_resident_weights) {
+        tf_qualcomm_gdn_step_f32(recurrent.ptr, q.ptr, k.ptr, v.ptr, &beta, &decay, y.ptr, linear_key_heads, linear_value_heads, linear_key_width, linear_value_width, runner.cpu_threads);
+        for (y) |*out| out.* = roundBF16(out.*);
+    } else {
+        for (0..linear_value_heads) |head| {
+            const key_head = head / (linear_value_heads / linear_key_heads);
+            for (0..linear_value_width) |dv| {
+                const row = recurrent[(head * linear_value_width + dv) * linear_key_width ..][0..linear_key_width];
+                var kv_mem: f32 = 0;
+                for (0..linear_key_width) |dk| {
+                    row[dk] *= decay[head];
+                    kv_mem += row[dk] * k[key_head * linear_key_width + dk];
+                }
+                const delta = (v[head * linear_value_width + dv] - kv_mem) * beta[head];
+                var out: f32 = 0;
+                for (0..linear_key_width) |dk| {
+                    row[dk] += k[key_head * linear_key_width + dk] * delta;
+                    out += row[dk] * q[key_head * linear_key_width + dk];
+                }
+                y[head * linear_value_width + dv] = roundBF16(out);
             }
-            const delta = (v[head * linear_value_width + dv] - kv_mem) * beta[head];
-            var out: f32 = 0;
-            for (0..linear_key_width) |dk| {
-                row[dk] += k[key_head * linear_key_width + dk] * delta;
-                out += row[dk] * q[key_head * linear_key_width + dk];
-            }
-            y[head * linear_value_width + dv] = roundBF16(out);
         }
     }
 
@@ -699,12 +1004,19 @@ fn linearAttentionBatch(runner: *Runner, decode: *DecodeState, layer: usize, inp
 
     const qkv = try a.alloc(f32, count * conv_channels);
     defer a.free(qkv);
-    try runner.project(try tensorName(&projection_buffer, "{s}.in_proj_qkv", .{base}), input, qkv);
-    for (qkv) |*x| x.* = roundBF16(roundF16(x.*));
-
     const z = try a.alloc(f32, count * linear_output_width);
     defer a.free(z);
-    try runner.project(try tensorName(&projection_buffer, "{s}.in_proj_z", .{base}), input, z);
+    var qkv_name_buffer: [256]u8 = undefined;
+    var z_name_buffer: [256]u8 = undefined;
+    const qkv_name = try tensorName(&qkv_name_buffer, "{s}.in_proj_qkv", .{base});
+    const z_name = try tensorName(&z_name_buffer, "{s}.in_proj_z", .{base});
+    if (runner.use_resident_weights) {
+        try runner.projectPairResident(qkv_name, z_name, input, qkv, z);
+    } else {
+        try runner.project(qkv_name, input, qkv);
+        try runner.project(z_name, input, z);
+    }
+    for (qkv) |*x| x.* = roundBF16(roundF16(x.*));
 
     const a_gate = try a.alloc(f32, count * linear_value_heads);
     defer a.free(a_gate);
@@ -714,8 +1026,8 @@ fn linearAttentionBatch(runner: *Runner, decode: *DecodeState, layer: usize, inp
     var b_name_buffer: [256]u8 = undefined;
     const b_name = try tensorName(&b_name_buffer, "{s}.in_proj_b.weight", .{base});
     for (0..count) |position| {
-        try dense(runner.file, a_name, input[position * hidden ..][0..hidden], a_gate[position * linear_value_heads ..][0..linear_value_heads]);
-        try dense(runner.file, b_name, input[position * hidden ..][0..hidden], b_gate[position * linear_value_heads ..][0..linear_value_heads]);
+        try dense(runner, a_name, input[position * hidden ..][0..hidden], a_gate[position * linear_value_heads ..][0..linear_value_heads]);
+        try dense(runner, b_name, input[position * hidden ..][0..hidden], b_gate[position * linear_value_heads ..][0..linear_value_heads]);
     }
 
     const conv_name = try tensorName(&projection_buffer, "{s}.conv1d.weight", .{base});
@@ -868,9 +1180,19 @@ fn fullAttention(runner: *Runner, decode: *DecodeState, layer: usize, position: 
     defer a.free(kraw);
     const vraw = try a.alloc(f32, kv_width);
     defer a.free(vraw);
-    try runner.project(try tensorName(&projection_buffer, "{s}.q_proj", .{base}), input, qraw);
-    try runner.project(try tensorName(&projection_buffer, "{s}.k_proj", .{base}), input, kraw);
-    try runner.project(try tensorName(&projection_buffer, "{s}.v_proj", .{base}), input, vraw);
+    var q_name_buffer: [256]u8 = undefined;
+    var k_name_buffer: [256]u8 = undefined;
+    var v_name_buffer: [256]u8 = undefined;
+    const q_name = try tensorName(&q_name_buffer, "{s}.q_proj", .{base});
+    const k_name = try tensorName(&k_name_buffer, "{s}.k_proj", .{base});
+    const v_name = try tensorName(&v_name_buffer, "{s}.v_proj", .{base});
+    if (runner.use_resident_weights) {
+        try runner.projectTripleResident(q_name, k_name, v_name, input, qraw, kraw, vraw);
+    } else {
+        try runner.project(q_name, input, qraw);
+        try runner.project(k_name, input, kraw);
+        try runner.project(v_name, input, vraw);
+    }
     for (qraw) |*x| x.* = roundF16(x.*);
     for (kraw) |*x| x.* = roundF16(x.*);
     for (vraw) |*x| x.* = roundF16(x.*);
@@ -945,9 +1267,19 @@ fn fullAttentionBatch(runner: *Runner, decode: *DecodeState, layer: usize, start
     defer a.free(kraw);
     const vraw = try a.alloc(f32, count * kv_width);
     defer a.free(vraw);
-    try runner.project(try tensorName(&projection_buffer, "{s}.q_proj", .{base}), input, qraw);
-    try runner.project(try tensorName(&projection_buffer, "{s}.k_proj", .{base}), input, kraw);
-    try runner.project(try tensorName(&projection_buffer, "{s}.v_proj", .{base}), input, vraw);
+    var q_name_buffer: [256]u8 = undefined;
+    var k_name_buffer: [256]u8 = undefined;
+    var v_name_buffer: [256]u8 = undefined;
+    const q_name = try tensorName(&q_name_buffer, "{s}.q_proj", .{base});
+    const k_name = try tensorName(&k_name_buffer, "{s}.k_proj", .{base});
+    const v_name = try tensorName(&v_name_buffer, "{s}.v_proj", .{base});
+    if (runner.use_resident_weights) {
+        try runner.projectTripleResident(q_name, k_name, v_name, input, qraw, kraw, vraw);
+    } else {
+        try runner.project(q_name, input, qraw);
+        try runner.project(k_name, input, kraw);
+        try runner.project(v_name, input, vraw);
+    }
     for (qraw) |*x| x.* = roundF16(x.*);
     for (kraw) |*x| x.* = roundF16(x.*);
     for (vraw) |*x| x.* = roundF16(x.*);
@@ -1031,17 +1363,23 @@ fn mlp(runner: *Runner, layer: usize, input: []const f32, output: []f32) !void {
     const a = runner.allocator;
     var base_buffer: [256]u8 = undefined;
     const base = try tensorName(&base_buffer, "{s}.layers.{d}.mlp", .{ prefix, layer });
-    var projection_buffer: [256]u8 = undefined;
+    var gate_name_buffer: [256]u8 = undefined;
+    var up_name_buffer: [256]u8 = undefined;
+    var down_name_buffer: [256]u8 = undefined;
+    const gate_name = try tensorName(&gate_name_buffer, "{s}.gate_proj", .{base});
+    const up_name = try tensorName(&up_name_buffer, "{s}.up_proj", .{base});
+    const down_name = try tensorName(&down_name_buffer, "{s}.down_proj", .{base});
+    if (runner.use_resident_weights) return runner.mlpResident(gate_name, up_name, down_name, input, output);
     const gate = try a.alloc(f32, intermediate);
     defer a.free(gate);
     const up = try a.alloc(f32, intermediate);
     defer a.free(up);
     const activated = try a.alloc(f32, intermediate);
     defer a.free(activated);
-    try runner.project(try tensorName(&projection_buffer, "{s}.gate_proj", .{base}), input, gate);
-    try runner.project(try tensorName(&projection_buffer, "{s}.up_proj", .{base}), input, up);
+    try runner.project(gate_name, input, gate);
+    try runner.project(up_name, input, up);
     for (activated, 0..) |*out, i| out.* = roundF16(silu(roundF16(gate[i])) * roundF16(up[i]));
-    try runner.project(try tensorName(&projection_buffer, "{s}.down_proj", .{base}), activated, output);
+    try runner.project(down_name, activated, output);
 }
 
 fn mlpBatch(runner: *Runner, layer: usize, input: []const f32, output: []f32) !void {
@@ -1051,17 +1389,23 @@ fn mlpBatch(runner: *Runner, layer: usize, input: []const f32, output: []f32) !v
     const a = runner.allocator;
     var base_buffer: [256]u8 = undefined;
     const base = try tensorName(&base_buffer, "{s}.layers.{d}.mlp", .{ prefix, layer });
-    var projection_buffer: [256]u8 = undefined;
+    var gate_name_buffer: [256]u8 = undefined;
+    var up_name_buffer: [256]u8 = undefined;
+    var down_name_buffer: [256]u8 = undefined;
+    const gate_name = try tensorName(&gate_name_buffer, "{s}.gate_proj", .{base});
+    const up_name = try tensorName(&up_name_buffer, "{s}.up_proj", .{base});
+    const down_name = try tensorName(&down_name_buffer, "{s}.down_proj", .{base});
+    if (runner.use_resident_weights) return runner.mlpResident(gate_name, up_name, down_name, input, output);
     const gate = try a.alloc(f32, count * intermediate);
     defer a.free(gate);
     const up = try a.alloc(f32, count * intermediate);
     defer a.free(up);
     const activated = try a.alloc(f32, count * intermediate);
     defer a.free(activated);
-    try runner.project(try tensorName(&projection_buffer, "{s}.gate_proj", .{base}), input, gate);
-    try runner.project(try tensorName(&projection_buffer, "{s}.up_proj", .{base}), input, up);
+    try runner.project(gate_name, input, gate);
+    try runner.project(up_name, input, up);
     for (activated, 0..) |*out, i| out.* = roundF16(silu(roundF16(gate[i])) * roundF16(up[i]));
-    try runner.project(try tensorName(&projection_buffer, "{s}.down_proj", .{base}), activated, output);
+    try runner.project(down_name, activated, output);
 }
 
 const Top = struct { id: usize, logit: f32 };
@@ -1081,13 +1425,41 @@ fn tiedHeadScalar(file: *const st.File, state: []const f32) ![5]Top {
     return top;
 }
 
-fn tiedHead(file: *const st.File, state: []const f32, cpu_threads: i32) ![5]Top {
-    const embedding = try require(file, prefix ++ ".embed_tokens.weight", .f16, &.{ vocab, hidden });
+fn tiedHead(runner: *Runner, state: []const f32, cpu_threads: i32) ![5]Top {
+    const embedding = try require(runner.file, prefix ++ ".embed_tokens.weight", .f16, &.{ vocab, hidden });
     const embedding_words: [*]const u16 = @ptrCast(@alignCast(embedding.bytes.ptr));
+    if (runner.use_resident_head) {
+        const all_logits = try runner.allocator.alloc(f32, vocab);
+        defer runner.allocator.free(all_logits);
+        var compute_ms: f64 = 0;
+        var uploaded: c_int = 0;
+        const weight_ptr: ?[*]const u16 = if (runner.resident_head_loaded) null else embedding_words;
+        const status = tf_qualcomm_backend_matmul_f16_resident_once(runner.backend, projections_per_position, hidden, vocab, 1, weight_ptr, state.ptr, all_logits.ptr, &compute_ms, &uploaded);
+        if (status == 0) {
+            runner.resident_head_compute_ms += compute_ms;
+            if (uploaded != 0) {
+                runner.resident_head_loaded = true;
+                runner.resident_head_uploads += 1;
+            } else {
+                runner.resident_head_hits += 1;
+            }
+            var top: [5]Top = @splat(.{ .id = 0, .logit = -std.math.inf(f32) });
+            for (all_logits, 0..) |logit, token| {
+                if (logit > top[4].logit) {
+                    top[4] = .{ .id = token, .logit = logit };
+                    var i: usize = 4;
+                    while (i > 0 and top[i].logit > top[i - 1].logit) : (i -= 1) std.mem.swap(Top, &top[i], &top[i - 1]);
+                }
+            }
+            return top;
+        }
+        runner.resident_head_loaded = false;
+        runner.resident_head_fallbacks += 1;
+    }
     var ids: [5]usize = undefined;
     var logits: [5]f32 = undefined;
     if (tf_qualcomm_tied_head_f16(embedding_words, state.ptr, vocab, hidden, cpu_threads, &ids, &logits) != 0) {
-        return tiedHeadScalar(file, state);
+        return tiedHeadScalar(runner.file, state);
     }
     var top: [5]Top = undefined;
     for (&top, ids, logits) |*candidate, id, logit| candidate.* = .{ .id = id, .logit = logit };
@@ -1109,8 +1481,8 @@ fn stateHash(state: []const f32) u64 {
 
 pub fn main(init: std.process.Init) !u8 {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len < 5 or args.len > 10) {
-        std.debug.print("usage: {s} cpu|htp MODEL_SAFETENSORS TOKEN_ID CPU_THREADS [DECODED_CACHE_DIR [MODEL_SHA256 [STEPS [PROMPT_SUFFIX_TOKEN_IDS [serve]]]]]\n", .{args[0]});
+    if (args.len < 5 or args.len > 11) {
+        std.debug.print("usage: {s} cpu|htp MODEL_SAFETENSORS TOKEN_ID CPU_THREADS [DECODED_CACHE_DIR [MODEL_SHA256 [STEPS [PROMPT_SUFFIX_TOKEN_IDS [serve|serve-resident [REQUESTS]]]]]]\n", .{args[0]});
         return 64;
     }
     if (!std.mem.eql(u8, args[1], "cpu") and !std.mem.eql(u8, args[1], "htp")) return error.InvalidBackend;
@@ -1118,11 +1490,13 @@ pub fn main(init: std.process.Init) !u8 {
     const threads = try std.fmt.parseInt(i32, args[4], 10);
     const steps = if (args.len >= 8) try std.fmt.parseInt(usize, args[7], 10) else 1;
     const suffix_count = if (args.len >= 9) std.mem.count(u8, args[8], ",") + 1 else 0;
-    const serve_mode = args.len == 10 and std.mem.eql(u8, args[9], "serve");
-    if (args.len == 10 and !serve_mode) return error.InvalidArgument;
+    const serve_mode = args.len >= 10 and (std.mem.eql(u8, args[9], "serve") or std.mem.eql(u8, args[9], "serve-resident"));
+    const resident_mode = args.len >= 10 and std.mem.eql(u8, args[9], "serve-resident");
+    const requests = if (args.len == 11) try std.fmt.parseInt(usize, args[10], 10) else 1;
+    if (args.len >= 10 and !serve_mode) return error.InvalidArgument;
     const prompt_len = 1 + suffix_count;
     const positions = prompt_len + steps - 1;
-    if (token >= vocab or threads <= 0 or steps == 0 or steps > 32 or prompt_len > 128) return error.InvalidArgument;
+    if (token >= vocab or threads <= 0 or steps == 0 or steps > 32 or prompt_len > 128 or requests == 0 or requests > 16 or (requests > 1 and !resident_mode)) return error.InvalidArgument;
 
     var file = try st.File.open(init.gpa, init.io, args[2]);
     defer file.close(init.io);
@@ -1136,138 +1510,143 @@ pub fn main(init: std.process.Init) !u8 {
         for (id) |c| if (!std.ascii.isHex(c)) return error.InvalidModelSha256;
     }
     if (cache_dir) |dir| try std.Io.Dir.cwd().createDirPath(init.io, dir);
-    var runner: Runner = .{ .allocator = init.gpa, .io = init.io, .file = &file, .backend = backend, .use_f16_weights = serve_mode, .cache_dir = cache_dir, .cache_model_id = cache_model_id };
-    const started = tf_qualcomm_monotonic_ms();
-    var decode = try DecodeState.init(init.gpa, positions);
-    defer decode.deinit(init.gpa);
+    var runner: Runner = .{ .allocator = init.gpa, .io = init.io, .file = &file, .backend = backend, .cpu_threads = @intCast(threads), .use_f16_weights = serve_mode, .use_resident_weights = resident_mode, .use_resident_head = resident_mode and requests > 1, .cache_dir = cache_dir, .cache_model_id = cache_model_id };
+    for (0..requests) |request_index| {
+        runner.resetMetrics();
+        const started = tf_qualcomm_monotonic_ms();
+        var decode = try DecodeState.init(init.gpa, positions);
 
-    const state = try init.gpa.alloc(f32, hidden);
-    defer init.gpa.free(state);
-    const normed = try init.gpa.alloc(f32, hidden);
-    defer init.gpa.free(normed);
-    const update = try init.gpa.alloc(f32, hidden);
-    defer init.gpa.free(update);
-    const sequence = try init.gpa.alloc(usize, positions + 1);
-    defer init.gpa.free(sequence);
-    sequence[0] = token;
-    if (args.len >= 9) {
-        var suffix = std.mem.splitScalar(u8, args[8], ',');
-        var i: usize = 1;
-        while (suffix.next()) |encoded| : (i += 1) {
-            const suffix_token = try std.fmt.parseInt(usize, encoded, 10);
-            if (suffix_token >= vocab) return error.InvalidArgument;
-            sequence[i] = suffix_token;
+        const state = try init.gpa.alloc(f32, hidden);
+        const normed = try init.gpa.alloc(f32, hidden);
+        const update = try init.gpa.alloc(f32, hidden);
+        const sequence = try init.gpa.alloc(usize, positions + 1);
+        sequence[0] = token;
+        if (args.len >= 9) {
+            var suffix = std.mem.splitScalar(u8, args[8], ',');
+            var i: usize = 1;
+            while (suffix.next()) |encoded| : (i += 1) {
+                const suffix_token = try std.fmt.parseInt(usize, encoded, 10);
+                if (suffix_token >= vocab) return error.InvalidArgument;
+                sequence[i] = suffix_token;
+            }
         }
-    }
-    var name_buffer: [256]u8 = undefined;
-    var total_head_ms: f64 = 0;
-    var skipped_heads: usize = 0;
-    var decode_start: usize = 0;
+        var name_buffer: [256]u8 = undefined;
+        var total_head_ms: f64 = 0;
+        var skipped_heads: usize = 0;
+        var decode_start: usize = 0;
+        const head_kind = if (runner.use_resident_head) "tied-f16-htp-resident" else "tied-f16-neon";
 
-    if (serve_mode and prompt_len > 1) {
-        const prefill_started = tf_qualcomm_monotonic_ms();
-        const projection_start = runner.projection_count;
-        const compute_start = runner.projection_ms;
-        const wall_start = runner.projection_wall_ms;
-        const prompt_states = try init.gpa.alloc(f32, prompt_len * hidden);
-        defer init.gpa.free(prompt_states);
-        const prompt_normed = try init.gpa.alloc(f32, prompt_len * hidden);
-        defer init.gpa.free(prompt_normed);
-        const prompt_update = try init.gpa.alloc(f32, prompt_len * hidden);
-        defer init.gpa.free(prompt_update);
-        for (0..prompt_len) |position| {
-            const row = prompt_states[position * hidden ..][0..hidden];
-            for (row, 0..) |*x, d| x.* = f16Value(embedding.bytes, sequence[position] * hidden + d);
-        }
-        for (0..layers) |layer| {
-            const input_norm = try tensorName(&name_buffer, "{s}.layers.{d}.input_layernorm.weight", .{ prefix, layer });
+        if (serve_mode and prompt_len > 1) {
+            const prefill_started = tf_qualcomm_monotonic_ms();
+            const projection_start = runner.projection_count;
+            const compute_start = runner.projection_ms;
+            const wall_start = runner.projection_wall_ms;
+            const prompt_states = try init.gpa.alloc(f32, prompt_len * hidden);
+            const prompt_normed = try init.gpa.alloc(f32, prompt_len * hidden);
+            const prompt_update = try init.gpa.alloc(f32, prompt_len * hidden);
             for (0..prompt_len) |position| {
-                try rmsNorm(&file, input_norm, prompt_states[position * hidden ..][0..hidden], prompt_normed[position * hidden ..][0..hidden], 1.0);
+                const row = prompt_states[position * hidden ..][0..hidden];
+                for (row, 0..) |*x, d| x.* = f16Value(embedding.bytes, sequence[position] * hidden + d);
             }
-            if ((layer + 1) % 4 == 0) {
-                try fullAttentionBatch(&runner, &decode, layer, 0, prompt_normed, prompt_update);
-            } else {
-                try linearAttentionBatch(&runner, &decode, layer, prompt_normed, prompt_update);
+            for (0..layers) |layer| {
+                const input_norm = try tensorName(&name_buffer, "{s}.layers.{d}.input_layernorm.weight", .{ prefix, layer });
+                for (0..prompt_len) |position| {
+                    try rmsNorm(&file, input_norm, prompt_states[position * hidden ..][0..hidden], prompt_normed[position * hidden ..][0..hidden], 1.0);
+                }
+                if ((layer + 1) % 4 == 0) {
+                    try fullAttentionBatch(&runner, &decode, layer, 0, prompt_normed, prompt_update);
+                } else {
+                    try linearAttentionBatch(&runner, &decode, layer, prompt_normed, prompt_update);
+                }
+                residualAdd(prompt_states, prompt_update);
+                const post_norm = try tensorName(&name_buffer, "{s}.layers.{d}.post_attention_layernorm.weight", .{ prefix, layer });
+                for (0..prompt_len) |position| {
+                    try rmsNorm(&file, post_norm, prompt_states[position * hidden ..][0..hidden], prompt_normed[position * hidden ..][0..hidden], 1.0);
+                }
+                try mlpBatch(&runner, layer, prompt_normed, prompt_update);
+                residualAdd(prompt_states, prompt_update);
+                std.debug.print("tensorfold prefill {s}: tokens {d}, layer {d}/{d}, projections {d}\n", .{ args[1], prompt_len, layer + 1, layers, runner.projection_count });
             }
-            residualAdd(prompt_states, prompt_update);
-            const post_norm = try tensorName(&name_buffer, "{s}.layers.{d}.post_attention_layernorm.weight", .{ prefix, layer });
-            for (0..prompt_len) |position| {
-                try rmsNorm(&file, post_norm, prompt_states[position * hidden ..][0..hidden], prompt_normed[position * hidden ..][0..hidden], 1.0);
-            }
-            try mlpBatch(&runner, layer, prompt_normed, prompt_update);
-            residualAdd(prompt_states, prompt_update);
-            std.debug.print("tensorfold prefill {s}: tokens {d}, layer {d}/{d}, projections {d}\n", .{ args[1], prompt_len, layer + 1, layers, runner.projection_count });
+
+            try rmsNorm(&file, prefix ++ ".norm.weight", prompt_states[(prompt_len - 1) * hidden ..][0..hidden], normed, 1.0);
+            const head_started = tf_qualcomm_monotonic_ms();
+            const top = try tiedHead(&runner, normed, threads);
+            const head_ms = tf_qualcomm_monotonic_ms() - head_started;
+            total_head_ms += head_ms;
+            skipped_heads = prompt_len - 1;
+            sequence[prompt_len] = top[0].id;
+            const prefill_elapsed = tf_qualcomm_monotonic_ms() - prefill_started;
+            std.debug.print(
+                "{{\"tensorfold\":\"qualcomm-exl3-prefill\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"prompt_tokens\":{d},\"batch\":{d},\"layers\":{d},\"projections\":{d},\"head\":\"{s}\",\"heads_skipped\":{d},\"next_token\":{d},\"top5\":[[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}]],\"state_f16_fnv1a\":\"{x}\",\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"head_ms\":{d:.3},\"elapsed_ms\":{d:.3},\"passed\":true}}\n",
+                .{ profile.name, args[1], prompt_len, prompt_len, layers, runner.projection_count - projection_start, head_kind, skipped_heads, top[0].id, top[0].id, top[0].logit, top[1].id, top[1].logit, top[2].id, top[2].logit, top[3].id, top[3].logit, top[4].id, top[4].logit, stateHash(normed), runner.projection_ms - compute_start, runner.projection_wall_ms - wall_start, head_ms, prefill_elapsed },
+            );
+            init.gpa.free(prompt_update);
+            init.gpa.free(prompt_normed);
+            init.gpa.free(prompt_states);
+            decode_start = prompt_len;
         }
 
-        try rmsNorm(&file, prefix ++ ".norm.weight", prompt_states[(prompt_len - 1) * hidden ..][0..hidden], normed, 1.0);
-        const head_started = tf_qualcomm_monotonic_ms();
-        const top = try tiedHead(&file, normed, threads);
-        const head_ms = tf_qualcomm_monotonic_ms() - head_started;
-        total_head_ms += head_ms;
-        skipped_heads = prompt_len - 1;
-        sequence[prompt_len] = top[0].id;
-        const prefill_elapsed = tf_qualcomm_monotonic_ms() - prefill_started;
-        std.debug.print(
-            "{{\"tensorfold\":\"qualcomm-exl3-prefill\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"prompt_tokens\":{d},\"batch\":{d},\"layers\":{d},\"projections\":{d},\"head\":\"tied-f16-neon-last-position\",\"heads_skipped\":{d},\"next_token\":{d},\"top5\":[[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}]],\"state_f16_fnv1a\":\"{x}\",\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"head_ms\":{d:.3},\"elapsed_ms\":{d:.3},\"passed\":true}}\n",
-            .{ profile.name, args[1], prompt_len, prompt_len, layers, runner.projection_count - projection_start, skipped_heads, top[0].id, top[0].id, top[0].logit, top[1].id, top[1].logit, top[2].id, top[2].logit, top[3].id, top[3].logit, top[4].id, top[4].logit, stateHash(normed), runner.projection_ms - compute_start, runner.projection_wall_ms - wall_start, head_ms, prefill_elapsed },
-        );
-        decode_start = prompt_len;
-    }
-
-    for (decode_start..positions) |position| {
-        const input_token = sequence[position];
-        const step_started = tf_qualcomm_monotonic_ms();
-        const projection_start = runner.projection_count;
-        const compute_start = runner.projection_ms;
-        const wall_start = runner.projection_wall_ms;
-        for (state, 0..) |*x, d| x.* = f16Value(embedding.bytes, input_token * hidden + d);
-        for (0..layers) |layer| {
-            const input_norm = try tensorName(&name_buffer, "{s}.layers.{d}.input_layernorm.weight", .{ prefix, layer });
-            try rmsNorm(&file, input_norm, state, normed, 1.0);
-            if ((layer + 1) % 4 == 0) {
-                try fullAttention(&runner, &decode, layer, position, normed, update);
-            } else {
-                try linearAttention(&runner, &decode, layer, normed, update);
+        for (decode_start..positions) |position| {
+            const input_token = sequence[position];
+            const step_started = tf_qualcomm_monotonic_ms();
+            const projection_start = runner.projection_count;
+            const compute_start = runner.projection_ms;
+            const wall_start = runner.projection_wall_ms;
+            for (state, 0..) |*x, d| x.* = f16Value(embedding.bytes, input_token * hidden + d);
+            runner.resident_slot_cursor = 0;
+            for (0..layers) |layer| {
+                const input_norm = try tensorName(&name_buffer, "{s}.layers.{d}.input_layernorm.weight", .{ prefix, layer });
+                try rmsNorm(&file, input_norm, state, normed, 1.0);
+                if ((layer + 1) % 4 == 0) {
+                    try fullAttention(&runner, &decode, layer, position, normed, update);
+                } else {
+                    try linearAttention(&runner, &decode, layer, normed, update);
+                }
+                residualAdd(state, update);
+                const post_norm = try tensorName(&name_buffer, "{s}.layers.{d}.post_attention_layernorm.weight", .{ prefix, layer });
+                try rmsNorm(&file, post_norm, state, normed, 1.0);
+                try mlp(&runner, layer, normed, update);
+                residualAdd(state, update);
+                std.debug.print("tensorfold forward {s}: position {d}, layer {d}/{d}, projections {d}\n", .{ args[1], position, layer + 1, layers, runner.projection_count });
             }
-            residualAdd(state, update);
-            const post_norm = try tensorName(&name_buffer, "{s}.layers.{d}.post_attention_layernorm.weight", .{ prefix, layer });
-            try rmsNorm(&file, post_norm, state, normed, 1.0);
-            try mlp(&runner, layer, normed, update);
-            residualAdd(state, update);
-            std.debug.print("tensorfold forward {s}: position {d}, layer {d}/{d}, projections {d}\n", .{ args[1], position, layer + 1, layers, runner.projection_count });
-        }
 
-        try rmsNorm(&file, prefix ++ ".norm.weight", state, normed, 1.0);
-        const forced_next = position + 1 < prompt_len;
-        if (forced_next and serve_mode) {
-            skipped_heads += 1;
+            try rmsNorm(&file, prefix ++ ".norm.weight", state, normed, 1.0);
+            const forced_next = position + 1 < prompt_len;
+            if (forced_next and serve_mode) {
+                skipped_heads += 1;
+                const step_elapsed = tf_qualcomm_monotonic_ms() - step_started;
+                std.debug.print(
+                    "{{\"tensorfold\":\"qualcomm-exl3-forward-step\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"input_token\":{d},\"position\":{d},\"forced_next\":true,\"layers\":{d},\"projections\":{d},\"head\":\"skipped-teacher-forced\",\"state_f16_fnv1a\":\"{x}\",\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"head_ms\":0.000,\"elapsed_ms\":{d:.3},\"passed\":true}}\n",
+                    .{ profile.name, args[1], input_token, position, layers, runner.projection_count - projection_start, stateHash(normed), runner.projection_ms - compute_start, runner.projection_wall_ms - wall_start, step_elapsed },
+                );
+                continue;
+            }
+            const head_started = tf_qualcomm_monotonic_ms();
+            const top = try tiedHead(&runner, normed, threads);
+            const head_ms = tf_qualcomm_monotonic_ms() - head_started;
+            total_head_ms += head_ms;
+            if (!forced_next) sequence[position + 1] = top[0].id;
             const step_elapsed = tf_qualcomm_monotonic_ms() - step_started;
             std.debug.print(
-                "{{\"tensorfold\":\"qualcomm-exl3-forward-step\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"input_token\":{d},\"position\":{d},\"forced_next\":true,\"layers\":{d},\"projections\":{d},\"head\":\"skipped-teacher-forced\",\"state_f16_fnv1a\":\"{x}\",\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"head_ms\":0.000,\"elapsed_ms\":{d:.3},\"passed\":true}}\n",
-                .{ profile.name, args[1], input_token, position, layers, runner.projection_count - projection_start, stateHash(normed), runner.projection_ms - compute_start, runner.projection_wall_ms - wall_start, step_elapsed },
+                "{{\"tensorfold\":\"qualcomm-exl3-forward-step\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"input_token\":{d},\"position\":{d},\"forced_next\":{},\"layers\":{d},\"projections\":{d},\"head\":\"{s}\",\"next_token\":{d},\"top5\":[[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}]],\"state_f16_fnv1a\":\"{x}\",\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"head_ms\":{d:.3},\"elapsed_ms\":{d:.3},\"passed\":true}}\n",
+                .{ profile.name, args[1], input_token, position, forced_next, layers, runner.projection_count - projection_start, head_kind, top[0].id, top[0].id, top[0].logit, top[1].id, top[1].logit, top[2].id, top[2].logit, top[3].id, top[3].logit, top[4].id, top[4].logit, stateHash(normed), runner.projection_ms - compute_start, runner.projection_wall_ms - wall_start, head_ms, step_elapsed },
             );
-            continue;
         }
-        const head_started = tf_qualcomm_monotonic_ms();
-        const top = try tiedHead(&file, normed, threads);
-        const head_ms = tf_qualcomm_monotonic_ms() - head_started;
-        total_head_ms += head_ms;
-        if (!forced_next) sequence[position + 1] = top[0].id;
-        const step_elapsed = tf_qualcomm_monotonic_ms() - step_started;
+        const elapsed = tf_qualcomm_monotonic_ms() - started;
+        std.debug.print("{{\"tensorfold\":\"qualcomm-exl3-generate\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"request_index\":{d},\"requests\":{d},\"checkpoint_tensors\":{d},\"prompt_tokens\":{d},\"generated_tokens\":{d},\"positions\":{d},\"tokens\":[", .{ profile.name, args[1], request_index, requests, file.names.count(), prompt_len, steps, positions });
+        for (sequence, 0..) |generated_token, i| {
+            if (i != 0) std.debug.print(",", .{});
+            std.debug.print("{d}", .{generated_token});
+        }
         std.debug.print(
-            "{{\"tensorfold\":\"qualcomm-exl3-forward-step\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"input_token\":{d},\"position\":{d},\"forced_next\":{},\"layers\":{d},\"projections\":{d},\"head\":\"tied-f16-neon\",\"next_token\":{d},\"top5\":[[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}]],\"state_f16_fnv1a\":\"{x}\",\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"head_ms\":{d:.3},\"elapsed_ms\":{d:.3},\"passed\":true}}\n",
-            .{ profile.name, args[1], input_token, position, forced_next, layers, runner.projection_count - projection_start, top[0].id, top[0].id, top[0].logit, top[1].id, top[1].logit, top[2].id, top[2].logit, top[3].id, top[3].logit, top[4].id, top[4].logit, stateHash(normed), runner.projection_ms - compute_start, runner.projection_wall_ms - wall_start, head_ms, step_elapsed },
+            "],\"projections\":{d},\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"weight_convert_ms\":{d:.3},\"head_ms\":{d:.3},\"heads_skipped\":{d},\"dequant_ms\":{d:.3},\"cache_hash_ms\":{d:.3},\"cache_read_ms\":{d:.3},\"cache_write_ms\":{d:.3},\"cache_hits\":{d},\"cache_trusted_hits\":{d},\"cache_misses\":{d},\"cache_aliases_created\":{d},\"cache_bytes_read\":{d},\"cache_bytes_written\":{d},\"f16_cache_hits\":{d},\"f16_cache_misses\":{d},\"f16_cache_bytes_read\":{d},\"f16_cache_bytes_written\":{d},\"resident_weight_uploads\":{d},\"resident_weight_hits\":{d},\"resident_weight_fallbacks\":{d},\"resident_weight_bytes_uploaded\":{d},\"resident_head_uploads\":{d},\"resident_head_hits\":{d},\"resident_head_fallbacks\":{d},\"resident_head_compute_ms\":{d:.3},\"elapsed_ms\":{d:.3},\"positions_per_second\":{d:.6},\"end_to_end_generated_tokens_per_second\":{d:.6},\"peak_rss_kib\":{d},\"passed\":true}}\n",
+            .{ runner.projection_count, runner.projection_ms, runner.projection_wall_ms, runner.weight_convert_ms, total_head_ms, skipped_heads, runner.dequant_ms, runner.cache_hash_ms, runner.cache_read_ms, runner.cache_write_ms, runner.cache_hits, runner.cache_trusted_hits, runner.cache_misses, runner.cache_aliases_created, runner.cache_bytes_read, runner.cache_bytes_written, runner.f16_cache_hits, runner.f16_cache_misses, runner.f16_cache_bytes_read, runner.f16_cache_bytes_written, runner.resident_weight_uploads, runner.resident_weight_hits, runner.resident_weight_fallbacks, runner.resident_weight_bytes_uploaded, runner.resident_head_uploads, runner.resident_head_hits, runner.resident_head_fallbacks, runner.resident_head_compute_ms, elapsed, @as(f64, @floatFromInt(positions)) * 1000.0 / elapsed, @as(f64, @floatFromInt(steps)) * 1000.0 / elapsed, tf_qualcomm_peak_rss_kib() },
         );
+        decode.deinit(init.gpa);
+        init.gpa.free(sequence);
+        init.gpa.free(update);
+        init.gpa.free(normed);
+        init.gpa.free(state);
     }
-    const elapsed = tf_qualcomm_monotonic_ms() - started;
-    std.debug.print("{{\"tensorfold\":\"qualcomm-exl3-generate\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"checkpoint_tensors\":{d},\"prompt_tokens\":{d},\"generated_tokens\":{d},\"positions\":{d},\"tokens\":[", .{ profile.name, args[1], file.names.count(), prompt_len, steps, positions });
-    for (sequence, 0..) |generated_token, i| {
-        if (i != 0) std.debug.print(",", .{});
-        std.debug.print("{d}", .{generated_token});
-    }
-    std.debug.print(
-        "],\"projections\":{d},\"matmul_compute_ms\":{d:.3},\"projection_wall_ms\":{d:.3},\"weight_convert_ms\":{d:.3},\"head_ms\":{d:.3},\"heads_skipped\":{d},\"dequant_ms\":{d:.3},\"cache_hash_ms\":{d:.3},\"cache_read_ms\":{d:.3},\"cache_write_ms\":{d:.3},\"cache_hits\":{d},\"cache_trusted_hits\":{d},\"cache_misses\":{d},\"cache_aliases_created\":{d},\"cache_bytes_read\":{d},\"cache_bytes_written\":{d},\"f16_cache_hits\":{d},\"f16_cache_misses\":{d},\"f16_cache_bytes_read\":{d},\"f16_cache_bytes_written\":{d},\"elapsed_ms\":{d:.3},\"positions_per_second\":{d:.6},\"end_to_end_generated_tokens_per_second\":{d:.6},\"peak_rss_kib\":{d},\"passed\":true}}\n",
-        .{ runner.projection_count, runner.projection_ms, runner.projection_wall_ms, runner.weight_convert_ms, total_head_ms, skipped_heads, runner.dequant_ms, runner.cache_hash_ms, runner.cache_read_ms, runner.cache_write_ms, runner.cache_hits, runner.cache_trusted_hits, runner.cache_misses, runner.cache_aliases_created, runner.cache_bytes_read, runner.cache_bytes_written, runner.f16_cache_hits, runner.f16_cache_misses, runner.f16_cache_bytes_read, runner.f16_cache_bytes_written, elapsed, @as(f64, @floatFromInt(positions)) * 1000.0 / elapsed, @as(f64, @floatFromInt(steps)) * 1000.0 / elapsed, tf_qualcomm_peak_rss_kib() },
-    );
     return 0;
 }
