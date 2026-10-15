@@ -213,3 +213,25 @@ the pinned upstream ExLlamaV3 implementation, using the checkpoint's
 duplicated quantized `lm_head`, independently returned the same ordered
 top-five IDs. Exact logit parity for that alternative head and multi-token
 state/cache parity remain required gates before generation benchmarking.
+
+## Matched llama.cpp control
+
+The control lane uses the same Snapdragon 8 Elite phone and the same
+`091b6a7` llama.cpp/Hexagon binary for CPU and HTP. Its model is the pinned
+Qwen3.5-2B Q4_0 GGUF from `unsloth/Qwen3.5-2B-GGUF`, revision
+`f6d5376be1edb4d416d56da11e5397a961aca8ae`, SHA-256
+`cd70221bebaee0503e0f6717e174250cd7825aa88438b3aabec9ad55731d9bb1`.
+
+Five-repetition `llama-bench` results with six CPU threads:
+
+| Workload | CPU | HTP | HTP / CPU |
+| --- | ---: | ---: | ---: |
+| prompt, 128 tokens | 319.53 tok/s | 1580.22 tok/s | 4.95x |
+| generation, 32 tokens | 40.14 tok/s | 34.13 tok/s | 0.85x |
+
+These controls show why prefill and decode must remain separate claims. HTP
+wins decisively on prompt matrix work, while its dispatch and boundary costs
+lose at batch-one generation. They also are not directly comparable to the
+current TensorFold wall time: llama.cpp uses a warmed Q4_0 runtime, while the
+TensorFold proof reconstructs EXL3 weights on demand for a single complete
+position-zero correctness pass.
