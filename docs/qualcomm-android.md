@@ -1,10 +1,14 @@
 # Qualcomm Android port
 
-Status: complete autoregressive correctness POC with a persistent decoded-weight
-cache. TensorFold executes Qwen3.5-2B and Qwen3.5-4B prompts across every layer,
-carries recurrent and KV state, and routes all EXL3 projections through Qualcomm
-HTP v79. It is not yet a serving runtime, a sustained-performance result, or a
-native packed-EXL3 HTP backend.
+Status: complete autoregressive correctness POC with a native packed-EXL3 HTP
+projection kernel. TensorFold executes Qwen3.5-2B and Qwen3.5-4B prompts across
+every layer, carries recurrent and KV state, and routes all 200 transformer
+projections per position through Qualcomm HTP v79. The new 4.00-bpw MCG path
+keeps trellis weights resident, performs both Hadamard transforms and scaling
+on the DSP, decodes with HVX directly into HMX tiles in VTCM, and never creates
+a full FP16 projection matrix. It is a working full-model POC, but its first
+implementation is slower than the resident-FP16 control and is not yet a
+sustained-performance result.
 
 The port targets 64-bit Android on Snapdragon, with Qualcomm FastRPC/HTP as the
 first accelerator path. It keeps TensorFold's EXL3/EXLR8 formats, model logic,
@@ -432,10 +436,154 @@ the maximum absolute top-five logit delta was 0.19604. Treat this as a measured
 throughput/quality tradeoff, not an exact-equivalence result.
 
 Projection calls still had a 1,572.544 ms combined warmed median, so direct
-packed-EXL3 execution on HVX/HMX remains the primary performance gate. Building
-that custom HTP operator requires the Qualcomm Hexagon SDK, which is not
-installed in the current Windows lab. Raw evidence is in
+packed-EXL3 execution on HVX/HMX remained the primary performance gate at that
+stage. The Qualcomm Hexagon toolchain was subsequently installed and used for
+the packed-kernel work below. Raw evidence for the activation experiment is in
 `recordings/20261015-134547-tensorfold-4b-fast-activations/`.
+
+## Native packed-EXL3 full kernel
+
+The first complete packed 4.00-bpw MCG path is now implemented as a private
+GGML Hexagon custom operator and connected to TensorFold's 4B runner through
+`serve-packed`. For every projection it performs the input `suh` scale and
+128-point Hadamard transform on the DSP, decodes packed trellis tiles with HVX,
+scatters each decoded tile directly into the HMX VTCM layout, executes the HMX
+matrix multiply, and performs the output Hadamard transform and `svh` scale on
+the DSP. Packed weights remain resident between requests. No full decoded FP16
+matrix is created, and the former decoded-weight cache is unused.
+
+The real first Qwen3.5-4B projection (K=2560, N=8192) passed against an
+independent reconstructed reference. At batch one, the first packed kernel
+measured 5.302 ms with maximum absolute error 0.000602; widening VTCM chunks
+and halving layout-scatter instructions reduced a tuned sample to 4.497 ms.
+The resident decoded-FP16 control measured 1.604 ms. At batch 15, tuned packed
+measured 9.978 ms versus 2.364 ms for the decoded-FP16 control. The direct
+packed path therefore passed correctness but did not pass the planned 2x speed
+gate.
+
+A matched two-request full-model run used the same 15-token prompt and eight
+generated-token workload as resident v3:
+
+| Packed 4B run | Wall time | Projection wall | Packed uploads | Result |
+| --- | ---: | ---: | ---: | --- |
+| tuned cold request | 12,304.011 ms | 9,998.006 ms | 1,786,388,480 bytes | passed |
+| tuned warm request | 10,951.066 ms | 8,839.265 ms | 0 bytes | passed |
+
+Both requests generated `248068,198,90700,8340,25,271,16,13`. The warm
+request made 1,600 resident packed-weight hits with zero uploads, cache I/O, or
+fallbacks and reached 0.731 generated tokens/s. Packed projection residency is
+about 1.786 GB rather than the prior 7.13 GB FP16 staging representation, a
+roughly 4x reduction. Peak process RSS was 3,088,988 KiB.
+
+This is a genuine full-kernel and full-model POC, not a tile-only demo. It is
+also currently 3.893x slower end to end than the 2,813.129 ms resident-v3 warm
+median and 16.441x slower than the existing 666.062 ms llama.cpp control. A
+phase trace of the representative batch-one projection attributes about
+3.63 ms of a 4.09 ms DSP operation to EXL3 decode/layout and only about 0.06 ms
+to HMX multiplication. The immediate performance work is therefore fused
+decode/direct batch-one accumulation, shared transforms for grouped q/k/v,
+qkv/z, and gate/up projections, and larger fused MLP/layer graphs.
+Raw evidence is in
+`recordings/20261015-170232-tensorfold-4b-packed-exl3-full-kernel/`.
+
+### Decode-dataflow follow-up
+
+A follow-up tested the CUDA/Metal ownership pattern more literally: each HVX
+worker kept FP32 accumulators live, decoded a 16x16 trellis tile, and consumed
+it immediately with paired-FP16 dot products instead of scattering it into an
+HMX tile. The path passed the projection oracle, including a maximum absolute
+error of 0.000355, but measured about 4.7-5.2 ms on the representative
+K=2560, N=8192 batch-one projection. It was slower than the staged HMX path
+and was removed from the default.
+
+This disconfirms a simple interpretation of the CUDA/Metal optimization.
+Those implementations fuse decode into a high-throughput matrix primitive;
+moving the multiply to HVX gives up HMX throughput. The current Qualcomm HMX
+interface consumes VTCM tiles rather than decoded HVX register fragments, so
+the useful next kernel needs one of two Qualcomm-specific designs:
+
+- decode into the HMX layout with contiguous vector stores and pipeline
+  double-buffered decode against HMX consumption; or
+- for batch-one decode, keep weights compressed and use a native low-bit HVX
+  dot-product representation with wider output ownership and activation reuse.
+
+Two smaller safe changes were retained: an HVX byte permutation replaced 32
+scalar byte swaps per trellis tile, and the invariant HMX scatter map moved out
+of each worker invocation. The projection oracle passed with the original
+0.000602 maximum error and measured 4.352 ms over 20 iterations. A subsequent
+full-model warm request reproduced the exact eight-token sequence in
+10,997.062 ms with 8,915.471 ms projection wall time, zero packed uploads, and
+zero fallbacks. That full-model result is within run-to-run variation of the
+10,951.066 ms tuned baseline, so it is not claimed as an end-to-end speedup.
+
+### Native Q8/Q4 execution and selective precision
+
+An exploratory serving path now reconstructs EXL3 weights once, transcodes
+them during resident upload, and executes Qualcomm's native Q8_0 or Q4_0
+matmul kernels. The source checkpoint remains EXL3, but these modes are lossy
+execution caches and must not be described as exact packed-EXL3 kernels.
+
+Q8_0 passed the representative projection tolerance with 0.016225 maximum
+absolute error and preserved the established eight generated IDs. Grouping
+common-input projections, fusing the complete MLP, and using a resettable
+scratch arena produced a 2,166.780 ms warm request. All-Q4_0 reached
+1,830.682 ms but changed one generated ID and failed the quality gate.
+
+A mixed path kept Q4_0 for almost all projections and Q8_0 for the
+full-attention output projections in layers 3 and 7. On the frozen
+15-token prompt it restored the exact eight-token sequence. A final clean
+validation measured 1,812.572 ms warm, including 799.968 ms projection wall
+time, 183.916 ms head time, and 147.153 ms resident GDN compute. This is 6.067x
+faster than the 10,997.062 ms exact packed result and 1.552x faster than the
+2,813.129 ms resident-FP16 v3 median, but still 2.721x slower than the matched 666.062 ms
+llama.cpp request. The layer selection is an ablation result for this prompt,
+not a general accuracy policy.
+
+The remaining gap is architectural: the runner still crosses the host/HTP
+boundary for roughly 120 small graphs per evaluated position. Because Q4
+projection graph time alone exceeds the complete llama.cpp request, the next
+performance gate is a resident full-layer or full-model graph that fuses
+normalization, attention/GDN, residuals, and MLP execution. Phone Linux kernel
+changes are not indicated by this evidence.
+
+### Two-phone fused-tail and FastRPC polling result
+
+The current 4B development lane adds a persistent HTP layer-tail graph. It
+fuses the attention output projection, residual, post-attention RMS norm, and
+the complete gate/up/down MLP tail while keeping the layer weights resident.
+The output head uses a Q4 full-vocabulary projection and, when the leading Q4
+margin is below 0.5, recomputes only the top five candidate rows from the
+original FP16 tied weights. On the frozen prompt this preserves the expected
+eight-token sequence while avoiding a second full Q8 vocabulary projection.
+
+Hexagon response polling (`GGML_HEXAGON_OPPOLL=1`) is also required for the
+best latency. The SM8750 FastRPC library logs every ordinary empty zero-timeout
+poll as an error, so the run wrapper temporarily sets the process-specific
+Android log tag to `S` and restores its prior value with an exit trap. This
+removed roughly 35,000 false log entries without changing inference math.
+
+The final controlled Phone B capture used one cold request followed by five
+warm requests. All requests generated
+`248068,198,90700,8340,25,271,16,13`.
+
+| Qwen3.5-4B, 15-token prompt + 8 generated tokens | Median | Range |
+| --- | ---: | ---: |
+| TensorFold EXL3-derived Q4/Q8 HTP, five warm requests | 808.881 ms | 807.754-816.145 ms |
+| unchanged llama.cpp Q4_0 HTP control, five requests | 691.314 ms | 678.769-700.110 ms |
+
+TensorFold is therefore 1.170x slower than the refreshed live control, down
+from 203.8x at the original 140.534 s 4B POC. Battery temperature was 28.8 C
+at the start and 28.7 C at the end of the final TensorFold capture; thermal services
+remained enabled and CPU governors were restored to `walt` afterward.
+
+Several tempting variants were rejected: forcing HVX for all matrix
+projections changed the frozen output and was slower; HVX-only GDN was slower;
+prime-core affinity and `nice -20` did not improve the median; and a generic
+GGML graph that fused GDN through the layer tail changed numerical semantics
+and the final token. The remaining gap requires fewer host/HTP boundaries with
+the existing BF16/F16 rounding and fast-activation behavior preserved, not a
+phone Linux kernel modification. Raw evidence is in
+`recordings/20261016-4b-two-phone-power/`.
 
 ## Matched llama.cpp control
 
@@ -458,3 +606,387 @@ lose at batch-one generation. They also are not directly comparable to the
 current TensorFold wall time: llama.cpp uses a warmed Q4_0 runtime, while the
 TensorFold proof reconstructs EXL3 weights on demand for a single complete
 position-zero correctness pass.
+
+## Native Qwen3.5 MTP direction
+
+The next decode path is native MTP speculative verification, not another phone
+Linux-kernel change. Qwen3.5-4B was trained with one MTP layer, but the EXL3
+target export used by the Qualcomm runner omitted all 15 `mtp.*` tensors. A
+verified BF16 sidecar now restores those tensors for development.
+
+An ExLlamaV3 oracle confirmed that the sidecar works with the exact local
+4.00-bpw target and preserves greedy output. On Tiny-IFEval sample 0, 128
+generated IDs matched plain output at fixed depths 1, 2 and 4. Depth 2 accepted
+63 of 130 offered draft positions and was the fastest drafted setting in that
+single ordered compatibility run. Treat the timing as directional only.
+
+The selected HTP Q4 projection measured 0.476693 ms for one row and 0.533294
+ms for three rows over 12 iterations. This near-flat row cost is the required
+hardware premise: a target verification window can process several proposed
+positions for much less than several independent batch-one passes. The full
+model must still prove the same property after attention, recurrent-state
+snapshots, vocabulary projections and submission overhead are included.
+
+The dedicated `qualcomm-qwen35-mtp-probe` build target additionally validates
+all 15 BF16 sidecar tensors and executes the real `mtp.fc.weight` (`5120 ->
+2560`) on HTP. On Phone B, resident Q8 measured 0.562135 ms at one row,
+0.526667 ms at three rows and 0.562027 ms at eight rows over 12 iterations;
+all cases passed the CPU-reference tolerance. The probe binary SHA-256 is
+`D0F907A783E0F57AD7562E8BC62C3C709D844AF8D6004AF6147BB3C56DDB5A05`.
+
+The same probe also covered every dense MTP matrix at one and three rows. All
+16 cases passed. Independently summed projection compute was 4.590437 ms for
+one row and 4.519461 ms for three rows, equivalent to 3.047x row throughput.
+This deliberately excludes norms, RoPE, attention, activation, target-head and
+graph composition overhead; it is a projection budget, not full MTP latency.
+
+`qualcomm-qwen35-mtp-forward-probe` composes the complete Qwen3.5 MTP layer
+and shared target vocabulary head. With a 22-row hidden-state fixture captured
+from the exact batched target path, all positions passed its HTP-Q8 versus
+CPU-BF16 numerical gate. The two paths agreed on every scored continuation
+proposal. The probe also supports real autoregressive chain depths: on the
+frozen 15+8 regression, depths 1, 2 and 4 produced identical CPU/HTP draft
+traces. Depth 2 required three target-verification rounds, accepted four of
+five prefix decisions, and computed six draft steps. Depth 4 did not reduce
+the round count and computed nine draft steps. This was the draft-forward
+oracle used before the integrated result below.
+
+The isolated target runner also supports `TENSORFOLD_VERIFY_INPUTS` with the
+fixed depth-2 shape (three target rows). Its resident bridge prebuilds prompt,
+decode, and verifier graphs that share each uploaded weight. On the frozen
+Phone B path, a correct two-proposal window plus bonus target token measured a
+108.446 ms warm median versus 256.917 ms for the same three serial positions,
+and all three final-state hashes matched. A real rejected MTP window selected
+the expected replacement token. Because the verifier advances recurrent/KV
+state through the whole window, the isolated POC now implements conservative
+rollback: copy 24 resident GDN states plus convolution history before the
+window, restore on rejection, and recompute only the committed prefix. Explicit
+GDN zeroing between requests keeps repeated prefill and commit hashes stable.
+The warm immediate-rejection path costs 200.294 ms median, including a 7.098 ms
+snapshot and an 81.020 ms restore/one-row commit. This favors high-acceptance
+depth-2 rounds and is a correctness baseline for a future device-side snapshot.
+
+Build it with the pinned Hexagon headers matching the deployed libraries:
+
+```sh
+zig build qualcomm-qwen35-mtp-probe -Dtarget=aarch64-linux-android \
+  -Doptimize=ReleaseSafe -Dandroid-libc=/path/to/android-libc-api36.txt \
+  -Dggml-include=/path/to/ggml-hexagon-091b6a7/ggml/include \
+  -Dggml-lib=/path/to/android/ggml/libs
+```
+
+### Integrated Qualcomm native-MTP result
+
+`TENSORFOLD_MTP_SIDECAR=/path/to/mtp.safetensors` now enables a single-process
+depth-two speculative loop in the 4B runner. The loop batches MTP prompt
+prefill, keeps its KV cache persistent, drafts two tokens, verifies the pending
+token plus both proposals in one target pass, restores GDN/convolution state on
+rejection, and repairs newly committed MTP KV rows with target-confirmed hidden
+states. Look-ahead tokens beyond the requested output count are omitted from
+the reported prefix.
+
+On the frozen 15-input/8-output regression, the final binary reproduced
+`248068,198,90700,8340,25,271,16,13` in all ten warm samples. Median request
+latency was 699.532 ms (690.606-712.026 ms), versus 807.645 ms
+(803.775-817.153 ms) for the protected plain TensorFold binary on the same
+Phone B. A query-only same-session refresh of unchanged Phone A llama.cpp was
+706.719 ms median (683.519-717.882 ms). This is a 13.39% improvement over plain
+TensorFold and a narrow 1.02% two-phone frozen-prompt win over llama.cpp; it is
+not the 2x target and not a general workload claim.
+
+Batched MTP prefill was the decisive implementation change: 15 serial MTP rows
+fell from about 58 ms and 120 dense calls to about 9 ms and eight batched calls.
+The complete frozen request makes 88 MTP projection calls.
+
+Three distinct equal-length prompts from the pinned MLPerf Mobile v6.0-derived
+Tiny-IFEval-33 corpus produced exact eight-token parity against protected plain
+TensorFold. The two warm speculative requests were slower
+(1321.651/1332.450 ms versus 1001.044/991.895 ms) because fixed depth two needed
+four rounds with more rejection. The current promotion boundary is therefore:
+
+1. frozen-prompt end-to-end POC: passed;
+2. public-corpus exactness: passed on the three-prompt equal-shape subset;
+3. public-corpus speedup: failed on that subset;
+4. next work: corpus-validated adaptive depth/rejection avoidance, device-side
+   recurrent checkpoints, and reusable variable-length batched prompt graphs.
+
+Use `TENSORFOLD_BENCH_QUIET=1` only to suppress per-row diagnostic JSON during
+timed captures; the final summary, token hash, timing, and pass flag remain.
+Evidence and exact hashes are in
+`recordings/20261016-153000-qwen35-4b-mtp-qualcomm-poc/RESULTS.md`.
+
+Evidence is in
+`recordings/20261016-153000-qwen35-4b-mtp-qualcomm-poc/` in the mobile lab.
+
+### Device-snapshot rollback and final POC
+
+The initial integrated numbers above are retained as development history. The
+final implementation removes the rejected-window target replay rather than
+trying to predict rejection with prompt-specific thresholds.
+
+For verification batches, `build_gdn_graph` requests K recurrent snapshots
+from `ggml_gated_delta_net` (K=2 or K=3). The backend keeps these snapshots in
+the verification result tensor in most-recent-first order. On a partial
+accept, `tf_qualcomm_backend_gdn_state_restore_snapshot` reads the selected
+snapshot and stages it directly back into the resident layer state. The target
+forward also saves each linear-attention layer's BF16-rounded convolution QKV
+rows. Rollback restores the pre-window convolution buffer and advances it only
+with accepted rows. Target hidden rows already computed by the verifier become
+the committed history; the 4B target layers are not replayed.
+
+Each layer must have a distinct host restore staging slice. Hexagon
+`ggml_backend_tensor_set` may retain the source until a subsequent graph
+submission, so reusing one scratch range across all 24 linear-attention layers
+caused a rare, timing-dependent state corruption. The unique-slice fix passed
+32/32 consecutive requests across two fresh processes, including 30/30 warm
+requests with token hash `491b129266d4d110`.
+
+The MTP cache uses deferred catch-up. At the next speculative round,
+target-confirmed rows not yet committed to the MTP cache and the current first
+proposal are submitted together through `runBatch`; only the second proposal
+uses `runStep`. This reduces the frozen request from 88 to 56 MTP dense
+projection calls.
+
+Final frozen 15+8 medians were:
+
+| Runtime | Device | Samples | Total | Decode/speculative phase |
+| --- | --- | ---: | ---: | ---: |
+| TensorFold native MTP, stress | Phone B | 30 warm | 629.224 ms | 447.470 ms |
+| TensorFold native MTP, cool adjacent | Phone B | 10 warm | 620.808 ms | 441.651 ms |
+| Protected plain, cool adjacent | Phone B | 10 warm | 816.257 ms | 627.376 ms |
+| Unchanged llama.cpp Q4_0 | Phone A | 10 warm | 715.788 ms | 482.573 ms |
+
+The cool adjacent pair ran protected plain first and final MTP second, and the
+final path was 23.94% lower latency. The larger 30-warm stress median is 12.09%
+lower than the query-only llama.cpp total on this frozen regression.
+It does not meet the half-control milestone of 357.894 ms. Decode/speculative
+phase comparisons are diagnostic because the runtimes expose different phase
+boundaries; total request latency is the primary cross-runtime result.
+
+All 13 selected MLPerf Mobile v6.0-derived Tiny-IFEval prompts, spanning input
+lengths 47, 54, 65, 74, 87, and 89, matched their retained eight-token hashes.
+Across the seven warm grouped samples, the speculative mean was 605.744 ms,
+29.65% below the original fixed-depth-two implementation and 16.59% below the
+fixed-depth-one ablation. Fixed depth two beat tested confidence gates after
+device snapshot rollback. This is derived-corpus validation, not an official
+MLPerf result.
+
+The final binary SHA-256 is
+`99EAECA94FB1C47046AB5E3CBF2C978A05E9EB97CA4342633FCF1C1C81E9A885`.
+The protected plain binary remains
+`6917588A7DE1B51464822628DCE095AD6EB7712DB7081B0EC2150B37CB740144`.
+Exact logs, scripts, aggregate JSON, and limitations are recorded in
+`recordings/20261016-153000-qwen35-4b-mtp-qualcomm-poc/`.
+
+### Short-batch HMX pipeline and sub-357 frozen POC
+
+The later experimental path lowers the HMX quant-weight decode/matmul pipeline
+selection threshold with `GGML_HEXAGON_HMX_PIPELINE_MIN_ROWS`. The upstream
+host planner previously enabled its double-buffered pipeline only above 32
+activation rows. Setting the threshold to four lets the native-MTP seven-row
+target verifier overlap weight decode/preparation with HMX work.
+
+On the frozen 15-input/8-output request, this was combined with MTP depth six,
+round-zero rank-two proposal selection, Q8 output projections through layer
+23, and fused persistent linear tails on layers 25, 26, 28, 29, and 30. The
+result was 353.9905 ms median over ten warm requests (345.971-364.031 ms), with
+10/10 warm hashes equal to `491b129266d4d110`. The retained Phone A llama.cpp
+median is 715.7875 ms, making the half-control threshold 357.89375 ms.
+
+The result has a 3.90325 ms margin and is thermally sensitive. A replay
+after sustained corpus testing measured 362.6485 ms while battery temperature
+rose from 35.3 C to 35.6 C. The aggressive path is therefore a frozen-prompt
+POC, not a general performance claim. The final executable separately passed
+all 13 retained Tiny-IFEval hashes using the conservative depth-two, all-Q8,
+rollback-capable gate. Four- and five-row MTP catch-up is split into 3+1 or 3+2
+resident calls so public rejection paths use only supported graph shapes.
+
+This work changes userspace model-runtime and HTP inference kernels only. It
+does not modify the Android/Linux kernel, boot image, firmware, or partitions.
+See `recordings/20261016-153000-qwen35-4b-mtp-qualcomm-poc/SUB357.md` for exact
+launch settings, hashes, raw logs, and limitations.
+
+## Phone-local product path
+
+The production path no longer needs a host Python tokenizer or HTTP shim.
+`tensorfold-qualcomm-openai` is an Android ARM64 Zig process that loads the
+Hugging Face `tokenizer.json`, owns the loopback OpenAI HTTP/SSE endpoint, and
+supervises one persistent Qualcomm engine child. It serves:
+
+- `/` for the installable local app: model management, multi-turn chat,
+  generation settings, a quick benchmark, Hugging Face pulls, and the bounded
+  Android-task console handoff;
+- `/v1/completions` and `/v1/chat/completions` for greedy streaming;
+- `/v1/tokenize` and `/v1/detokenize`;
+- `/v1/local/models` and `/v1/local/models/select` for discovery and hot swap;
+- `/v1/local/catalog` and `/v1/local/models/pull` for qualified public
+  Hugging Face checkpoints;
+- `/health`, `/metrics`, `/v1/models`, `/manifest.webmanifest`, and `/sw.js`;
+- `/v1/benchmark/manifest`, which reports `python_version: "none"`, the
+  Qualcomm backend, Android platform, tokenizer/config hashes when present,
+  and the detected HTP v79 execution target.
+
+The server serializes clients because one engine state is resident. A second
+client waits in the socket backlog. Closing a streaming client kills that
+request's worker and the next request starts a clean worker; it cannot inherit
+partially advanced recurrent state. The child also requests `SIGTERM` when its
+parent dies, so stopping the HTTP process does not orphan the model process.
+
+Model selection is transactional and does not restart the HTTP app. The server
+loads the next tokenizer, stops only the engine child, starts the matching
+2B/4B engine, writes `profile.conf` atomically, then releases the previous
+tokenizer and model paths. A failed start restores the old profile and worker.
+The verified 4B → 2B → 4B sequence kept one HTTP PID while changing the worker
+PID each time; a full launcher restart then restored the selected 2B profile.
+
+The app keeps chat history in the page and sends it through the native chat
+template. System prompt, output token limit, and thinking are UI controls. Its
+quick benchmark runs one warm-up plus three 64-token code/chat repeats and
+reports client delivery rate, TTFT, and completion count; it is deliberately
+labelled as a diagnostic rather than community-v2.
+
+This section describes the privileged HTP development installation under
+`/data/local/tmp`. It is not the distributable Android APK. TensorFold Mobile
+1.1 instead packages a vendor-independent CPU/Vulkan engine, selects the CPU
+path that passed the retained token gate, visibly disables the mismatching
+Vulkan candidate, keeps models and caches in app-private storage, authenticates
+every loopback route, and requires no root or Termux. See
+[TensorFold for Android](android-app.md) for the public architecture, model
+sizes, build, security boundaries, and Pixel gate.
+
+The Hugging Face catalog is an allowlist of checkpoint IDs, expected sizes and
+SHA-256 values already qualified for this phone. It compares download size
+with free storage, requires the decoded cache for that exact checkpoint, uses
+HTTPS-only `curl --continue-at -`, verifies the final model hash, and exposes
+only then makes the model loadable. An interrupted README download was resumed
+from a 100-byte partial and reproduced SHA-256
+`b46d637ccd03d0496f4e147bb35e85cf70ae45b35c29c8ea9121bddf93cbe445`.
+Arbitrary repository IDs are refused rather than downloading an unqualified
+architecture or a checkpoint for which the phone has no decoded cache.
+
+Android task execution remains in the installed PwnHarness package
+`com.phoneproject.console`, now version 0.7.0/code 8. Its default visible
+provider is **TensorFold Local**: the APK reads health and active profile,
+switches the fixed 2B/4B models, streams direct chat, and routes bounded
+Harness role decisions through TensorFold SSE. The provider obtains exact
+prompt counts from `/v1/tokenize`, admits 512 input plus 128 output tokens,
+renders at most the phase-bounded tool schemas into Qwen3.5 tool XML, and
+parses calls back into the broker contract. Target prefill uses fixed 128-row
+chunks and MTP prefill fixed seven-row chunks for prompts above the community
+benchmark sizes.
+
+PwnHarness retains scoped typed Workers, exact approval gates, execution
+evidence, and the global STOP control. Model startup is allowed while STOP is
+latched because it performs no action; every Harness decision/action still
+checks STOP. The controlled `tensorfold-provider-smoke` scope exposed only
+`finish`, produced `TensorFold integration safe.`, stored one hash-chained
+successful `finish`, generated no target traffic, and left STOP present.
+TensorFold intentionally exposes no raw taps, shell commands, Accessibility
+privileges, or unrestricted device automation.
+
+Build the engine and control plane:
+
+```sh
+zig build qualcomm-exl3-forward-4b -Dtarget=aarch64-linux-android \
+  -Doptimize=fast -Dandroid-libc=/path/to/android-libc-api36.txt \
+  -Dggml-include=/path/to/ggml/include -Dggml-lib=/path/to/android/ggml/libs
+zig build qualcomm-exl3-forward -Dtarget=aarch64-linux-android \
+  -Doptimize=fast -Dandroid-libc=/path/to/android-libc-api36.txt \
+  -Dggml-include=/path/to/ggml/include -Dggml-lib=/path/to/android/ggml/libs
+zig build qualcomm-openai -Dtarget=aarch64-linux-android \
+  -Dandroid-libc=/path/to/android-libc-api36.txt
+```
+
+From the Windows development machine, `tools/install_tensorfold_phone.ps1`
+pushes those three binaries without replacing either protected POC binary,
+copies the admitted configs, verifies the protected hashes, installs the
+on-device launcher and a Termux:Widget shortcut, and leaves the service
+stopped unless `-Start` is given.
+
+On the phone:
+
+```sh
+/data/local/tmp/exl3-full-power/tensorfold models
+/data/local/tmp/exl3-full-power/tensorfold use \
+  /data/local/tmp/tensorfold-models/Qwen3.5-4B-exl3-4.00bpw
+/data/local/tmp/exl3-full-power/tensorfold start-ui
+/data/local/tmp/exl3-full-power/tensorfold status
+/data/local/tmp/exl3-full-power/tensorfold stop
+```
+
+`tensorfold doctor` re-runs model admission, file checks, and the two protected
+binary hashes. `tensorfold logs` shows the current server log; `restart` stops
+only the recorded server PID and starts the selected profile. Re-running the
+installer is the recovery path for a missing or mismatched product binary; it
+does not overwrite the protected POCs. The qualified product SHA-256 values
+are `5ba65c1923a6953bf3dcbbbfb12abb832067d10f7a1ad5db3b70463d1e430a03`
+for the native HTTP/tokenizer,
+`3c34ed7fd26b5070764de1c1751f11d2a5b023eac4f6dda3f9018de80f222d53`
+for 4B, and
+`7224edc49a0563b4a299470272bd84e1effbcb2346abac5ea7a36fc2042a3627`
+for 2B.
+
+`start-ui` opens `http://127.0.0.1:8082/`. `start` uses the thermally safer
+`low_balanced` HTP profile and the 0.125 near-tie guard. `benchmark-start`
+waits for at most 39.5 C, selects `burst`, and disables the guard for the
+standard code/chat fixtures whose retained serial hashes are checked after the
+run. The HTTP server refuses a new generation at 43 C; tokenize, health,
+metrics, model discovery, and stop remain available while the device cools.
+
+Model admission reads `config.json`; it does not guess from a directory name.
+It currently accepts EXL3 Qwen3.5 text geometries for 2B and 4B, selects the
+matching compiled engine, and gives named errors for a missing field, another
+architecture, another quantization method, an unsupported Qwen geometry, or a
+profile/engine mismatch. The 4B profile uses its qualified MTP sidecar. The 2B
+profile has no qualified sidecar and therefore uses the persistent serial
+worker. A new geometry needs a compiled profile and a device qualification
+before admission is extended.
+
+The current exactness gate compares the drafted target with a fresh serial
+target on 13 selected Tiny-IFEval prompts plus 16 deterministic randomized
+prompts: 29/29 eight-token hashes matched over 22 prompt lengths. A four-shape
+activation graph cache was forced through eviction, and rejection paths
+covered accepted prefixes of zero, one, and two. Near-tie target rows below a
+0.125 logit margin restart from the saved prompt boundary and finish serially;
+this prevents batch-shape low-bit noise from changing a greedy token.
+
+The native tokenizer gate covered 511 text/Unicode cases, 201 detokenizations,
+and four chat templates with zero mismatches against the already-qualified
+Qwen3.5 reference. The native HTTP gate completed both completion and chat
+streams, exposed manifest/health/metrics, preserved concurrent request order,
+cancelled a disconnected request, restarted the worker, completed the queued
+request, and left no process running.
+
+
+The 30-minute production qualification used `low_balanced`, paused requests at
+42 C, and resumed at 39.5 C. It completed 122 alternating 64-token requests in
+1807.172 s, with 843.544 s active (46.68% duty cycle), 39.2-42.9 C battery
+temperature, and resident RSS of 1,764,768-1,764,904 KiB after warm-up. Code
+and chat hashes were stable, and target/MTP weights had no uploads after the
+two warm-up requests. `burst`, `sustained_high_performance`, and `balanced`
+continuous-load trials reached the 45 C safety cutoff in 7.6-8.6 minutes, so
+none is the unattended serving default.
+
+The no-Python native community-v2 run used 256 tokens, temperature zero, and
+five measured repeats after warm-up. Its code/chat SHA-256 values matched the
+retained serial target:
+
+| Workload | Phone B TensorFold | Phone A llama.cpp | TensorFold difference | TensorFold TTFT | llama.cpp TTFT |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Code | 17.88 tok/s | 11.95 tok/s | +49.64% | 0.045 s | 0.170 s |
+| Chat | 13.27 tok/s | 12.00 tok/s | +10.64% | 0.043 s | 0.182 s |
+
+Both runtimes completed 5/5 code and 5/5 chat attempts. The TensorFold receipt
+is `community-v2-tf-phoneB-native-fast.json`, run
+`9d0fd1cb-b8c3-471f-8922-a5f6f2bfa9e1`. The retained Phone A control is run
+`340b721f-eb31-4095-ba61-86565c5edac4`. Attached Android receipts remain
+unranked until the receiver accepts Qualcomm/Android manifest facts.
+
+The additional Qwen3.5-2B EXL3 8-bpw checkpoint was admitted by metadata,
+selected through the same launcher, and served through the native HTTP path
+without a drafter. Its first eight-token request reported `drafts: false`,
+`mtp_depth: 0`, zero MTP uploads, SHA-256
+`e3f3ff301590bf0bcc20d55d2503cd62b1369e7f9454537331842d11dc3e8032`,
+and 16.18 server tokens/s after its cold prefill. Synthetic Llama, GPTQ, and
+unsupported-Qwen configs were refused with `UnsupportedArchitecture`,
+`UnsupportedQuantization`, and `UnsupportedQwenGeometry`, each with exit 65.

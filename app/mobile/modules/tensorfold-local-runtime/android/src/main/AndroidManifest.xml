@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.INTERNET" />
+  <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="false" />
+  <application android:networkSecurityConfig="@xml/tensorfold_network_security_config" android:extractNativeLibs="true">
+    <uses-native-library android:name="libvulkan.so" android:required="false" />
+  </application>
+</manifest>

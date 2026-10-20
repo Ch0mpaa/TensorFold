@@ -3,7 +3,7 @@
     "name": "TensorFold",
     "slug": "tensorfold-mobile",
     "scheme": "tensorfold-mobile",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -19,6 +19,7 @@
     },
     "android": {
       "package": "dev.tensorfold.mobile",
+      "versionCode": 2,
       "blockedPermissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.READ_EXTERNAL_STORAGE",
@@ -58,6 +59,19 @@
           "backgroundColor": "#fafafa",
           "dark": {
             "backgroundColor": "#181818"
+          }
+        }
+      ],
+      "./plugins/with-optional-camera",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 33,
+            "buildArchs": [
+              "arm64-v8a"
+            ],
+            "useLegacyPackaging": true
           }
         }
       ]

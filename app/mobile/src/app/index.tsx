@@ -1,6 +1,6 @@
-import { ActivityIndicator, FlatList, Pressable, RefreshControl, View } from 'react-native'
+import { ActivityIndicator, FlatList, Platform, Pressable, RefreshControl, View } from 'react-native'
 import { useState } from 'react'
-import { router } from 'expo-router'
+import { Redirect, router } from 'expo-router'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Pairing } from '../components/Pairing'
 import { Body, Brand, Button, Heading, Notice, layout, useColors } from '../components/ui'
@@ -10,13 +10,13 @@ import { mobileThreadState } from '../lib/client'
 export default function Workspace() {
   const c = useColors(); const session = useSession(); const [filter, setFilter] = useState<'task' | 'chat'>('task')
   if (!session.ready) return <SafeAreaView style={[layout.page, { backgroundColor: c.bg, alignItems: 'center', justifyContent: 'center' }]}><ActivityIndicator color={c.ink} /><Body muted>Restoring your connection</Body></SafeAreaView>
-  if (!session.session) return <Pairing />
+  if (!session.session) return Platform.OS === 'android' ? <Redirect href="/local" /> : <Pairing />
   const host = session.host; const snapshot = host?.snapshot; const engine = host?.status?.engine
   const threads = (snapshot?.threads ?? []).filter((thread) => thread.kind === filter).sort((a, b) => Number(snapshot!.activeThreadIds.includes(b.id)) - Number(snapshot!.activeThreadIds.includes(a.id)) || b.updatedAt - a.updatedAt)
   const running = snapshot?.activeThreadIds.length ?? 0
   const rate = engine?.state === 'ready' && engine.performance?.model === engine.model ? engine.performance.decodeTokensPerSecond : null
   return <SafeAreaView style={[layout.page, { backgroundColor: c.bg }]}><FlatList data={threads} keyExtractor={(thread) => thread.id} contentContainerStyle={[layout.content, { paddingBottom: 32 }]} refreshControl={<RefreshControl refreshing={session.syncing} onRefresh={() => void session.refresh()} tintColor={c.ink} />} ListHeaderComponent={<View style={{ gap: 22, marginBottom: 14 }}>
-    <View style={layout.row}><Brand /><Button secondary onPress={() => router.push('/host')}>Host</Button></View>
+    <View style={layout.row}><Brand /><View style={{ flexDirection: 'row', gap: 8 }}><Button secondary onPress={() => router.push('/local')}>On phone</Button><Button secondary onPress={() => router.push('/host')}>Host</Button></View></View>
     <View style={{ gap: 6 }}><Heading>{snapshot?.serverName || 'Your workspace'}</Heading><Body muted>{session.error ? 'Connection interrupted; showing the last workspace snapshot.' : snapshot ? `${running} ${running === 1 ? 'run' : 'runs'} active on your Mac` : 'Connecting to TensorFold'}</Body></View>
     {session.error && <View style={{ gap: 8 }}><Notice error>{session.error}</Notice><Button secondary onPress={() => void session.refresh()} busy={session.syncing}>Reconnect</Button></View>}
     <View style={[layout.card, { backgroundColor: c.card, borderColor: c.line }]}><View style={layout.row}><Heading small>Local model</Heading><Body muted>{engine?.state === 'ready' ? 'Ready' : engine?.state === 'starting' ? 'Loading' : engine?.state === 'failed' ? 'Needs attention' : engine ? 'Stopped' : 'Status unavailable'}</Body></View><Body>{engine?.model || 'Load a model in TensorFold on your Mac'}</Body>{engine?.hardware?.chip && <Body muted>{engine.hardware.chip}</Body>}{rate != null && <Body muted>Last completed request {rate.toFixed(1)} tokens/s</Body>}<Body muted>The phone controls your workspace; inference stays on the host.</Body></View>

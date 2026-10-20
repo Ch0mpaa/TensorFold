@@ -18,8 +18,10 @@
   },
   "dependencies": {
     "@expo/metro-runtime": "~55.0.12",
+    "braces": "file:./vendor/braces",
     "decode-uri-component": "file:./vendor/decode-uri-component",
     "expo": "~55.0.31",
+    "expo-build-properties": "~55.0.18",
     "expo-camera": "~55.0.23",
     "expo-constants": "~55.0.17",
     "expo-font": "~55.0.8",
@@ -29,14 +31,13 @@
     "expo-splash-screen": "~55.0.25",
     "expo-status-bar": "~55.0.6",
     "expo-system-ui": "~55.0.22",
+    "node-forge": "file:./vendor/node-forge",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-native": "0.83.10",
     "react-native-safe-area-context": "~5.6.2",
     "react-native-screens": "~4.23.0",
     "react-native-web": "^0.21.0",
-    "braces": "file:./vendor/braces",
-    "node-forge": "file:./vendor/node-forge",
     "sprintf-js": "file:./vendor/sprintf-js"
   },
   "devDependencies": {

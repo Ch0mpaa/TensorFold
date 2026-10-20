@@ -154,7 +154,7 @@ pub fn build(b: *std.Build) void {
     switch (target.result.os.tag) {
         .macos => metalTargets(b, target, optimize, draft_ids, build_options, test_step),
         .linux => if (target.result.abi == .android)
-            qualcommTargets(b, target, optimize)
+            qualcommTargets(b, target, optimize, build_options)
         else
             cuda_build.targets(b, target, optimize, draft_ids, build_options),
         else => {},
@@ -197,10 +197,15 @@ pub fn build(b: *std.Build) void {
 /// The first Android/Qualcomm bring-up target. Keep it independent of libc and
 /// vendor SDK libraries so it proves Zig code generation and on-device launch
 /// before the FastRPC/HTP boundary is introduced.
-fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) void {
+fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, build_options: *std.Build.Step.Options) void {
     const android_libc = b.option([]const u8, "android-libc", "Zig libc configuration for the Android NDK");
     const ggml_include = b.option([]const u8, "ggml-include", "Path containing ggml.h and backend headers");
     const ggml_lib = b.option([]const u8, "ggml-lib", "Path containing Android GGML backend libraries");
+    const ggml_vulkan_lib = b.option([]const u8, "ggml-vulkan-lib", "Path containing the Android GGML Vulkan backend library");
+    const bridge_c_flags: []const []const u8 = if (ggml_vulkan_lib != null)
+        &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-march=armv8.2-a+fp16", "-DTF_GGML_VULKAN=1", "-DTF_GGML_VULKAN_ONLY=1" }
+    else
+        &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-march=armv8.2-a+fp16" };
     const smoke = b.addExecutable(.{
         .name = "tensorfold-qualcomm-smoke",
         .root_module = b.createModule(.{
@@ -349,6 +354,70 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     const exl3_model_probe_step = b.step("qualcomm-exl3-model-probe", "Build the Android full-checkpoint EXL3 projection probe");
     exl3_model_probe_step.dependOn(&b.addInstallArtifact(exl3_model_probe, .{}).step);
 
+    const qwen35_mtp_probe_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/qwen35_mtp_probe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    qwen35_mtp_probe_module.addCSourceFile(.{
+        .file = b.path("zig/src/qualcomm/ggml_bridge.c"),
+        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror" },
+    });
+    qwen35_mtp_probe_module.addImport("safetensors", b.createModule(.{
+        .root_source_file = b.path("zig/src/core/safetensors.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    if (ggml_include) |include_path|
+        qwen35_mtp_probe_module.addIncludePath(.{ .cwd_relative = include_path });
+    if (ggml_lib) |lib_path| {
+        qwen35_mtp_probe_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-base.so" }) });
+        qwen35_mtp_probe_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-cpu.so" }) });
+        qwen35_mtp_probe_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-hexagon.so" }) });
+    }
+    const qwen35_mtp_probe = b.addExecutable(.{
+        .name = "tensorfold-qualcomm-qwen35-mtp-probe",
+        .linkage = .dynamic,
+        .root_module = qwen35_mtp_probe_module,
+    });
+    if (android_libc) |libc_file|
+        qwen35_mtp_probe.setLibCFile(.{ .cwd_relative = libc_file });
+    const qwen35_mtp_probe_step = b.step("qualcomm-qwen35-mtp-probe", "Build the Android Qwen3.5 native-MTP projection probe");
+    qwen35_mtp_probe_step.dependOn(&b.addInstallArtifact(qwen35_mtp_probe, .{}).step);
+
+    const qwen35_mtp_forward_probe_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/qwen35_mtp_forward_probe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    qwen35_mtp_forward_probe_module.addCSourceFile(.{
+        .file = b.path("zig/src/qualcomm/ggml_bridge.c"),
+        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-march=armv8.2-a+fp16" },
+    });
+    qwen35_mtp_forward_probe_module.addImport("safetensors", b.createModule(.{
+        .root_source_file = b.path("zig/src/core/safetensors.zig"),
+        .target = target,
+        .optimize = optimize,
+    }));
+    if (ggml_include) |include_path|
+        qwen35_mtp_forward_probe_module.addIncludePath(.{ .cwd_relative = include_path });
+    if (ggml_lib) |lib_path| {
+        qwen35_mtp_forward_probe_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-base.so" }) });
+        qwen35_mtp_forward_probe_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-cpu.so" }) });
+        qwen35_mtp_forward_probe_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-hexagon.so" }) });
+    }
+    const qwen35_mtp_forward_probe = b.addExecutable(.{
+        .name = "tensorfold-qualcomm-qwen35-mtp-forward-probe",
+        .linkage = .dynamic,
+        .root_module = qwen35_mtp_forward_probe_module,
+    });
+    if (android_libc) |libc_file|
+        qwen35_mtp_forward_probe.setLibCFile(.{ .cwd_relative = libc_file });
+    const qwen35_mtp_forward_probe_step = b.step("qualcomm-qwen35-mtp-forward-probe", "Build the Android complete Qwen3.5 MTP forward probe");
+    qwen35_mtp_forward_probe_step.dependOn(&b.addInstallArtifact(qwen35_mtp_forward_probe, .{}).step);
+
     const exl3_profile_2b = b.addOptions();
     exl3_profile_2b.addOption([]const u8, "name", "qwen3.5-2b");
     exl3_profile_2b.addOption(usize, "hidden", 2048);
@@ -372,7 +441,7 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     exl3_forward_module.addCSourceFile(.{
         .file = b.path("zig/src/qualcomm/ggml_bridge.c"),
-        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-march=armv8.2-a+fp16" },
+        .flags = bridge_c_flags,
     });
     exl3_forward_module.addImport("exl3_format", b.createModule(.{
         .root_source_file = b.path("zig/src/core/exl3_format.zig"),
@@ -390,8 +459,11 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     if (ggml_lib) |lib_path| {
         exl3_forward_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-base.so" }) });
         exl3_forward_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-cpu.so" }) });
-        exl3_forward_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-hexagon.so" }) });
+        if (ggml_vulkan_lib == null)
+            exl3_forward_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-hexagon.so" }) });
     }
+    if (ggml_vulkan_lib) |lib_path|
+        exl3_forward_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-vulkan.so" }) });
     const exl3_forward = b.addExecutable(.{
         .name = "tensorfold-qualcomm-exl3-forward",
         .linkage = .dynamic,
@@ -425,7 +497,7 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     });
     exl3_forward_4b_module.addCSourceFile(.{
         .file = b.path("zig/src/qualcomm/ggml_bridge.c"),
-        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-march=armv8.2-a+fp16" },
+        .flags = bridge_c_flags,
     });
     exl3_forward_4b_module.addImport("exl3_format", b.createModule(.{
         .root_source_file = b.path("zig/src/core/exl3_format.zig"),
@@ -443,8 +515,11 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     if (ggml_lib) |lib_path| {
         exl3_forward_4b_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-base.so" }) });
         exl3_forward_4b_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-cpu.so" }) });
-        exl3_forward_4b_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-hexagon.so" }) });
+        if (ggml_vulkan_lib == null)
+            exl3_forward_4b_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-hexagon.so" }) });
     }
+    if (ggml_vulkan_lib) |lib_path|
+        exl3_forward_4b_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-vulkan.so" }) });
     const exl3_forward_4b = b.addExecutable(.{
         .name = "tensorfold-qualcomm-exl3-forward-4b",
         .linkage = .dynamic,
@@ -454,6 +529,95 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         exl3_forward_4b.setLibCFile(.{ .cwd_relative = libc_file });
     const exl3_forward_4b_step = b.step("qualcomm-exl3-forward-4b", "Build the Android autoregressive Qwen3.5-4B EXL3 forward path");
     exl3_forward_4b_step.dependOn(&b.addInstallArtifact(exl3_forward_4b, .{}).step);
+
+    const qualcomm_tokenizer = b.createModule(.{
+        .root_source_file = b.path("zig/src/core/tokenizer/tokenizer.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+    });
+    const qualcomm_http_support = b.createModule(.{
+        .root_source_file = b.path("zig/src/server/qualcomm_http_support.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+    });
+    const qualcomm_model_admission = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/model_admission.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+    });
+    const qualcomm_model_registry = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/model_registry.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+        .imports = &.{.{ .name = "model_admission", .module = qualcomm_model_admission }},
+    });
+    const qualcomm_hf_catalog = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/hf_catalog.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "model_admission", .module = qualcomm_model_admission },
+            .{ .name = "model_registry", .module = qualcomm_model_registry },
+        },
+    });
+    const qualcomm_responses = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/openai_responses.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+        .imports = &.{.{ .name = "http_support", .module = qualcomm_http_support }},
+    });
+    const qualcomm_request = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/openai_request.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "tokenizer", .module = qualcomm_tokenizer },
+            .{ .name = "responses", .module = qualcomm_responses },
+        },
+    });
+    const qualcomm_manifest = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/openai_manifest.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "http_support", .module = qualcomm_http_support },
+            .{ .name = "responses", .module = qualcomm_responses },
+        },
+    });
+    qualcomm_manifest.addOptions("build_options", build_options);
+    const qualcomm_openai_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/openai_server.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "tokenizer", .module = qualcomm_tokenizer },
+            .{ .name = "http_support", .module = qualcomm_http_support },
+            .{ .name = "model_admission", .module = qualcomm_model_admission },
+            .{ .name = "model_registry", .module = qualcomm_model_registry },
+            .{ .name = "responses", .module = qualcomm_responses },
+            .{ .name = "hf_catalog", .module = qualcomm_hf_catalog },
+            .{ .name = "request", .module = qualcomm_request },
+            .{ .name = "manifest", .module = qualcomm_manifest },
+        },
+    });
+    const qualcomm_openai = b.addExecutable(.{
+        .name = "tensorfold-qualcomm-openai",
+        .linkage = .dynamic,
+        .root_module = qualcomm_openai_module,
+    });
+    if (android_libc) |libc_file|
+        qualcomm_openai.setLibCFile(.{ .cwd_relative = libc_file });
+    const qualcomm_openai_step = b.step("qualcomm-openai", "Build the native Android tokenizer and OpenAI HTTP control plane");
+    qualcomm_openai_step.dependOn(&b.addInstallArtifact(qualcomm_openai, .{}).step);
 }
 
 /// `zig build native -Dcpu=apple_m1`: tensorfold-native with the Metal engines for the Python package's bundle (a native M5 build traps on M1-M4).

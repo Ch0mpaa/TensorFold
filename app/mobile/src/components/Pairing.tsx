@@ -29,8 +29,8 @@ export function Pairing() {
     finally { setBusy(false) }
   }
   return <SafeAreaView style={[layout.page, { backgroundColor: c.bg }]}><KeyboardAvoidingView style={layout.page} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[layout.content, { paddingTop: 24, paddingBottom: 36 }]}>
-    <Brand />
-    <View style={{ gap: 10, marginTop: 28 }}><Heading>Connect to your Mac</Heading><Body muted>Follow workers and send instructions from your phone; your models keep running in TensorFold on the Mac.</Body></View>
+    <View style={layout.row}><Brand />{Platform.OS === 'android' && <Button secondary onPress={() => router.replace('/local')}>On phone</Button>}</View>
+    <View style={{ gap: 10, marginTop: 28 }}><Heading>Connect to your Mac</Heading><Body muted>Pair with TensorFold Desktop to follow its workers and chats. Phone-local models are separate and remain available from the on-phone screen.</Body></View>
     <View style={[layout.card, { backgroundColor: c.card, borderColor: c.line, gap: 18 }]}>
       <Heading small>Pair this device</Heading><Body muted>On your Mac, open Settings, Remote control, then Connect your phone; enable the private connection and scan its QR code.</Body>
       <Field testID="pair-host" label="Private host URL" value={host} onChangeText={setHost} autoCapitalize="none" autoCorrect={false} autoComplete="off" textContentType="none" importantForAutofill="no" keyboardType="url" placeholder="https://your-private-host" editable={!busy} />

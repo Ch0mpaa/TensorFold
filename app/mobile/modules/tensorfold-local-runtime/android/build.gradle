@@ -1,0 +1,25 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'expo.modules.tensorfoldlocalruntime'
+version = '1.0.0'
+android {
+  namespace 'expo.modules.tensorfoldlocalruntime'
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+    testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+  }
+  sourceSets {
+    main.jniLibs.srcDir 'src/main/jniLibs'
+  }
+  packagingOptions {
+    jniLibs.useLegacyPackaging = true
+  }
+}
+dependencies {
+  implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+  testImplementation 'junit:junit:4.13.2'
+  testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+}

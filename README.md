@@ -10,6 +10,21 @@ The [TensorFold desktop workspace](app/README.md) bundles the local engine, mode
 Download the signed and notarized Apple-silicon [beta.5 DMG](https://github.com/ashhart/TensorFold/releases/tag/v1.0.0-beta.5), or build from [`app/`](app/README.md).
 Mobile clients in `app/mobile/` remain preview software.
 
+## Android app (preview)
+
+[`app/mobile/`](app/mobile/) now includes an ordinary rootless phone-local
+runtime alongside its private Mac companion mode. On Android 13+ arm64 phones,
+the APK detects Qualcomm or Google Tensor hardware, selects the exact portable
+CPU backend, downloads only SHA-256-pinned EXL3 catalog models into private
+storage, provides local chat and an explicitly non-community quick benchmark,
+and manages its authenticated loopback server without Python, Termux, ADB, or
+root. The packaged Vulkan candidate is disabled after failing the retained
+token gate on Adreno; the direct Qualcomm HTP prototype remains a separate
+developer path because ordinary app UIDs cannot access FastRPC on the reference
+firmware.
+See the [Android app architecture, requirements, build and qualification
+gates](docs/android-app.md).
+
 ## Install and serve
 
 The macOS Homebrew formula installs the native binary as `tensorfold`:
