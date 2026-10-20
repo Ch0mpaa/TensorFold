@@ -139,3 +139,28 @@ starts an authenticated loopback server under the app UID. PwnHarness reads the
 active endpoint, one-process bearer token, model ID and ready state only through
 an explicit Android runtime permission. It cannot select another checkpoint or
 bypass PwnHarness scope, approval, evidence or STOP controls.
+
+## HTP 4-bit candidate
+
+The 2.54-bpw checkpoint remains the storage-fit and Android paging reference,
+but its predominantly 2- and 3-bit trellises do not match the qualified
+single-row HTP kernel. A private low-bit HTP decoder ran correctly but remained
+slower than the parallel CPU path. The current acceleration candidate is the
+same model at pinned revision `8a68a1aca688b768853bad4d926c0136ff62286c`,
+4.00 bpw.
+
+Its 19,329,446,010 bytes of weights fit Phone B storage. Every non-head
+projection is 4-bit and uses the existing optimized HTP decoder; only the
+6-bit output head takes a content-bound decoded FP16 cache. CPU and HTP
+produced the same observed eight-token sequence and ordered top-five IDs.
+
+| Phone B run | End-to-end tok/s | Peak RSS |
+| --- | ---: | ---: |
+| 4.00-bpw CPU, 8 tokens | 0.068943 | 2,040,216 KiB |
+| 4.00-bpw HTP, 8 tokens, packed head | 0.343639 | 2,045,704 KiB |
+| 4.00-bpw HTP, 64 tokens, warm decoded head | 0.753648 | 2,675,068 KiB |
+
+The 64-token HTP run moved the battery from 31.2 C to 31.7 C. This is a
+rooted engineering runtime result, not an ordinary-app or release claim.
+It remains below the speed gate, and 256-token code, chat and tool parity is
+still required.

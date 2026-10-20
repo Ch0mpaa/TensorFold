@@ -601,6 +601,7 @@ const Runner = struct {
     use_f16_weights: bool = false,
     use_resident_weights: bool = false,
     use_packed_exl3: bool = false,
+    use_f16_head_cache: bool = false,
     use_q8_weights: bool = false,
     use_q4_weights: bool = false,
     q8_attention_inputs: bool = false,
@@ -1644,7 +1645,10 @@ const Runner = struct {
             const started = tf_qualcomm_monotonic_ms();
             const status = tf_qualcomm_backend_exl3_resident_once(self.backend, slot, k, m, input.len / k, words, trellis_ptr, suh_ptr, svh_ptr, input.ptr, output.ptr, &compute_ms, &uploaded);
             self.projection_wall_ms += tf_qualcomm_monotonic_ms() - started;
-            if (status != 0) return error.BridgeFailed;
+            if (status != 0) {
+                std.debug.print("packed resident bridge failed: status={d} slot={d} k={d} m={d} n={d} words={d}\n", .{ status, slot, k, m, input.len / k, words });
+                return error.BridgeFailed;
+            }
             self.projection_ms += compute_ms;
             self.projection_count += 1;
             self.resident_slot_cursor += 1;
@@ -1734,10 +1738,12 @@ const Runner = struct {
         for (0..m) |out_col| for (0..k) |inner| {
             weight[out_col * k + inner] = decoded[inner * m + out_col];
         };
-        if (cache_key) |key| try self.saveCached(key, k, m, weight);
-        if (cache_key) |key| if (self.cache_model_id) |model_id| {
-            try self.linkCached(key, trustedProjectionKey(model_id, base, k, m, words));
-        };
+        if (f16_key == null) {
+            if (cache_key) |key| try self.saveCached(key, k, m, weight);
+            if (cache_key) |key| if (self.cache_model_id) |model_id| {
+                try self.linkCached(key, trustedProjectionKey(model_id, base, k, m, words));
+            };
+        }
         if (f16_key) |f16_key_value| {
             try self.convertSaveRunF16(f16_key_value, k, m, weight, input, output);
         } else {
@@ -1789,12 +1795,15 @@ const Runner = struct {
         const trellis_ptr: [*]const u16 = @ptrCast(@alignCast(trellis_lease.data().ptr));
         const suh_ptr: [*]const u16 = @ptrCast(@alignCast(suh_lease.data().ptr));
         const svh_ptr: [*]const u16 = @ptrCast(@alignCast(svh_lease.data().ptr));
-        const slot: usize = if (k == hidden) 254 else 255;
+        const slot: usize = 232 + (if (k == hidden) @as(usize, 0) else 8) + words / 8 - 1;
         var compute_ms: f64 = 0;
         const started = tf_qualcomm_monotonic_ms();
         const status = tf_qualcomm_backend_exl3_paged_once(self.backend, slot, k, m, input.len / k, words, trellis_ptr, suh_ptr, svh_ptr, input.ptr, output.ptr, &compute_ms);
         self.projection_wall_ms += tf_qualcomm_monotonic_ms() - started;
-        if (status != 0) return error.BridgeFailed;
+        if (status != 0) {
+            std.debug.print("packed paged bridge failed: status={d} slot={d} k={d} m={d} n={d} words={d}\n", .{ status, slot, k, m, input.len / k, words });
+            return error.BridgeFailed;
+        }
         self.projection_ms += compute_ms;
         self.projection_count += 1;
         self.resident_weight_uploads += 1;
@@ -2951,6 +2960,24 @@ fn tiedHead(runner: *Runner, state: []const f32, cpu_threads: i32) ![5]Top {
     if (comptime !profile.tied_embeddings) {
         const logits = try runner.allocator.alloc(f32, vocab);
         defer runner.allocator.free(logits);
+        const backend_was_cpu = runner.backend_is_cpu;
+        const packed_was_enabled = runner.use_packed_exl3;
+        const f16_was_enabled = runner.use_f16_weights;
+        const resident_was_enabled = runner.use_resident_weights;
+        if (comptime experts > 0) {
+            runner.backend_is_cpu = true;
+            if (runner.use_f16_head_cache) {
+                runner.use_packed_exl3 = false;
+                runner.use_f16_weights = true;
+                runner.use_resident_weights = false;
+            }
+        }
+        defer {
+            runner.backend_is_cpu = backend_was_cpu;
+            runner.use_packed_exl3 = packed_was_enabled;
+            runner.use_f16_weights = f16_was_enabled;
+            runner.use_resident_weights = resident_was_enabled;
+        }
         try runner.project("lm_head", state, logits);
         return topFive(logits);
     }
@@ -3374,6 +3401,7 @@ pub fn main(init: std.process.Init) !u8 {
         .use_f16_weights = serve_mode and !prepare_cache_mode and !packed_mode and !q8_mode and !q4_mode,
         .use_resident_weights = resident_mode,
         .use_packed_exl3 = packed_mode or experts > 0,
+        .use_f16_head_cache = init.environ_map.get("TENSORFOLD_DECODED_HEAD_CACHE") != null,
         .use_q8_weights = q8_mode,
         .use_q4_weights = q4_mode,
         .q8_attention_inputs = q4_attn_q8_mode or q4_attn_in_q8_mode,

@@ -1423,7 +1423,8 @@ static struct tf_qualcomm_exl3_slot *get_exl3_slot(struct tf_qualcomm_backend *c
     (void) words;
     return NULL;
 #else
-    if (slot_id >= TF_QUALCOMM_RESIDENT_SLOTS || words != 64 || k % 128 != 0 || m % 128 != 0) {
+    if (slot_id >= TF_QUALCOMM_RESIDENT_SLOTS || words < 8 || words > 128 || words % 8 != 0 ||
+        k % 128 != 0 || m % 128 != 0) {
         return NULL;
     }
     struct tf_qualcomm_exl3_slot *slot = &context->exl3_slots[slot_id];

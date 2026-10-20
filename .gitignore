@@ -19,7 +19,7 @@ zig-out-android-vulkan/
 .android-app-prefix/
 .moe-*.png
 .moe-*.xml
-.tf-final.xml
+.tf-*.xml
 
 
 # Native Qwen CPU-only Metal compiler receipts.
