@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 500" role="img" aria-labelledby="title desc">
+  <title id="title">TensorFold versus llama.cpp on matched OnePlus phones</title>
+  <desc id="desc">Community-v2 temperature-zero medians of five measured runs after warm-up.</desc>
+  <style>
+    text { fill: currentColor; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .muted { fill: var(--muted); }
+    .line { stroke: var(--border); stroke-width: 1; }
+    .accent { fill: var(--accent); font-weight: 700; }
+    .win { fill: var(--success); font-weight: 700; }
+    .surface { fill: var(--surface); stroke: var(--border); stroke-width: 1; }
+  </style>
+  <rect class="surface" x="24" y="24" width="852" height="452" rx="20"/>
+  <text x="56" y="72" font-size="25" font-weight="700">Same-phone community-v2</text>
+  <text class="muted" x="56" y="101" font-size="14">Qwen3.5 4B · T=0 · 256 output tokens · median of 5 · 5/5 complete</text>
+
+  <text class="muted" x="56" y="151" font-size="13">METRIC</text>
+  <text class="accent" x="430" y="151" font-size="13" text-anchor="middle">PHONE B · TENSORFOLD</text>
+  <text class="muted" x="635" y="151" font-size="13" text-anchor="middle">PHONE A · LLAMA.CPP</text>
+  <text class="muted" x="809" y="151" font-size="13" text-anchor="end">DELTA</text>
+  <line class="line" x1="56" y1="169" x2="844" y2="169"/>
+
+  <text x="56" y="214" font-size="17">Code delivery</text>
+  <text class="win" x="430" y="214" font-size="20" text-anchor="middle">17.88 tok/s</text>
+  <text x="635" y="214" font-size="18" text-anchor="middle">11.95 tok/s</text>
+  <text class="win" x="809" y="214" font-size="18" text-anchor="end">+49.64%</text>
+  <line class="line" x1="56" y1="238" x2="844" y2="238"/>
+
+  <text x="56" y="283" font-size="17">Chat delivery</text>
+  <text class="win" x="430" y="283" font-size="20" text-anchor="middle">13.27 tok/s</text>
+  <text x="635" y="283" font-size="18" text-anchor="middle">12.00 tok/s</text>
+  <text class="win" x="809" y="283" font-size="18" text-anchor="end">+10.64%</text>
+  <line class="line" x1="56" y1="307" x2="844" y2="307"/>
+
+  <text x="56" y="352" font-size="17">Code TTFT</text>
+  <text class="win" x="430" y="352" font-size="20" text-anchor="middle">0.045 s</text>
+  <text x="635" y="352" font-size="18" text-anchor="middle">0.170 s</text>
+  <text class="win" x="809" y="352" font-size="18" text-anchor="end">−0.125 s</text>
+  <line class="line" x1="56" y1="376" x2="844" y2="376"/>
+
+  <text x="56" y="421" font-size="17">Chat TTFT</text>
+  <text class="win" x="430" y="421" font-size="20" text-anchor="middle">0.043 s</text>
+  <text x="635" y="421" font-size="18" text-anchor="middle">0.182 s</text>
+  <text class="win" x="809" y="421" font-size="18" text-anchor="end">−0.139 s</text>
+  <text class="muted" x="56" y="454" font-size="12">Stream delivery rate measured at the HTTP client. Both receipts are protocol-complete.</text>
+</svg>
