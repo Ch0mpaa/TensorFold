@@ -1,10 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 560" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 660" width="980" height="660" role="img" aria-labelledby="title desc">
   <title id="title">TensorFold Qualcomm Android execution architecture</title>
-  <desc id="desc">Two explicit execution lanes share verified models and protocol tests. The public app uses exact CPU today while HTP remains an engineering path. PwnHarness owns scoped automation.</desc>
+  <desc id="desc">The public dense-model app uses exact CPU while privileged HTP remains a separate engineering lane. The 35B-A3B 2.54-bpw storage/paging reference differs from the 4.00-bpw mixed CPU/HTP candidate, whose short-sequence results are not release, quality or community-v2 qualification. PwnHarness owns scoped automation.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L0,6 L9,3 z" fill="var(--accent)"/></marker>
   </defs>
   <style>
+    :root { color: #f5f2fa; background: #0d0a15; --muted: #bbb4cd; --surface: #191421; --border: #494052; --accent: #b260ff; --success: #2de3a0; --warning: #ffc83d; }
     text { fill: currentColor; font-family: ui-sans-serif, system-ui, sans-serif; }
     .muted { fill: var(--muted); }
     .box { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
@@ -14,7 +15,7 @@
     .flow { fill: none; stroke: var(--accent); stroke-width: 2; marker-end: url(#arrow); }
   </style>
   <text x="36" y="48" font-size="26" font-weight="700">TensorFold on Qualcomm Android</text>
-  <text class="muted" x="36" y="76" font-size="15">One verified model contract, two honest execution lanes</text>
+  <text class="muted" x="36" y="76" font-size="15">Pinned checkpoints, separate execution lanes and per-protocol evidence</text>
 
   <rect class="box" x="36" y="112" width="210" height="90" rx="14"/>
   <text x="141" y="148" font-size="18" font-weight="700" text-anchor="middle">Pinned model</text>
@@ -22,17 +23,17 @@
 
   <rect class="gate" x="300" y="112" width="210" height="90" rx="14"/>
   <text x="405" y="148" font-size="18" font-weight="700" text-anchor="middle">Exactness gate</text>
-  <text class="muted" x="405" y="176" font-size="14" text-anchor="middle">retained tokens · hashes</text>
+  <text class="muted" x="405" y="176" font-size="14" text-anchor="middle">per-checkpoint retained tokens</text>
   <path class="flow" d="M246 157 H290"/>
 
   <rect class="warn" x="564" y="100" width="372" height="112" rx="14"/>
   <text x="750" y="137" font-size="18" font-weight="700" text-anchor="middle">Engineering lane · Hexagon HTP</text>
   <text class="muted" x="750" y="166" font-size="14" text-anchor="middle">FastRPC · rooted/developer deployment</text>
-  <text class="muted" x="750" y="190" font-size="13" text-anchor="middle">community-v2: +49.64% code, +10.64% chat</text>
+  <text class="muted" x="750" y="190" font-size="13" text-anchor="middle">4B community-v2: +49.64% code, +10.64% chat</text>
   <path class="flow" d="M510 145 H554"/>
 
   <rect class="good" x="564" y="252" width="372" height="112" rx="14"/>
-  <text x="750" y="289" font-size="18" font-weight="700" text-anchor="middle">Public app lane · exact CPU</text>
+  <text x="750" y="289" font-size="18" font-weight="700" text-anchor="middle">Dense-model app lane · exact CPU</text>
   <text class="muted" x="750" y="318" font-size="14" text-anchor="middle">ordinary app UID · no root · no CLI</text>
   <text class="muted" x="750" y="342" font-size="13" text-anchor="middle">Vulkan disabled after retained-token mismatch</text>
   <path class="flow" d="M405 202 V308 H554"/>
@@ -53,9 +54,13 @@
   <text class="muted" x="141" y="487" font-size="14" text-anchor="middle">all work stays on phone</text>
   <path class="flow" d="M290 467 H256"/>
 
-  <rect class="box" x="564" y="416" width="372" height="102" rx="14"/>
-  <text x="750" y="452" font-size="18" font-weight="700" text-anchor="middle">Next: Qwen3.5 35B-A3B MoE</text>
-  <text class="muted" x="750" y="480" font-size="14" text-anchor="middle">12.99 GB packed checkpoint · 3B active/token</text>
-  <text class="muted" x="750" y="502" font-size="14" text-anchor="middle">expert paging first, bounded offsec tools second</text>
-  <path class="flow" d="M510 467 H554"/>
+  <rect class="warn" x="564" y="416" width="372" height="224" rx="14"/>
+  <text x="750" y="449" font-size="18" font-weight="700" text-anchor="middle">35B-A3B · engineering, not release</text>
+  <text class="muted" x="750" y="477" font-size="13" text-anchor="middle">2.54 bpw · 12.99 GB · CPU/app paging reference</text>
+  <text class="muted" x="750" y="500" font-size="13" text-anchor="middle">4.00 bpw · 19.33 GB · privileged mixed CPU/HTP</text>
+  <text class="muted" x="750" y="523" font-size="13" text-anchor="middle">64-token warm HTP: 0.753628 decode tok/s</text>
+  <text class="muted" x="750" y="546" font-size="13" text-anchor="middle">0.753648 E2E tok/s · 2,675,068 KiB peak RSS</text>
+  <text class="muted" x="750" y="569" font-size="13" text-anchor="middle">31.2 → 31.7 C · low-bit HTP slower than CPU</text>
+  <text class="muted" x="750" y="592" font-size="13" text-anchor="middle">Eight-token parity only · no rootless HTP</text>
+  <text class="muted" x="750" y="615" font-size="13" text-anchor="middle">No MoE community-v2, release or quality claim</text>
 </svg>

@@ -1,12 +1,16 @@
 # Qualcomm packed-direct MoE
 
-## Selected checkpoint
+## Selected checkpoints
 
-The Qualcomm MoE target is
+Two revisions serve different purposes; their tokens and measurements must not
+be combined. The storage-fit CPU/app paging reference is
 `turboderp/Qwen3.5-35B-A3B-exl3@2.54bpw`, revision
-`af18e8ad45f4d529925bab859d79e163dc5abe60`.
+`af18e8ad45f4d529925bab859d79e163dc5abe60`. The privileged HTP engineering
+candidate is `turboderp/Qwen3.5-35B-A3B-exl3@4.00bpw`, revision
+`8a68a1aca688b768853bad4d926c0136ff62286c`; its evidence is recorded below.
+Neither revision has completed the release admission gates.
 
-This is the boring fit-first choice:
+The 2.54-bpw revision is the fit-first reference:
 
 - Apache-2.0 Qwen3.5 model, 35B total parameters and about 3B active per token.
 - `qwen3_5_moe`: 40 text layers, hidden size 2,048, 256 routed experts,
@@ -17,18 +21,19 @@ This is the boring fit-first choice:
 - Native tool-call chat template and coding/agentic base make it a better
   bounded PwnHarness candidate than a generic chat-only model.
 
-The 2.00/2.08/2.13 bpw revisions are smaller but are not the first target:
-quality headroom matters more than saving the final two to three GiB before a
-working pager exists. The 3.00 bpw revision is the fallback if 2.54 bpw fails
-the quality gate.
+The 2.00/2.08/2.13 bpw revisions are smaller but are not the first storage-fit
+target. The 3.00 bpw revision is a fallback if 2.54 bpw fails the quality gate,
+not a qualified result. The 4.00-bpw HTP candidate is a separate kernel-fit
+choice, not evidence that any revision has passed the quality gate.
 
 ## Execution contract
 
-TensorFold must not build a decoded full-model cache. It keeps embeddings,
-normalization, routers, attention/DeltaNet projections, the shared expert and
-output head resident in their packed representation. Routed expert trellises
-remain memory-mapped in the checkpoint. A bounded cache admits only selected
-expert pages.
+TensorFold must not build a decoded full-model cache. The storage-fit CPU path
+keeps embeddings, normalization, routers, attention/DeltaNet projections, the
+shared expert and output head in their packed representation. Routed expert
+trellises remain in the checkpoint; a bounded cache admits selected expert
+pages. The 4.00-bpw HTP candidate separately permits a content-bound decoded
+FP16 cache for only its 6-bit output head, not the full model.
 
 For each MoE layer:
 
@@ -77,6 +82,9 @@ A phone is admitted only when all gates pass:
    quality, lifecycle and thermal gates pass on Phone B.
 6. Expose it to PwnHarness only after strict tool-call and STOP tests pass.
 
+The experimental 2.54-bpw Android catalog entry described below is a
+qualification path, not proof that these release gates have passed.
+
 ## Pager qualification evidence
 
 `zig/src/qualcomm/exl3_expert_pager.zig` now indexes safetensor headers
@@ -102,14 +110,17 @@ computed. `moe_routing.normalizeTopK` now preserves the original maximum,
 rounds the published weights to FP16 like the reference, and has a permanent
 regression test.
 
-For the tokenizer ID of `hi` (`5834`), TensorFold and ExLlamaV3 now return the
-same eight-token greedy sequence:
+For the 2.54-bpw revision and tokenizer input `hi` (ID `5834`), TensorFold and
+ExLlamaV3 return the same eight generated tokens. The stream below includes
+the input ID first:
 
 ```text
 5834, 11, 353, 1144, 310, 1791, 264, 3779, 364
 ```
 
-The ordered top five also matches at every observed step. The first step was:
+Seven of eight ordered top-five lists match exactly. At the final observed step,
+the same five IDs appear with reference-tied IDs `13` and `440` reversed at
+ranks four and five. The first step was:
 
 | Rank | ExLlamaV3 token | ExLlamaV3 logit | TensorFold token | TensorFold logit |
 | ---: | ---: | ---: | ---: | ---: |
@@ -140,27 +151,49 @@ active endpoint, one-process bearer token, model ID and ready state only through
 an explicit Android runtime permission. It cannot select another checkpoint or
 bypass PwnHarness scope, approval, evidence or STOP controls.
 
-## HTP 4-bit candidate
+## HTP 4.00-bpw engineering evidence
 
-The 2.54-bpw checkpoint remains the storage-fit and Android paging reference,
-but its predominantly 2- and 3-bit trellises do not match the qualified
-single-row HTP kernel. A private low-bit HTP decoder ran correctly but remained
-slower than the parallel CPU path. The current acceleration candidate is the
-same model at pinned revision `8a68a1aca688b768853bad4d926c0136ff62286c`,
-4.00 bpw.
+The 2.54-bpw checkpoint remains the 12.99 GB storage-fit and Android paging
+reference, but its predominantly 2- and 3-bit trellises do not match the
+qualified single-row HTP kernel. A private generic low-bit HTP decoder matched
+the first token but remained slower than the 16-worker CPU path. That failed
+performance candidate is not the source of the 4.00-bpw figures below.
 
-Its 19,329,446,010 bytes of weights fit Phone B storage. Every non-head
-projection is 4-bit and uses the existing optimized HTP decoder; only the
-6-bit output head takes a content-bound decoded FP16 cache. CPU and HTP
-produced the same observed eight-token sequence and ordered top-five IDs.
+The separate acceleration candidate is
+`turboderp/Qwen3.5-35B-A3B-exl3@4.00bpw`, revision
+`8a68a1aca688b768853bad4d926c0136ff62286c`. Its three weight shards total
+19,329,446,010 bytes and matched their published SHA-256 values. All 30,970
+non-head EXL3 projections use 4-bit trellises; the output head uses 6 bits.
+The warm HTP path uses a content-bound decoded FP16 cache for only that head.
 
-| Phone B run | End-to-end tok/s | Peak RSS |
-| --- | ---: | ---: |
-| 4.00-bpw CPU, 8 tokens | 0.068943 | 2,040,216 KiB |
-| 4.00-bpw HTP, 8 tokens, packed head | 0.343639 | 2,045,704 KiB |
-| 4.00-bpw HTP, 64 tokens, warm decoded head | 0.753648 | 2,675,068 KiB |
+CPU and HTP produced the same observed eight generated tokens from `hi`, with
+the same ordered top-five IDs at each observed position. This 4.00-bpw stream
+includes input ID `5834` first and differs from the 2.54-bpw stream above:
 
-The 64-token HTP run moved the battery from 31.2 C to 31.7 C. This is a
-rooted engineering runtime result, not an ordinary-app or release claim.
-It remains below the speed gate, and 256-token code, chat and tool parity is
-still required.
+```text
+5834, 11, 585, 1318, 310, 1791, 264, 3779, 364
+```
+
+| Phone B engineering run | Decode tok/s | End-to-end tok/s | Peak RSS |
+| --- | ---: | ---: | ---: |
+| 4.00-bpw CPU, 8 tokens | not separately reported here | 0.068943 | 2,040,216 KiB |
+| 4.00-bpw initial HTP, 8 tokens, packed head | not separately reported here | 0.343639 | 2,045,704 KiB |
+| 4.00-bpw HTP, 64 tokens, warm decoded head | 0.753628 | 0.753648 | 2,675,068 KiB |
+
+The 64-token HTP run moved battery temperature from 31.2 C to 31.7 C. The
+retained stream repeats a short pattern after the initial continuation; a run
+on the one-token `hi` input does not establish useful chat, coding or tool
+quality. The 64-token run also does not extend the eight-token CPU/HTP
+comparison into a 64-token reference-parity claim.
+
+These are rooted Phone B userspace/model-runtime engineering measurements,
+not full NPU-only execution, ordinary-app FastRPC access, a production release,
+or publication-grade foreground-app results. CPU orchestration and non-HTP
+model work remain part of this mixed execution lane. The public APK does not
+bundle privileged HTP. The release speed gate, 256-token code/chat/tool parity,
+quality evaluation and protocol-complete community-v2 benchmark remain unmet.
+Do not combine these results with the different-checkpoint 2.54-bpw CPU
+evidence or the existing dense 2B/4B benchmarks.
+
+Retained evidence: [4.00-bpw engineering record](../recordings/20261020-qualcomm-35b-a3b-4bpw/README.md)
+and its CPU, initial HTP and warm 64-token summary files.

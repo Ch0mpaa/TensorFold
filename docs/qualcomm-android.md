@@ -3,7 +3,7 @@
 Status: complete autoregressive correctness POC with a native packed-EXL3 HTP
 projection kernel. TensorFold executes Qwen3.5-2B and Qwen3.5-4B prompts across
 every layer, carries recurrent and KV state, and routes all 200 transformer
-projections per position through Qualcomm HTP v79. The new 4.00-bpw MCG path
+projections per position through Qualcomm HTP v79. The dense 4B 4.00-bpw MCG path
 keeps trellis weights resident, performs both Hadamard transforms and scaling
 on the DSP, decodes with HVX directly into HMX tiles in VTCM, and never creates
 a full FP16 projection matrix. It is a working full-model POC, but its first
@@ -15,6 +15,54 @@ first accelerator path. It keeps TensorFold's EXL3/EXLR8 formats, model logic,
 and lane interface. The existing llama.cpp Hexagon work is a reference for the
 Android-to-cDSP transport and deployment boundary only; GGUF kernels and model
 execution are not being substituted for TensorFold.
+
+The separate 35B-A3B MoE work now has short-sequence CPU/HTP engineering
+evidence; it does not inherit the dense 2B/4B correctness or benchmark gates.
+The distributable Android APK remains on its qualified portable CPU path:
+FastRPC HTP is a privileged developer lane, and Vulkan remains disabled after
+its retained-token mismatch. None of the MoE figures below establishes
+ordinary-app HTP support, full NPU-only execution or a production release.
+
+## 35B-A3B: separate checkpoint and execution lanes
+
+The storage/paging reference is
+`turboderp/Qwen3.5-35B-A3B-exl3@2.54bpw`, revision
+`af18e8ad45f4d529925bab859d79e163dc5abe60`, with 12,987,659,758 bytes of
+packed weights (12.99 GB). Its experimental app-owned CPU path does not build a
+decoded full-model cache. The observed input-plus-eight-generated-token stream
+is `5834,11,353,1144,310,1791,264,3779,364`; it matches ExLlamaV3 over that
+short comparison, not the required 256-token code/chat/tool suite.
+
+The HTP kernel-fit candidate is
+`turboderp/Qwen3.5-35B-A3B-exl3@4.00bpw`, revision
+`8a68a1aca688b768853bad4d926c0136ff62286c`. Its three weight shards total
+19,329,446,010 bytes. All non-head EXL3 projections are 4-bit; the output head
+is 6-bit. CPU and HTP match the observed eight generated tokens and ordered
+top-five IDs from `hi`; including input ID `5834`, the stream is:
+
+```text
+5834,11,585,1318,310,1791,264,3779,364
+```
+
+| Phone B 4.00-bpw engineering run | Decode tok/s | End-to-end tok/s | Peak RSS |
+| --- | ---: | ---: | ---: |
+| CPU, 8 tokens | not separately reported here | 0.068943 | 2,040,216 KiB |
+| Initial HTP, 8 tokens, packed head | not separately reported here | 0.343639 | 2,045,704 KiB |
+| Warm HTP, 64 tokens, decoded FP16 head cache only | 0.753628 | 0.753648 | 2,675,068 KiB |
+
+The warm run moved battery temperature from 31.2 C to 31.7 C. It is a mixed
+CPU/HTP rooted engineering runtime measurement, not a publication-grade
+foreground-app or community-v2 result. Its retained `hi` continuation repeats
+a short pattern, so throughput is not a useful-quality claim. The eight-token
+comparison does not prove 64- or 256-token reference parity, and the release
+speed, quality, thermal/lifecycle and standard benchmark gates remain pending.
+The generic low-bit HTP attempt on 2.54 bpw was slower than the 16-worker CPU
+path; those results must not be replaced by the 4.00-bpw numbers.
+
+See [packed-direct MoE](qualcomm-moe.md) for admission gates and the
+[retained 4.00-bpw record](../recordings/20261020-qualcomm-35b-a3b-4bpw/README.md).
+The historical dense-model results below remain scoped to their own models,
+quantizations and protocols.
 
 ## Stage 0: cross-compile and launch
 
@@ -808,7 +856,7 @@ launch settings, hashes, raw logs, and limitations.
 
 ## Phone-local product path
 
-The production path no longer needs a host Python tokenizer or HTTP shim.
+The phone-local HTP development path no longer needs a host Python tokenizer or HTTP shim.
 `tensorfold-qualcomm-openai` is an Android ARM64 Zig process that loads the
 Hugging Face `tokenizer.json`, owns the loopback OpenAI HTTP/SSE endpoint, and
 supervises one persistent Qualcomm engine child. It serves:

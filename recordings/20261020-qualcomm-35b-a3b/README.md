@@ -12,7 +12,7 @@ Checkpoint: `turboderp/Qwen3.5-35B-A3B-exl3@2.54bpw`, revision `af18e8ad45f4d529
 5834, 11, 353, 1144, 310, 1791, 264, 3779, 364
 ```
 
-All eight observed ordered top-five lists match. This is short-sequence evidence, not the required 256-token code, chat and tool gate.
+Seven of eight observed ordered top-five lists match exactly. At the final observed step, the same five IDs appear with reference-tied IDs `13` and `440` reversed at ranks four and five. This is short-sequence evidence, not the required 256-token code, chat and tool gate.
 
 The defect was a mutable-maximum softmax loop in routed-expert normalization. The first logit was changed to `1` before the remaining numerators used it. `zig/src/qualcomm/moe_routing.zig` fixes the invariant and retains a regression test.
 

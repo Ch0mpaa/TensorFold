@@ -46,7 +46,7 @@ The APK accepts only catalog entries with fixed repository IDs, artifact byte co
 
 Each download is HTTPS-only, bounded to approved Hugging Face delivery hosts, resumable into a `.part` file, size checked, SHA-256 checked, fsynced, and atomically renamed. Cancellation retains the partial file for a later resume. A 512 MiB safety reserve is kept beyond model and decoded-cache estimates. **Remove model files** deletes only the selected app-owned model and cache.
 
-First load constructs a decoded cache for the dense 2B/4B profiles and can take substantially longer than later starts. The 35B-A3B profile never builds a decoded full-model cache: its 12.99 GB checkpoint stays packed, selected routed experts enter a bounded LRU, and all other EXL3 projections execute from packed bytes. Every cache and pager entry is content-bound to the admitted checkpoint. A model is never marked verified from file presence or repository naming alone.
+First load constructs a decoded cache for the dense 2B/4B profiles and can take substantially longer than later starts. The experimental 2.54-bpw 35B-A3B profile never builds a decoded full-model cache: its 12.99 GB of weight shards stay packed (the catalog lists a 13.05 GB download allowance), selected routed experts enter a bounded LRU, and all other EXL3 projections execute from packed bytes. Every cache and pager entry is content-bound to the admitted checkpoint. A model is never marked verified from file presence or repository naming alone. The separate 19.33 GB 4.00-bpw HTP engineering candidate is not this app catalog entry.
 
 ## Local chat and benchmark
 
@@ -80,25 +80,8 @@ unauthenticated request to the same forwarded loopback port returned HTTP 401.
 Cancelling an in-flight 256-token generation stopped both native child
 processes while the activity remained alive and usable. Force-stopping the APK
 also removed its app-UID server process; no orphan remained.
-### 35B-A3B development status
 
-The Snapdragon-only 35B-A3B catalog entry is an experimental qualification
-path, not a supported speed profile. On Phone B, the app-owned worker executes
-the complete packed checkpoint with no decoded full-model cache. The current
-greedy comparison matches ExLlamaV3 for the first eight generated tokens of the
-real tokenizer input `hi`, including each ordered top five. A fixed regression
-test covers the routing-normalization defect found during that comparison.
-
-Output-tile parallelism across 16 CPU workers reduced the one-token elapsed time
-from 47.558 s to 13.872 s without changing the token or ordered top five. That
-is still far below the release performance gate. The 256-token parity suite,
-quality fixtures, thermal/lifecycle run and standard benchmark remain pending.
-The private qualification APK containing this path hashes
-`bfb4a34e11047e6c525e4848a67421451412cabf63a271504a8fc2e8820799b2`;
-it is not a public release artifact.
-
-
-The quick workload contract, run through that app-owned authenticated server,
+The 2B quick workload contract, run through that app-owned authenticated server,
 produced:
 
 | 2B CPU quick workload | Median delivery | Median prefill | Median request |
@@ -111,6 +94,46 @@ produced:
 Each row is three 64-token measurements after one excluded warm-up. These are
 diagnostic CPU figures, not community-v2 and not a comparison with the
 different-model HTP or llama.cpp runs.
+
+### 35B-A3B development status
+
+The Snapdragon-only 35B-A3B catalog entry is an experimental 2.54-bpw CPU
+qualification path, not a supported speed profile or a public release artifact.
+Its pinned revision is `af18e8ad45f4d529925bab859d79e163dc5abe60` in
+`turboderp/Qwen3.5-35B-A3B-exl3@2.54bpw`. On Phone B, the app-owned worker
+executes the complete packed checkpoint with no decoded full-model cache.
+TensorFold matches ExLlamaV3 for the first eight generated tokens of `hi`.
+Seven of eight ordered top-five lists match exactly; at the final observed step
+the same five IDs appear, with reference-tied IDs `13` and `440` reversed at
+ranks four and five. Its stream, with the input ID first, is
+`5834,11,353,1144,310,1791,264,3779,364`. A fixed regression test covers the
+routing-normalization defect found during that comparison.
+
+Output-tile parallelism across 16 CPU workers reduced the one-token elapsed time
+from 47.558 s to 13.872 s without changing the token or ordered top five. That
+is still far below the release performance gate. The 256-token parity suite,
+quality fixtures, thermal/lifecycle run and standard benchmark remain pending.
+The private qualification APK containing this path hashes
+`bfb4a34e11047e6c525e4848a67421451412cabf63a271504a8fc2e8820799b2`;
+it is not a public release artifact.
+
+The separate privileged HTP engineering lane uses
+`turboderp/Qwen3.5-35B-A3B-exl3@4.00bpw`, revision
+`8a68a1aca688b768853bad4d926c0136ff62286c`, with 19,329,446,010 weight bytes,
+4-bit projections and a 6-bit head. Its CPU/HTP eight-token stream is
+`5834,11,585,1318,310,1791,264,3779,364`, not the 2.54-bpw stream above.
+Eight-token CPU and initial HTP end-to-end rates were 0.068943 and 0.343639
+tok/s. A warm 64-token HTP run with only the head cached as decoded FP16 reached
+0.753628 decode tok/s and 0.753648 end-to-end tok/s, 2,675,068 KiB peak RSS,
+and battery temperature 31.2 C to 31.7 C.
+
+Those are rooted engineering measurements, not ordinary app-UID HTP access,
+full NPU-only execution, general model quality, a production release, or
+publication-grade foreground-app/community-v2 results. The short CPU/HTP
+comparison does not establish 64- or 256-token reference parity. The generic
+low-bit HTP attempt on 2.54 bpw was slower than CPU; it is not hidden by the
+4.00-bpw result. See [packed-direct MoE evidence](qualcomm-moe.md) for the
+retained records and outstanding gates.
 
 ### Pixel Tensor reference evidence
 
