@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <string name="tensorfold_local_inference_permission">access the active local TensorFold model</string>
+  <string name="tensorfold_local_inference_permission_description">Shares a temporary loopback inference session only while TensorFold is running. PwnHarness still enforces scope, approvals, evidence, and STOP.</string>
+</resources>

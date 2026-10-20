@@ -1,7 +1,18 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <permission
+    android:name="dev.tensorfold.mobile.permission.LOCAL_INFERENCE"
+    android:label="@string/tensorfold_local_inference_permission"
+    android:description="@string/tensorfold_local_inference_permission_description"
+    android:protectionLevel="dangerous" />
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="false" />
   <application android:networkSecurityConfig="@xml/tensorfold_network_security_config" android:extractNativeLibs="true">
     <uses-native-library android:name="libvulkan.so" android:required="false" />
+    <provider
+      android:name="expo.modules.tensorfoldlocalruntime.TensorFoldSessionProvider"
+      android:authorities="dev.tensorfold.mobile.runtime"
+      android:exported="true"
+      android:grantUriPermissions="false"
+      android:readPermission="dev.tensorfold.mobile.permission.LOCAL_INFERENCE" />
   </application>
 </manifest>

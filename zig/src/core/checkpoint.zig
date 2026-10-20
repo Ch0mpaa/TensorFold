@@ -6,6 +6,9 @@ const st = @import("safetensors.zig");
 
 pub const Tensor = st.Tensor;
 pub const DType = st.DType;
+pub const File = st.File;
+pub const max_rank = st.max_rank;
+pub const parseHeader = st.parseHeader;
 
 /// The checkpoint's shard paths in name order: model.safetensors.index.json's weight map, else every model*.safetensors.
 pub fn shardFiles(gpa: std.mem.Allocator, io: Io, dir: []const u8) ![][:0]u8 {
@@ -74,6 +77,14 @@ pub const Checkpoint = struct {
         return ck;
     }
 
+    /// One mapped safetensors file, used by single-shard runtimes.
+    pub fn openPath(gpa: std.mem.Allocator, io: Io, path: []const u8) !Checkpoint {
+        var ck: Checkpoint = .{ .gpa = gpa, .io = io };
+        errdefer ck.close();
+        try ck.files.append(gpa, try st.File.open(gpa, io, path));
+        return ck;
+    }
+
     /// One more file (an MTP head beside the model's files).
     pub fn add(self: *Checkpoint, dir: []const u8, name: []const u8) !void {
         const path = try std.fs.path.join(self.gpa, &.{ dir, name });
@@ -91,12 +102,24 @@ pub const Checkpoint = struct {
 
     /// The tensor named `name`, marked as used; a missing name is an error naming it.
     pub fn get(self: *Checkpoint, name: []const u8) !Tensor {
-        for (self.files.items) |*f| if (f.get(name)) |t| {
-            try self.used.put(self.gpa, f.names.getKey(name).?, {});
-            return t;
+        for (self.files.items) |*file| if (file.get(name)) |tensor| {
+            try self.used.put(self.gpa, file.names.getKey(name).?, {});
+            return tensor;
         };
         std.log.err("checkpoint has no tensor {s}", .{name});
         return error.MissingTensor;
+    }
+
+    /// Lookup without changing the loader's unused-tensor accounting.
+    pub fn lookup(self: *const Checkpoint, name: []const u8) ?Tensor {
+        for (self.files.items) |*file| if (file.get(name)) |tensor| return tensor;
+        return null;
+    }
+
+    pub fn count(self: *const Checkpoint) usize {
+        var total: usize = 0;
+        for (self.files.items) |*file| total += file.names.count();
+        return total;
     }
 
     /// `get` with the dtype and shape checked.

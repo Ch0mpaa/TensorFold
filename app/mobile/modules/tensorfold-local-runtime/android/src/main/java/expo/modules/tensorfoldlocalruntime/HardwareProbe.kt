@@ -55,7 +55,7 @@ internal object HardwareProbe {
       else -> "compatible-unqualified"
     }
     val nativeDir = File(context.applicationInfo.nativeLibraryDir)
-    val requiredRuntime = listOf("libtensorfold_openai.so", "libtensorfold_engine_2b.so", "libtensorfold_engine_4b.so")
+    val requiredRuntime = listOf("libtensorfold_openai.so", "libtensorfold_engine_2b.so", "libtensorfold_engine_4b.so", "libtensorfold_engine_moe.so")
     val missingRuntime = requiredRuntime.filterNot { File(nativeDir, it).canExecute() }
     val storage = StatFs(context.filesDir.absolutePath)
     return linkedMapOf(

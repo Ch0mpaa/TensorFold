@@ -1521,6 +1521,40 @@ int tf_qualcomm_backend_exl3_resident_once(void *opaque,
     return 0;
 }
 
+int tf_qualcomm_backend_exl3_paged_once(void *opaque,
+                                        size_t slot_id,
+                                        size_t k,
+                                        size_t m,
+                                        size_t n,
+                                        size_t words,
+                                        const unsigned short *trellis,
+                                        const unsigned short *suh,
+                                        const unsigned short *svh,
+                                        const float *input,
+                                        float *output,
+                                        double *compute_ms) {
+    if (opaque == NULL || trellis == NULL || suh == NULL || svh == NULL ||
+        input == NULL || output == NULL || compute_ms == NULL) return 1;
+    struct tf_qualcomm_backend *context = opaque;
+    struct tf_qualcomm_exl3_slot *slot = get_exl3_slot(context, slot_id, k, m, n, words);
+    if (slot == NULL) return 2;
+    const size_t trellis_bytes = (k / 16) * (m / 16) * words * sizeof(*trellis);
+    ggml_backend_tensor_set(slot->trellis, trellis, 0, trellis_bytes);
+    ggml_backend_tensor_set(slot->suh, suh, 0, k * sizeof(*suh));
+    ggml_backend_tensor_set(slot->svh, svh, 0, m * sizeof(*svh));
+    struct ggml_tensor *input_tensor = n == slot->batch_n ? slot->batch_input : slot->decode_input;
+    struct ggml_tensor *output_tensor = n == slot->batch_n ? slot->batch_output : slot->decode_output;
+    struct ggml_cgraph *graph = n == slot->batch_n ? slot->batch_graph : slot->decode_graph;
+    if (input_tensor == NULL || output_tensor == NULL || graph == NULL) return 3;
+    ggml_backend_tensor_set(input_tensor, input, 0, k * n * sizeof(*input));
+    const double started = monotonic_ms();
+    if (ggml_backend_graph_compute(context->backend, graph) != GGML_STATUS_SUCCESS) return 4;
+    const double stopped = monotonic_ms();
+    ggml_backend_tensor_get(output_tensor, output, 0, m * n * sizeof(*output));
+    *compute_ms = stopped - started;
+    return 0;
+}
+
 static struct tf_qualcomm_resident_group_variant *resident_group_dynamic(struct tf_qualcomm_resident_group_slot *slot,
                                                                          size_t n) {
     for (size_t i = 0; i < slot->dynamic_count; ++i) {

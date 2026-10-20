@@ -40,7 +40,7 @@ export interface LocalModel {
   minimumRamBytes: number
   installed: boolean
   fits: boolean
-  reason: 'insufficient-storage' | 'insufficient-memory' | null
+  reason: 'insufficient-storage' | 'insufficient-memory' | 'requires-snapdragon' | null
 }
 
 export interface LocalTransfer {

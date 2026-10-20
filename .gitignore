@@ -16,6 +16,11 @@ venv/
 .zig-cache/
 zig-out/
 zig-out-android-vulkan/
+.android-app-prefix/
+.moe-*.png
+.moe-*.xml
+.tf-final.xml
+
 
 # Native Qwen CPU-only Metal compiler receipts.
 .q27-metal-check/

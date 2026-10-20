@@ -34,7 +34,7 @@ required model and runtime working set. Building an installable no-op engine
 would misrepresent support; a separate remote-only TV companion is possible,
 but phone-local TensorFold is not.
 
-## Qualified model catalog
+## Pinned model catalog
 
 The APK accepts only catalog entries with fixed repository IDs, artifact byte counts, and SHA-256 values. It does not accept arbitrary repository names, paths, native code, or model configuration.
 
@@ -42,10 +42,11 @@ The APK accepts only catalog entries with fixed repository IDs, artifact byte co
 | --- | ---: | ---: | ---: | ---: |
 | Qwen3.5-2B EXL3 8.00 bpw | 3.45 GB | 8.23 GB | 11.68 GB | 8 GiB |
 | Qwen3.5-4B EXL3 4.00 bpw | 4.23 GB | 21.39 GB | 25.62 GB | 10 GiB |
+| Qwen3.5-35B-A3B EXL3 2.54 bpw | 13.05 GB | none | 13.05 GB | 14 GiB, Snapdragon only |
 
 Each download is HTTPS-only, bounded to approved Hugging Face delivery hosts, resumable into a `.part` file, size checked, SHA-256 checked, fsynced, and atomically renamed. Cancellation retains the partial file for a later resume. A 512 MiB safety reserve is kept beyond model and decoded-cache estimates. **Remove model files** deletes only the selected app-owned model and cache.
 
-First load constructs the decoded cache in private storage and can take substantially longer than later starts. The cache is content-bound to the admitted checkpoint. A model is never marked verified from file presence or repository naming alone.
+First load constructs a decoded cache for the dense 2B/4B profiles and can take substantially longer than later starts. The 35B-A3B profile never builds a decoded full-model cache: its 12.99 GB checkpoint stays packed, selected routed experts enter a bounded LRU, and all other EXL3 projections execute from packed bytes. Every cache and pager entry is content-bound to the admitted checkpoint. A model is never marked verified from file presence or repository naming alone.
 
 ## Local chat and benchmark
 
@@ -79,6 +80,23 @@ unauthenticated request to the same forwarded loopback port returned HTTP 401.
 Cancelling an in-flight 256-token generation stopped both native child
 processes while the activity remained alive and usable. Force-stopping the APK
 also removed its app-UID server process; no orphan remained.
+### 35B-A3B development status
+
+The Snapdragon-only 35B-A3B catalog entry is an experimental qualification
+path, not a supported speed profile. On Phone B, the app-owned worker executes
+the complete packed checkpoint with no decoded full-model cache. The current
+greedy comparison matches ExLlamaV3 for the first eight generated tokens of the
+real tokenizer input `hi`, including each ordered top five. A fixed regression
+test covers the routing-normalization defect found during that comparison.
+
+Output-tile parallelism across 16 CPU workers reduced the one-token elapsed time
+from 47.558 s to 13.872 s without changing the token or ordered top five. That
+is still far below the release performance gate. The 256-token parity suite,
+quality fixtures, thermal/lifecycle run and standard benchmark remain pending.
+The private qualification APK containing this path hashes
+`bfb4a34e11047e6c525e4848a67421451412cabf63a271504a8fc2e8820799b2`;
+it is not a public release artifact.
+
 
 The quick workload contract, run through that app-owned authenticated server,
 produced:
@@ -123,6 +141,7 @@ Pixel devices. The exact CPU path is therefore labelled
 - Model artifacts, decoded caches, logs, and verification markers stay below the app's private `filesDir`.
 - The native server binds only `127.0.0.1:8082`.
 - Android loopback is shared by applications, so binding to loopback alone is insufficient. Every app-owned server start receives a fresh random 256-bit bearer token. All routes, including health and metrics, reject requests without that token. The token is retained only inside the app process and is never returned to JavaScript or written to disk.
+- PwnHarness receives the current endpoint and bearer only through an exported read-only `ContentProvider` guarded by the explicit `LOCAL_INFERENCE` Android runtime permission. The provider returns no row unless the app-owned server is ready, and the grant does not weaken PwnHarness scope, approval, evidence, or STOP enforcement.
 - The app accepts readiness only from a server that proves authenticated, app-owned parent-death mode and the selected backend. A different process already using the port cannot be mistaken for TensorFold.
 - The server and worker inherit parent-death signals. Force-stopping or killing the app cannot leave its owned model processes running.
 - Cleartext networking is denied globally except for `localhost` and `127.0.0.1`. Remote companion traffic keeps its existing certificate-pinned HTTPS transport.
@@ -137,7 +156,7 @@ The reproducible Windows build entry point is:
 powershell -ExecutionPolicy Bypass -File tools/build_tensorfold_android_app.ps1 -Configuration debug
 ```
 
-It pins Vulkan-Headers `vulkan-sdk-1.4.335.0` at commit `2fa203425eb4af9dfc6b03f97ef72b0b5bcb8350`, builds the Android Vulkan and CPU libraries, builds the 2B/4B TensorFold engines and authenticated control plane, stages only the vendor-independent runtime, regenerates Android with Expo CNG, runs the local-runtime unit tests, and builds the APK.
+It pins Vulkan-Headers `vulkan-sdk-1.4.335.0` at commit `2fa203425eb4af9dfc6b03f97ef72b0b5bcb8350`, builds the Android Vulkan and CPU libraries, builds the dense 2B/4B engines, the paged 35B-A3B engine and the authenticated control plane, stages only the vendor-independent runtime, regenerates Android with Expo CNG, runs the local-runtime unit tests, and builds the APK.
 
 For a release artifact:
 

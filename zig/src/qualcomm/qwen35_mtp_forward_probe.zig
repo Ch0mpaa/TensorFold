@@ -2,7 +2,7 @@
 //! compare it with a scalar BF16-weight oracle over a short synthetic stream.
 
 const std = @import("std");
-const st = @import("safetensors");
+const st = @import("checkpoint");
 
 extern fn tf_qualcomm_monotonic_ms() f64;
 extern fn tf_qualcomm_backend_create(backend_name: [*:0]const u8, cpu_threads: i32) ?*anyopaque;
@@ -94,14 +94,14 @@ fn silu(x: f32) f32 {
     return x * sigmoid(x);
 }
 
-fn require(file: *const st.File, name: []const u8, dtype: st.DType, shape: []const usize) !st.Tensor {
-    const tensor = file.get(name) orelse return error.MissingTensor;
+fn require(file: *const st.Checkpoint, name: []const u8, dtype: st.DType, shape: []const usize) !st.Tensor {
+    const tensor = file.lookup(name) orelse return error.MissingTensor;
     if (!tensor.is(dtype, shape)) return error.UnexpectedTensor;
     return tensor;
 }
 
-pub fn validateMtp(file: *const st.File) !void {
-    if (file.names.count() != 15) return error.UnexpectedTensorCount;
+pub fn validateMtp(file: *const st.Checkpoint) !void {
+    if (file.count() != 15) return error.UnexpectedTensorCount;
     _ = try require(file, "mtp.fc.weight", .bf16, &.{ hidden, 2 * hidden });
     _ = try require(file, "mtp.layers.0.input_layernorm.weight", .bf16, &.{hidden});
     _ = try require(file, "mtp.layers.0.mlp.down_proj.weight", .bf16, &.{ hidden, intermediate });
@@ -119,7 +119,7 @@ pub fn validateMtp(file: *const st.File) !void {
     _ = try require(file, "mtp.pre_fc_norm_hidden.weight", .bf16, &.{hidden});
 }
 
-fn rmsNorm(file: *const st.File, name: []const u8, input: []const f32, output: []f32) !void {
+fn rmsNorm(file: *const st.Checkpoint, name: []const u8, input: []const f32, output: []f32) !void {
     const weight = try require(file, name, .bf16, &.{input.len});
     if (output.len != input.len) return error.UnexpectedTensor;
     var sum: f32 = 0;
@@ -128,7 +128,7 @@ fn rmsNorm(file: *const st.File, name: []const u8, input: []const f32, output: [
     for (output, 0..) |*out, i| out.* = roundF16(input[i] * inv * (value(weight, i) + 1.0));
 }
 
-fn headNorm(file: *const st.File, name: []const u8, input: []const f32, heads: usize, output: []f32) !void {
+fn headNorm(file: *const st.Checkpoint, name: []const u8, input: []const f32, heads: usize, output: []f32) !void {
     if (input.len != output.len or input.len % heads != 0) return error.UnexpectedTensor;
     const width = input.len / heads;
     const weight = try require(file, name, .bf16, &.{width});
@@ -197,7 +197,7 @@ pub const Cache = struct {
 
 pub const Runtime = struct {
     allocator: std.mem.Allocator,
-    file: *const st.File,
+    file: *const st.Checkpoint,
     backend: ?*anyopaque,
     loaded: [8]bool = @splat(false),
     projection_calls: usize = 0,
@@ -205,7 +205,7 @@ pub const Runtime = struct {
     projection_compute_ms: f64 = 0,
 
     fn projectHtp(self: *Runtime, matrix: Matrix, input: []const f32, output: []f32) !void {
-        const tensor = self.file.get(matrix.name()) orelse return error.MissingTensor;
+        const tensor = self.file.lookup(matrix.name()) orelse return error.MissingTensor;
         if (tensor.dtype != .bf16 or tensor.rank != 2) return error.UnexpectedTensor;
         const m = tensor.dim(0);
         const k = tensor.dim(1);
@@ -243,8 +243,8 @@ pub const Runtime = struct {
     }
 };
 
-fn projectCpu(file: *const st.File, matrix: Matrix, input: []const f32, output: []f32) !void {
-    const tensor = file.get(matrix.name()) orelse return error.MissingTensor;
+fn projectCpu(file: *const st.Checkpoint, matrix: Matrix, input: []const f32, output: []f32) !void {
+    const tensor = file.lookup(matrix.name()) orelse return error.MissingTensor;
     if (tensor.dtype != .bf16 or tensor.rank != 2) return error.UnexpectedTensor;
     const m = tensor.dim(0);
     const k = tensor.dim(1);
@@ -609,11 +609,11 @@ pub fn main(init: std.process.Init) !u8 {
         if (bytes.len != expected_bytes) return error.UnexpectedFixtureSize;
     }
 
-    var target = try st.File.open(init.gpa, init.io, args[2]);
-    defer target.close(init.io);
+    var target = try st.Checkpoint.openPath(init.gpa, init.io, args[2]);
+    defer target.close();
     const embedding = try require(&target, "model.language_model.embed_tokens.weight", .f16, &.{ vocab, hidden });
-    var mtp = try st.File.open(init.gpa, init.io, args[3]);
-    defer mtp.close(init.io);
+    var mtp = try st.Checkpoint.openPath(init.gpa, init.io, args[3]);
+    defer mtp.close();
     try validateMtp(&mtp);
     const backend = tf_qualcomm_backend_create(args[1].ptr, threads) orelse return error.BackendInitFailed;
     defer tf_qualcomm_backend_destroy(backend);

@@ -50,12 +50,12 @@ internal object RuntimeManager {
   private fun root(context: Context) = File(context.filesDir, "tensorfold")
   private fun modelsRoot(context: Context) = File(root(context), "models")
   private fun modelDir(context: Context, spec: LocalModelSpec) = File(modelsRoot(context), spec.id)
-  private fun cacheDir(context: Context, spec: LocalModelSpec) = File(root(context), "cache/${spec.weights.sha256.take(16)}")
+  private fun cacheDir(context: Context, spec: LocalModelSpec) = File(root(context), "cache/${spec.modelIdentitySha256.take(16)}")
   private fun marker(context: Context, spec: LocalModelSpec) = File(modelDir(context, spec), ".verified")
   private fun cacheMarker(context: Context, spec: LocalModelSpec) = File(cacheDir(context, spec), ".tensorfold-ready")
 
   private fun cacheReady(context: Context, spec: LocalModelSpec): Boolean =
-    cacheMarker(context, spec).takeIf { it.isFile }?.readText()?.trim() == spec.weights.sha256
+    spec.decodedCacheBytes == 0L || cacheMarker(context, spec).takeIf { it.isFile }?.readText()?.trim() == spec.modelIdentitySha256
 
   private fun newAuthToken(): String {
     val bytes = ByteArray(32)
@@ -63,8 +63,19 @@ internal object RuntimeManager {
     return bytes.joinToString("") { "%02x".format(it.toInt() and 0xff) }
   }
 
+  fun harnessSession(): Map<String, String>? = synchronized(lock) {
+    val token = authToken ?: return@synchronized null
+    if (engineState != "ready" || process?.isAlive != true) return@synchronized null
+    mapOf(
+      "endpoint" to "http://127.0.0.1:$PORT",
+      "bearer_token" to token,
+      "model_id" to (activeModel ?: ""),
+      "state" to engineState,
+    )
+  }
+
   private fun installed(context: Context, spec: LocalModelSpec): Boolean {
-    if (marker(context, spec).takeIf { it.isFile }?.readText()?.trim() != spec.weights.sha256) return false
+    if (marker(context, spec).takeIf { it.isFile }?.readText()?.trim() != spec.modelIdentitySha256) return false
     return spec.artifacts.all { File(modelDir(context, spec), it.name).let { file -> file.isFile && file.length() == it.bytes } }
   }
 
@@ -87,11 +98,14 @@ internal object RuntimeManager {
 
   fun models(context: Context): List<Map<String, Any?>> {
     val storage = StatFs(context.filesDir.absolutePath).availableBytes
-    val totalRam = (HardwareProbe.inspect(context)["totalRamBytes"] as Double).toLong()
+    val hardware = HardwareProbe.inspect(context)
+    val totalRam = (hardware["totalRamBytes"] as Double).toLong()
+    val platform = hardware["platform"] as String
     return ModelCatalog.all.map { spec ->
       val ready = installed(context, spec)
       val needed = storageNeeded(context, spec)
-      val fits = storage >= needed && totalRam >= spec.minimumRamBytes
+      val platformFits = !spec.qualcommOnly || platform == "qualcomm"
+      val fits = storage >= needed && totalRam >= spec.minimumRamBytes && platformFits
       linkedMapOf(
         "id" to spec.id,
         "repo" to spec.repo,
@@ -107,6 +121,7 @@ internal object RuntimeManager {
           ready -> null
           storage < needed -> "insufficient-storage"
           totalRam < spec.minimumRamBytes -> "insufficient-memory"
+          !platformFits -> "requires-snapdragon"
           else -> null
         },
       )
@@ -215,7 +230,7 @@ internal object RuntimeManager {
       val partial = File(directory, "${artifact.name}.part")
       if (partial.length() > artifact.bytes) partial.delete()
       var offset = partial.length()
-      openDownload(artifact.url(spec.repo), offset).use { response ->
+      openDownload(artifact.url(spec.repo, spec.revision), offset).use { response ->
         if (response.code == 416 && offset == artifact.bytes) {
           // A completed partial still receives a full hash check below.
         } else {
@@ -257,7 +272,7 @@ internal object RuntimeManager {
     }
     val temporary = File(directory, ".verified.tmp")
     FileOutputStream(temporary).use { output ->
-      output.write((spec.weights.sha256 + "\n").toByteArray(Charsets.US_ASCII))
+      output.write((spec.modelIdentitySha256 + "\n").toByteArray(Charsets.US_ASCII))
       output.fd.sync()
     }
     if (!temporary.renameTo(marker(context, spec))) throw IllegalStateException("Could not publish the model verification marker.")
@@ -267,24 +282,27 @@ internal object RuntimeManager {
   private fun publishCacheMarker(context: Context, spec: LocalModelSpec) {
     val temporary = File(cacheDir(context, spec), ".tensorfold-ready.tmp")
     FileOutputStream(temporary).use { output ->
-      output.write((spec.weights.sha256 + "\n").toByteArray(Charsets.US_ASCII))
+      output.write((spec.modelIdentitySha256 + "\n").toByteArray(Charsets.US_ASCII))
       output.fd.sync()
     }
     if (!temporary.renameTo(cacheMarker(context, spec))) throw IllegalStateException("Could not publish the decoded-cache verification marker.")
   }
 
+  private fun engineModelPath(context: Context, spec: LocalModelSpec): String =
+    if (spec.sharded) modelDir(context, spec).absolutePath else File(modelDir(context, spec), "model.safetensors").absolutePath
+
   private fun prepareCache(context: Context, spec: LocalModelSpec, engine: File, nativeDir: File, token: Long) {
-    if (cacheReady(context, spec)) return
+    if (spec.decodedCacheBytes == 0L || cacheReady(context, spec)) return
     val log = File(root(context), "server.log")
     if (log.length() > 2L shl 20) log.delete()
     val command = listOf(
       engine.absolutePath,
       "cpu",
-      File(modelDir(context, spec), "model.safetensors").absolutePath,
+      engineModelPath(context, spec),
       "0",
       "6",
       cacheDir(context, spec).absolutePath,
-      spec.weights.sha256,
+      spec.modelIdentitySha256,
       "1",
       "1",
       "prepare-cache",
@@ -327,6 +345,7 @@ internal object RuntimeManager {
     val hardware = HardwareProbe.inspect(app)
     val backend = hardware["backend"] as String
     if (backend == "unsupported") throw IllegalStateException("This phone does not provide the required arm64 runtime.")
+    if (spec.qualcommOnly && hardware["platform"] != "qualcomm") throw IllegalStateException("${spec.id} is qualified only on Snapdragon.")
     if ((hardware["totalRamBytes"] as Double).toLong() < spec.minimumRamBytes) throw IllegalStateException("This phone does not have enough system memory for ${spec.id}.")
     val cacheRemaining = (spec.decodedCacheBytes - cacheBytes(app, spec)).coerceAtLeast(0)
     val freeStorage = StatFs(app.filesDir.absolutePath).availableBytes
@@ -349,13 +368,13 @@ internal object RuntimeManager {
       try {
         if (!root(app).mkdirs() && !root(app).isDirectory) throw IllegalStateException("Could not create the private TensorFold directory.")
         if (!cacheDir(app, spec).mkdirs() && !cacheDir(app, spec).isDirectory) throw IllegalStateException("Could not create the private decoded-cache directory.")
-        prepareCache(app, spec, engine, nativeDir, token)
+        if (spec.decodedCacheBytes > 0) prepareCache(app, spec, engine, nativeDir, token)
         val command = listOf(
           server.absolutePath,
           engine.absolutePath,
-          File(modelDir(app, spec), "model.safetensors").absolutePath,
+          engineModelPath(app, spec),
           cacheDir(app, spec).absolutePath,
-          spec.weights.sha256,
+          spec.modelIdentitySha256,
           "none",
           modelDir(app, spec).absolutePath,
           nativeDir.absolutePath,

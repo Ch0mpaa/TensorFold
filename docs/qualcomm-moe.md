@@ -1,0 +1,141 @@
+# Qualcomm packed-direct MoE
+
+## Selected checkpoint
+
+The Qualcomm MoE target is
+`turboderp/Qwen3.5-35B-A3B-exl3@2.54bpw`, revision
+`af18e8ad45f4d529925bab859d79e163dc5abe60`.
+
+This is the boring fit-first choice:
+
+- Apache-2.0 Qwen3.5 model, 35B total parameters and about 3B active per token.
+- `qwen3_5_moe`: 40 text layers, hidden size 2,048, 256 routed experts,
+  top-8 routing, 512-wide routed and shared experts, three linear-attention
+  layers for each full-attention layer.
+- EXL3 2.54 bpw, `mcg` codebook, 6-bit head. The two weight shards total
+  12,987,659,758 bytes. The checkpoint remains packed on storage.
+- Native tool-call chat template and coding/agentic base make it a better
+  bounded PwnHarness candidate than a generic chat-only model.
+
+The 2.00/2.08/2.13 bpw revisions are smaller but are not the first target:
+quality headroom matters more than saving the final two to three GiB before a
+working pager exists. The 3.00 bpw revision is the fallback if 2.54 bpw fails
+the quality gate.
+
+## Execution contract
+
+TensorFold must not build a decoded full-model cache. It keeps embeddings,
+normalization, routers, attention/DeltaNet projections, the shared expert and
+output head resident in their packed representation. Routed expert trellises
+remain memory-mapped in the checkpoint. A bounded cache admits only selected
+expert pages.
+
+For each MoE layer:
+
+1. Compute router logits and stable top-8 selection.
+2. Group rows by expert without changing token order.
+3. Resolve the selected gate/up/down trellis spans through the expert-page
+   cache; one key is checkpoint digest, layer, expert, projection and EXL3
+   descriptor.
+4. Decode directly from packed EXL3 bytes into the projection operation.
+   Never materialize a whole expert matrix.
+5. Apply SwiGLU and combine weighted expert outputs in deterministic router
+   order, then add the resident shared expert.
+6. Release pins after the layer. Eviction is LRU among unpinned pages only.
+
+Cold misses use bounded `pread` into aligned app-owned buffers. Warm hits do no
+filesystem lookup or allocation. Cancellation ends pending reads and cannot
+publish a partial page. A page is usable only after its source span and
+checkpoint digest have been validated.
+
+## Admission gates
+
+A phone is admitted only when all gates pass:
+
+| Gate | Required result |
+| --- | --- |
+| Architecture | Exact Qwen3.5-MoE geometry above; text-only execution; unknown tensors or layouts refuse before inference. |
+| Checkpoint | Public revision, every artifact byte count and SHA-256 pinned; HTTPS-only resumable download; no local path publication. |
+| Storage | Packed artifacts plus 2 GiB reserve fit app-private storage; no decoded full-model cache. |
+| Memory | Peak app RSS at or below 12 GiB on the 16 GiB SM8750 reference phone; expert cache is explicitly bounded and reported. |
+| Exactness | Tokenizer parity; selected-expert IDs and weights match the reference; each EXL3 projection matches reconstruction bounds; frozen greedy token sequence matches ExLlamaV3 for 256 tokens on code, chat and tool prompts. |
+| Quality | 2.54 bpw must not regress below the existing 4B baseline on the versioned authorized-pentest, coding and tool-schema fixtures. If it does, use 3.00 bpw. |
+| Tools | Tool calls must parse under the existing strict schema; malformed, unknown or out-of-scope calls are refused. |
+| Safety | PwnHarness owns scope confirmation, approvals, evidence and STOP. TensorFold exposes no unrestricted Accessibility or shell automation. |
+| Thermal | Refuse new work at 43 C; sustained runs pause at the existing Qualcomm high/low bands and resume without changing tokens. |
+| Lifecycle | Cancellation, activity stop and force-stop leave no worker, open page pin or partial cache publication. |
+| Performance | Report prompt processing, delivery tok/s, TTFT, page-hit rate, storage reads, RSS and temperature. No speed claim until protocol-complete runs pass. |
+
+## Qualification order
+
+1. Parse and inspect both safetensor shards without loading tensor payloads.
+2. Qualify packed expert span lookup and deterministic page eviction on host
+   fixtures and the real checkpoint index.
+3. Qualify one real routed layer against ExLlamaV3.
+4. Add the complete text-only Qwen3.5-MoE forward path and frozen-token check.
+5. Add the checkpoint to the Android catalog only after fit, exactness,
+   quality, lifecycle and thermal gates pass on Phone B.
+6. Expose it to PwnHarness only after strict tool-call and STOP tests pass.
+
+## Pager qualification evidence
+
+`zig/src/qualcomm/exl3_expert_pager.zig` now indexes safetensor headers
+without mapping payloads and provides a bounded packed-tensor LRU with pinned
+leases, cancellation checks between 1 MiB positional reads, hit/miss/eviction
+accounting, and atomic publication after a complete read. Permanent tests cover
+real safetensor headers, no eviction of pinned entries, deterministic LRU
+eviction, hit reuse, and cancellation without partial publication.
+
+The Android inspector parsed the real 2.54 bpw revision's two shard headers on
+Phone B and admitted 123,360 routed and shared expert tensors totaling
+9,985,278,432 packed bytes. The inspector reads only headers; this result proves
+the real checkpoint's expert namespace and spans fit the pager contract, not
+model exactness or quality.
+
+## Full-forward and short-sequence evidence
+
+The packed-direct CPU path executes all 40 Qwen3.5-MoE layers from the two
+checkpoint shards on Phone B without a decoded full-model cache. Real
+checkpoint comparison against ExLlamaV3 exposed a routing defect: the first
+selected logit was overwritten before the remaining softmax numerators were
+computed. `moe_routing.normalizeTopK` now preserves the original maximum,
+rounds the published weights to FP16 like the reference, and has a permanent
+regression test.
+
+For the tokenizer ID of `hi` (`5834`), TensorFold and ExLlamaV3 now return the
+same eight-token greedy sequence:
+
+```text
+5834, 11, 353, 1144, 310, 1791, 264, 3779, 364
+```
+
+The ordered top five also matches at every observed step. The first step was:
+
+| Rank | ExLlamaV3 token | ExLlamaV3 logit | TensorFold token | TensorFold logit |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 11 | 12.6953125 | 11 | 12.693305 |
+| 2 | 1017 | 12.3671875 | 1017 | 12.356280 |
+| 3 | 585 | 11.7421875 | 585 | 11.748819 |
+| 4 | 0 | 11.6796875 | 0 | 11.671944 |
+| 5 | 13 | 11.4687500 | 13 | 11.471230 |
+
+Feeding ExLlamaV3's final normalized hidden state directly through TensorFold's
+packed `lm_head` reproduced the same ordered top five and near-identical logits.
+This isolates the output head from model-state debugging.
+
+Partitioning each packed projection by output tiles across 16 CPU workers keeps
+the same tokens and reduced the one-token Phone B elapsed time from 47,557.515
+ms to 13,872.030 ms. The packed projection portion fell from 47,212.067 ms to
+13,450.176 ms and the output head from 8,215.107 ms to 1,786.323 ms. This is a
+3.43x bring-up improvement, not a usable decode speed.
+
+The eight-token result is not the 256-token exactness gate. Full code, chat and
+tool fixtures, RSS, thermal/lifecycle qualification, quality evaluation and the
+standard community benchmark still must pass before support or speed claims.
+
+The Android app packages this path as `libtensorfold_engine_moe.so`, admits only
+the pinned Qwen3.5-35B-A3B geometry, keeps the model in app-private storage, and
+starts an authenticated loopback server under the app UID. PwnHarness reads the
+active endpoint, one-process bearer token, model ID and ready state only through
+an explicit Android runtime permission. It cannot select another checkpoint or
+bypass PwnHarness scope, approval, evidence or STOP controls.

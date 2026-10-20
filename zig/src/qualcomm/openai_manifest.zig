@@ -35,7 +35,7 @@ fn tokenizerSha256(a: Allocator, io: std.Io, dir: []const u8) ?[]const u8 {
 }
 
 pub fn send(conn: *Conn, a: Allocator, io: std.Io, model_path: []const u8, tokenizer_dir: []const u8, backend: []const u8) void {
-    const model_dir = std.fs.path.dirname(model_path) orelse "";
+    const model_dir = if (std.mem.endsWith(u8, model_path, ".safetensors")) std.fs.path.dirname(model_path) orelse "" else model_path;
     const config_path = std.fs.path.join(a, &.{ model_dir, "config.json" }) catch return;
     const config_sha = sha256File(a, io, config_path);
     const tokenizer_sha = tokenizerSha256(a, io, tokenizer_dir);

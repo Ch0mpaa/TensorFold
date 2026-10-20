@@ -191,6 +191,46 @@ pub fn build(b: *std.Build) void {
     const warning_run = b.addRunArtifact(warning);
     test_step.dependOn(&warning_run.step);
     b.step("test-learn-warning", "CPU production-log refusal, backoff and recovery test").dependOn(&warning_run.step);
+    const expert_pager_test = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/exl3_expert_pager.zig"),
+        .target = b.graph.host,
+        .optimize = .debug,
+        .link_libc = true,
+        .imports = &.{.{ .name = "checkpoint", .module = b.createModule(.{ .root_source_file = b.path("zig/src/core/checkpoint.zig"), .target = b.graph.host, .optimize = .debug, .link_libc = true }) }},
+    }) });
+    const expert_pager_run = b.addRunArtifact(expert_pager_test);
+    test_step.dependOn(&expert_pager_run.step);
+    b.step("test-qualcomm-expert-pager", "Bounded packed EXL3 expert paging tests").dependOn(&expert_pager_run.step);
+    const moe_routing_test = b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/moe_routing.zig"),
+        .target = b.graph.host,
+        .optimize = .debug,
+    }) }));
+    test_step.dependOn(&moe_routing_test.step);
+    b.step("test-qualcomm-moe-routing", "Qwen MoE top-k normalization regression tests").dependOn(&moe_routing_test.step);
+    const expert_pager_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/exl3_expert_pager.zig"),
+        .target = b.graph.host,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "checkpoint", .module = b.createModule(.{ .root_source_file = b.path("zig/src/core/checkpoint.zig"), .target = b.graph.host, .optimize = optimize, .link_libc = true }) }},
+    });
+    const expert_pager_inspect = b.addExecutable(.{ .name = "tensorfold-qualcomm-expert-pager-inspect", .root_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/exl3_expert_pager_inspect.zig"),
+        .target = b.graph.host,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "expert_pager", .module = expert_pager_module }},
+    }) });
+    b.step("qualcomm-expert-pager-inspect", "Build the packed EXL3 expert metadata inspector").dependOn(&b.addInstallArtifact(expert_pager_inspect, .{}).step);
+    const model_admission_test = b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/model_admission.zig"),
+        .target = b.graph.host,
+        .optimize = .debug,
+        .link_libc = true,
+    }) }));
+    test_step.dependOn(&model_admission_test.step);
+    b.step("test-qualcomm-model-admission", "Qualified Android model admission tests").dependOn(&model_admission_test.step);
     grammar_build.steps(b, target, xgrammar);
 }
 
@@ -218,6 +258,27 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
 
     const smoke_step = b.step("qualcomm-smoke", "Build the Android ARM64 Qualcomm bring-up binary");
     smoke_step.dependOn(&b.addInstallArtifact(smoke, .{}).step);
+
+    const android_pager_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/exl3_expert_pager.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "checkpoint", .module = b.createModule(.{ .root_source_file = b.path("zig/src/core/checkpoint.zig"), .target = target, .optimize = optimize, .link_libc = true }) }},
+    });
+    const android_pager_inspect = b.addExecutable(.{
+        .name = "tensorfold-qualcomm-expert-pager-inspect-android",
+        .linkage = .dynamic,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("zig/src/qualcomm/exl3_expert_pager_inspect.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{.{ .name = "expert_pager", .module = android_pager_module }},
+        }),
+    });
+    if (android_libc) |libc_file| android_pager_inspect.setLibCFile(.{ .cwd_relative = libc_file });
+    b.step("qualcomm-expert-pager-inspect-android", "Build the Android packed EXL3 expert metadata inspector").dependOn(&b.addInstallArtifact(android_pager_inspect, .{}).step);
 
     const probe = b.addExecutable(.{
         .name = "tensorfold-qualcomm-probe",
@@ -396,8 +457,8 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         .file = b.path("zig/src/qualcomm/ggml_bridge.c"),
         .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Werror", "-march=armv8.2-a+fp16" },
     });
-    qwen35_mtp_forward_probe_module.addImport("safetensors", b.createModule(.{
-        .root_source_file = b.path("zig/src/core/safetensors.zig"),
+    qwen35_mtp_forward_probe_module.addImport("checkpoint", b.createModule(.{
+        .root_source_file = b.path("zig/src/core/checkpoint.zig"),
         .target = target,
         .optimize = optimize,
     }));
@@ -432,7 +493,19 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     exl3_profile_2b.addOption(usize, "kv_heads", 2);
     exl3_profile_2b.addOption(usize, "attention_width", 256);
     exl3_profile_2b.addOption(usize, "rope_width", 64);
+    exl3_profile_2b.addOption(usize, "experts", 0);
+    exl3_profile_2b.addOption(usize, "top_k", 0);
+    exl3_profile_2b.addOption(usize, "shared_intermediate", 0);
+    exl3_profile_2b.addOption(bool, "tied_embeddings", true);
 
+    const exl3_checkpoint_2b = b.createModule(.{ .root_source_file = b.path("zig/src/core/checkpoint.zig"), .target = target, .optimize = optimize });
+    const exl3_pager_2b = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/exl3_expert_pager.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "checkpoint", .module = exl3_checkpoint_2b }},
+    });
     const exl3_forward_module = b.createModule(.{
         .root_source_file = b.path("zig/src/qualcomm/exl3_forward.zig"),
         .target = target,
@@ -448,11 +521,8 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         .target = target,
         .optimize = optimize,
     }));
-    exl3_forward_module.addImport("safetensors", b.createModule(.{
-        .root_source_file = b.path("zig/src/core/safetensors.zig"),
-        .target = target,
-        .optimize = optimize,
-    }));
+    exl3_forward_module.addImport("checkpoint", exl3_checkpoint_2b);
+    exl3_forward_module.addImport("expert_pager", exl3_pager_2b);
     exl3_forward_module.addOptions("model_profile", exl3_profile_2b);
     if (ggml_include) |include_path|
         exl3_forward_module.addIncludePath(.{ .cwd_relative = include_path });
@@ -488,7 +558,19 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     exl3_profile_4b.addOption(usize, "kv_heads", 4);
     exl3_profile_4b.addOption(usize, "attention_width", 256);
     exl3_profile_4b.addOption(usize, "rope_width", 64);
+    exl3_profile_4b.addOption(usize, "experts", 0);
+    exl3_profile_4b.addOption(usize, "top_k", 0);
+    exl3_profile_4b.addOption(usize, "shared_intermediate", 0);
+    exl3_profile_4b.addOption(bool, "tied_embeddings", true);
 
+    const exl3_checkpoint_4b = b.createModule(.{ .root_source_file = b.path("zig/src/core/checkpoint.zig"), .target = target, .optimize = optimize });
+    const exl3_pager_4b = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/exl3_expert_pager.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "checkpoint", .module = exl3_checkpoint_4b }},
+    });
     const exl3_forward_4b_module = b.createModule(.{
         .root_source_file = b.path("zig/src/qualcomm/exl3_forward.zig"),
         .target = target,
@@ -504,11 +586,8 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         .target = target,
         .optimize = optimize,
     }));
-    exl3_forward_4b_module.addImport("safetensors", b.createModule(.{
-        .root_source_file = b.path("zig/src/core/safetensors.zig"),
-        .target = target,
-        .optimize = optimize,
-    }));
+    exl3_forward_4b_module.addImport("checkpoint", exl3_checkpoint_4b);
+    exl3_forward_4b_module.addImport("expert_pager", exl3_pager_4b);
     exl3_forward_4b_module.addOptions("model_profile", exl3_profile_4b);
     if (ggml_include) |include_path|
         exl3_forward_4b_module.addIncludePath(.{ .cwd_relative = include_path });
@@ -529,6 +608,60 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         exl3_forward_4b.setLibCFile(.{ .cwd_relative = libc_file });
     const exl3_forward_4b_step = b.step("qualcomm-exl3-forward-4b", "Build the Android autoregressive Qwen3.5-4B EXL3 forward path");
     exl3_forward_4b_step.dependOn(&b.addInstallArtifact(exl3_forward_4b, .{}).step);
+
+    const exl3_profile_moe = b.addOptions();
+    exl3_profile_moe.addOption([]const u8, "name", "qwen3.5-35b-a3b");
+    exl3_profile_moe.addOption(usize, "hidden", 2048);
+    exl3_profile_moe.addOption(usize, "intermediate", 512);
+    exl3_profile_moe.addOption(usize, "layers", 40);
+    exl3_profile_moe.addOption(usize, "vocab", 248320);
+    exl3_profile_moe.addOption(usize, "linear_key_heads", 16);
+    exl3_profile_moe.addOption(usize, "linear_value_heads", 32);
+    exl3_profile_moe.addOption(usize, "linear_key_width", 128);
+    exl3_profile_moe.addOption(usize, "linear_value_width", 128);
+    exl3_profile_moe.addOption(usize, "attention_heads", 16);
+    exl3_profile_moe.addOption(usize, "kv_heads", 2);
+    exl3_profile_moe.addOption(usize, "attention_width", 256);
+    exl3_profile_moe.addOption(usize, "rope_width", 64);
+    exl3_profile_moe.addOption(usize, "experts", 256);
+    exl3_profile_moe.addOption(usize, "top_k", 8);
+    exl3_profile_moe.addOption(usize, "shared_intermediate", 512);
+    exl3_profile_moe.addOption(bool, "tied_embeddings", false);
+    const exl3_checkpoint_moe = b.createModule(.{ .root_source_file = b.path("zig/src/core/checkpoint.zig"), .target = target, .optimize = optimize });
+    const exl3_pager_moe = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/exl3_expert_pager.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "checkpoint", .module = exl3_checkpoint_moe }},
+    });
+    const exl3_forward_moe_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/exl3_forward.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "checkpoint", .module = exl3_checkpoint_moe },
+            .{ .name = "expert_pager", .module = exl3_pager_moe },
+            .{ .name = "exl3_format", .module = b.createModule(.{ .root_source_file = b.path("zig/src/core/exl3_format.zig"), .target = target, .optimize = optimize }) },
+        },
+    });
+    exl3_forward_moe_module.addCSourceFile(.{ .file = b.path("zig/src/qualcomm/ggml_bridge.c"), .flags = bridge_c_flags });
+    exl3_forward_moe_module.addOptions("model_profile", exl3_profile_moe);
+    if (ggml_include) |include_path| exl3_forward_moe_module.addIncludePath(.{ .cwd_relative = include_path });
+    if (ggml_lib) |lib_path| {
+        exl3_forward_moe_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-base.so" }) });
+        exl3_forward_moe_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-cpu.so" }) });
+        if (ggml_vulkan_lib == null) exl3_forward_moe_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-hexagon.so" }) });
+    }
+    if (ggml_vulkan_lib) |lib_path| exl3_forward_moe_module.addObjectFile(.{ .cwd_relative = b.pathJoin(&.{ lib_path, "libggml-vulkan.so" }) });
+    const exl3_forward_moe = b.addExecutable(.{
+        .name = "tensorfold-qualcomm-exl3-forward-35b-a3b",
+        .linkage = .dynamic,
+        .root_module = exl3_forward_moe_module,
+    });
+    if (android_libc) |libc_file| exl3_forward_moe.setLibCFile(.{ .cwd_relative = libc_file });
+    b.step("qualcomm-exl3-forward-35b-a3b", "Build the Android paged Qwen3.5-35B-A3B EXL3 forward path").dependOn(&b.addInstallArtifact(exl3_forward_moe, .{}).step);
 
     const qualcomm_tokenizer = b.createModule(.{
         .root_source_file = b.path("zig/src/core/tokenizer/tokenizer.zig"),

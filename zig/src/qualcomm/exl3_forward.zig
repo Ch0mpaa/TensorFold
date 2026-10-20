@@ -6,9 +6,11 @@
 
 const std = @import("std");
 const exl3 = @import("exl3_format");
-const st = @import("safetensors");
+const st = @import("checkpoint");
+const expert_pager = @import("expert_pager");
 const profile = @import("model_profile");
 const mtp = @import("qwen35_mtp_forward_probe.zig");
+const moe_routing = @import("moe_routing.zig");
 
 extern fn tf_qualcomm_monotonic_ms() f64;
 extern fn tf_qualcomm_peak_rss_kib() usize;
@@ -135,6 +137,20 @@ extern fn tf_qualcomm_backend_exl3_resident_once(
     output: [*]f32,
     compute_ms: *f64,
     weight_uploaded: *c_int,
+) c_int;
+extern fn tf_qualcomm_backend_exl3_paged_once(
+    context: ?*anyopaque,
+    slot_id: usize,
+    k: usize,
+    m: usize,
+    n: usize,
+    words: usize,
+    trellis: [*]const u16,
+    suh: [*]const u16,
+    svh: [*]const u16,
+    input: [*]const f32,
+    output: [*]f32,
+    compute_ms: *f64,
 ) c_int;
 extern fn tf_qualcomm_backend_matmul_f16_resident_group_once(
     context: ?*anyopaque,
@@ -330,6 +346,9 @@ const hidden = profile.hidden;
 const intermediate = profile.intermediate;
 const layers = profile.layers;
 const vocab = profile.vocab;
+const experts = profile.experts;
+const top_k = profile.top_k;
+const shared_intermediate = profile.shared_intermediate;
 const max_worker_prompt_tokens = 512;
 const eps: f32 = 1e-6;
 const linear_key_heads = profile.linear_key_heads;
@@ -377,6 +396,11 @@ fn value(tensor: st.Tensor, index: usize) f32 {
 }
 
 fn roundF16(x: f32) f32 {
+    if (comptime experts > 0) return roundBF16(x);
+    const h: f16 = @floatCast(x);
+    return @floatCast(h);
+}
+fn quantizeF16(x: f32) f32 {
     const h: f16 = @floatCast(x);
     return @floatCast(h);
 }
@@ -471,8 +495,8 @@ fn ropeTables(position: usize) void {
     }
 }
 
-fn require(file: *const st.File, name: []const u8, dtype: st.DType, shape: []const usize) !st.Tensor {
-    const tensor = file.get(name) orelse return error.MissingTensor;
+fn require(file: *const st.Checkpoint, name: []const u8, dtype: st.DType, shape: []const usize) !st.Tensor {
+    const tensor = file.lookup(name) orelse return error.MissingTensor;
     if (!tensor.is(dtype, shape)) return error.UnexpectedTensor;
     return tensor;
 }
@@ -481,10 +505,97 @@ fn tensorName(buffer: []u8, comptime format: []const u8, args: anytype) ![]const
     return std.fmt.bufPrint(buffer, format, args);
 }
 
+const PackedCpuTask = struct {
+    trellis: []const i16,
+    rotated_input: []const f32,
+    output: []f32,
+    k: usize,
+    m: usize,
+    words: usize,
+    rows: usize,
+    tile_m_start: usize,
+    tile_m_end: usize,
+};
+
+fn packedCpuProjectRange(task: *const PackedCpuTask) void {
+    var placement: [256]exl3.Placement = undefined;
+    exl3.tilePlacement(&placement);
+    const width: exl3.Width = .{ .halves = @intCast(task.words / 8) };
+    const tiles_k = task.k / 16;
+    const tiles_m = task.m / 16;
+    for (task.tile_m_start..task.tile_m_end) |tile_m| for (0..tiles_k) |tile_k| {
+        const tile = task.trellis[(tile_k * tiles_m + tile_m) * task.words ..][0..task.words];
+        var states: [256]u32 = undefined;
+        exl3.tileStates(width, tile, &states);
+        for (states, placement) |state, place| {
+            const inner = tile_k * 16 + place.row;
+            const column = tile_m * 16 + place.col;
+            const weight: f32 = @floatCast(exl3.codebookValue(.mcg, @intCast(state)));
+            for (0..task.rows) |row| {
+                task.output[row * task.m + column] += task.rotated_input[row * task.k + inner] * weight;
+            }
+        }
+    };
+}
+
+fn packedCpuProject(
+    allocator: std.mem.Allocator,
+    trellis_bytes: []const u8,
+    suh_bytes: []const u8,
+    svh_bytes: []const u8,
+    k: usize,
+    m: usize,
+    words: usize,
+    input: []const f32,
+    output: []f32,
+    cpu_threads: usize,
+) !void {
+    if (k % exl3.hadamard_dim != 0 or m % exl3.hadamard_dim != 0 or
+        trellis_bytes.len != (k / 16) * (m / 16) * words * @sizeOf(i16) or
+        suh_bytes.len != k * @sizeOf(f16) or svh_bytes.len != m * @sizeOf(f16) or
+        input.len == 0 or input.len % k != 0 or output.len != (input.len / k) * m) return error.UnexpectedTensor;
+    const rows = input.len / k;
+    const rotated_input = try allocator.alloc(f32, input.len);
+    defer allocator.free(rotated_input);
+    for (rotated_input, input, 0..) |*out, x, i| out.* = x * f16Value(suh_bytes, i % k);
+    exl3.rotateFastF32(rotated_input, rows, k, 1);
+    @memset(output, 0);
+    const trellis: []const i16 = @as([*]const i16, @ptrCast(@alignCast(trellis_bytes.ptr)))[0 .. trellis_bytes.len / @sizeOf(i16)];
+    const tiles_m = m / 16;
+    const thread_count = @min(@min(cpu_threads, tiles_m), 16);
+    if (thread_count == 0) return error.InvalidArgument;
+    var tasks: [16]PackedCpuTask = undefined;
+    var worker_threads: [15]?std.Thread = @splat(null);
+    var spawned: usize = 0;
+    errdefer for (worker_threads[0..spawned]) |thread| thread.?.join();
+    for (0..thread_count) |thread_index| {
+        tasks[thread_index] = .{
+            .trellis = trellis,
+            .rotated_input = rotated_input,
+            .output = output,
+            .k = k,
+            .m = m,
+            .words = words,
+            .rows = rows,
+            .tile_m_start = tiles_m * thread_index / thread_count,
+            .tile_m_end = tiles_m * (thread_index + 1) / thread_count,
+        };
+        if (thread_index != 0) {
+            worker_threads[thread_index - 1] = try std.Thread.spawn(.{}, packedCpuProjectRange, .{&tasks[thread_index]});
+            spawned += 1;
+        }
+    }
+    packedCpuProjectRange(&tasks[0]);
+    for (worker_threads[0..spawned]) |thread| thread.?.join();
+    exl3.rotateFastF32(output, rows, m, 1);
+    for (output, 0..) |*out, i| out.* *= f16Value(svh_bytes, i % m);
+}
+
 const Runner = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
-    file: *const st.File,
+    file: *const st.Checkpoint,
+    backend_is_cpu: bool,
     backend: ?*anyopaque,
     cpu_threads: usize,
     use_f16_weights: bool = false,
@@ -510,6 +621,7 @@ const Runner = struct {
     fast_activations: bool = false,
     cache_dir: ?[]const u8 = null,
     cache_model_id: ?[]const u8 = null,
+    expert_cache: ?*expert_pager.Pager = null,
     projection_count: usize = 0,
     projection_ms: f64 = 0,
     projection_wall_ms: f64 = 0,
@@ -661,7 +773,7 @@ const Runner = struct {
 
     fn residentProjection(self: *Runner, base: []const u8) !ResidentProjection {
         var name_buffer: [256]u8 = undefined;
-        const trellis_tensor = self.file.get(try tensorName(&name_buffer, "{s}.trellis", .{base})) orelse return error.MissingTensor;
+        const trellis_tensor = self.file.lookup(try tensorName(&name_buffer, "{s}.trellis", .{base})) orelse return error.MissingTensor;
         if (trellis_tensor.dtype != .i16 or trellis_tensor.rank != 3) return error.UnexpectedTensor;
         const tiles_k = trellis_tensor.dim(0);
         const tiles_m = trellis_tensor.dim(1);
@@ -675,7 +787,7 @@ const Runner = struct {
 
     fn residentProjectionF32(self: *Runner, base: []const u8) !ResidentProjection {
         var name_buffer: [256]u8 = undefined;
-        const trellis_tensor = self.file.get(try tensorName(&name_buffer, "{s}.trellis", .{base})) orelse return error.MissingTensor;
+        const trellis_tensor = self.file.lookup(try tensorName(&name_buffer, "{s}.trellis", .{base})) orelse return error.MissingTensor;
         if (trellis_tensor.dtype != .i16 or trellis_tensor.rank != 3) return error.UnexpectedTensor;
         const k = trellis_tensor.dim(0) * 16;
         const m = trellis_tensor.dim(1) * 16;
@@ -1284,7 +1396,7 @@ const Runner = struct {
             gate_loaded = try self.loadCached(gate.key, gate.k, gate.m) orelse return error.MissingResidentWeight;
             up_loaded = try self.loadCached(up.key, up.k, up.m) orelse return error.MissingResidentWeight;
             down_loaded = try self.loadCached(down.key, down.k, down.m) orelse return error.MissingResidentWeight;
-            const norm = self.file.get(post_norm_name) orelse return error.MissingTensor;
+            const norm = self.file.lookup(post_norm_name) orelse return error.MissingTensor;
             if ((norm.dtype != .f16 and norm.dtype != .bf16 and norm.dtype != .f32) or norm.rank != 1 or norm.dim(0) != hidden) return error.UnexpectedTensor;
             const values = try self.allocator.alloc(f32, hidden);
             for (values, 0..) |*x, i| x.* = value(norm, i) + 1.0;
@@ -1394,7 +1506,7 @@ const Runner = struct {
             const linear_values = try self.allocator.alloc(f32, linear_value_width);
             for (linear_values, 0..) |*x, i| x.* = value(linear_norm, i);
             linear_norm_values = linear_values;
-            const post_norm = self.file.get(post_norm_name) orelse return error.MissingTensor;
+            const post_norm = self.file.lookup(post_norm_name) orelse return error.MissingTensor;
             if ((post_norm.dtype != .f16 and post_norm.dtype != .bf16 and post_norm.dtype != .f32) or post_norm.rank != 1 or post_norm.dim(0) != hidden) return error.UnexpectedTensor;
             const post_values = try self.allocator.alloc(f32, hidden);
             for (post_values, 0..) |*x, i| x.* = value(post_norm, i) + 1.0;
@@ -1495,7 +1607,7 @@ const Runner = struct {
 
     fn project(self: *Runner, base: []const u8, input: []const f32, output: []f32) !void {
         var name_buffer: [256]u8 = undefined;
-        const trellis_tensor = self.file.get(try tensorName(&name_buffer, "{s}.trellis", .{base})) orelse return error.MissingTensor;
+        const trellis_tensor = self.file.lookup(try tensorName(&name_buffer, "{s}.trellis", .{base})) orelse return error.MissingTensor;
         if (trellis_tensor.dtype != .i16 or trellis_tensor.rank != 3) return error.UnexpectedTensor;
         const tiles_k = trellis_tensor.dim(0);
         const tiles_m = trellis_tensor.dim(1);
@@ -1511,6 +1623,18 @@ const Runner = struct {
         if (std.mem.readInt(u32, mcg_tensor.bytes[0..4], .little) != exl3.McgMul) return error.UnexpectedCodebook;
 
         if (self.use_packed_exl3) {
+            if (self.backend_is_cpu) {
+                const started = tf_qualcomm_monotonic_ms();
+                try packedCpuProject(self.allocator, trellis_tensor.bytes, suh_tensor.bytes, svh_tensor.bytes, k, m, words, input, output, self.cpu_threads);
+                const elapsed = tf_qualcomm_monotonic_ms() - started;
+                self.projection_ms += elapsed;
+                self.projection_wall_ms += elapsed;
+                self.projection_count += 1;
+                self.resident_slot_cursor += 1;
+                self.resident_weight_uploads += 1;
+                self.resident_weight_bytes_uploaded += trellis_tensor.bytes.len + suh_tensor.bytes.len + svh_tensor.bytes.len;
+                return;
+            }
             const slot = self.resident_slot_cursor;
             var compute_ms: f64 = 0;
             var uploaded: c_int = 0;
@@ -1620,6 +1744,62 @@ const Runner = struct {
             try self.runDecodedWeight(k, m, weight, input, output, q4_quant);
         }
     }
+
+    fn projectPaged(self: *Runner, base: []const u8, input: []const f32, output: []f32) !void {
+        const cache = self.expert_cache orelse return error.MissingExpertPager;
+        var trellis_name_buf: [256]u8 = undefined;
+        var suh_name_buf: [256]u8 = undefined;
+        var svh_name_buf: [256]u8 = undefined;
+        var mcg_name_buf: [256]u8 = undefined;
+        const trellis_name = try tensorName(&trellis_name_buf, "{s}.trellis", .{base});
+        const suh_name = try tensorName(&suh_name_buf, "{s}.suh", .{base});
+        const svh_name = try tensorName(&svh_name_buf, "{s}.svh", .{base});
+        const mcg_name = try tensorName(&mcg_name_buf, "{s}.mcg", .{base});
+        const trellis_span = cache.catalog.get(trellis_name) orelse return error.MissingTensor;
+        const suh_span = cache.catalog.get(suh_name) orelse return error.MissingTensor;
+        const svh_span = cache.catalog.get(svh_name) orelse return error.MissingTensor;
+        if (trellis_span.dtype != .i16 or trellis_span.rank != 3 or suh_span.dtype != .f16 or svh_span.dtype != .f16) return error.UnexpectedTensor;
+        const tiles_k = trellis_span.shape[0];
+        const tiles_m = trellis_span.shape[1];
+        const words = trellis_span.shape[2];
+        const k = tiles_k * 16;
+        const m = tiles_m * 16;
+        if (words % 8 != 0 or suh_span.rank != 1 or svh_span.rank != 1 or suh_span.shape[0] != k or svh_span.shape[0] != m or input.len == 0 or input.len % k != 0 or output.len != m * (input.len / k)) return error.UnexpectedTensor;
+
+        var mcg_lease = try cache.acquire(mcg_name, null);
+        defer mcg_lease.release();
+        if (mcg_lease.data().len != 4 or std.mem.readInt(u32, mcg_lease.data()[0..4], .little) != exl3.McgMul) return error.UnexpectedCodebook;
+        var trellis_lease = try cache.acquire(trellis_name, null);
+        defer trellis_lease.release();
+        var suh_lease = try cache.acquire(suh_name, null);
+        defer suh_lease.release();
+        var svh_lease = try cache.acquire(svh_name, null);
+        defer svh_lease.release();
+        if (self.backend_is_cpu) {
+            const started = tf_qualcomm_monotonic_ms();
+            try packedCpuProject(self.allocator, trellis_lease.data(), suh_lease.data(), svh_lease.data(), k, m, words, input, output, self.cpu_threads);
+            const elapsed = tf_qualcomm_monotonic_ms() - started;
+            self.projection_ms += elapsed;
+            self.projection_wall_ms += elapsed;
+            self.projection_count += 1;
+            self.resident_weight_uploads += 1;
+            self.resident_weight_bytes_uploaded += trellis_lease.data().len + suh_lease.data().len + svh_lease.data().len;
+            return;
+        }
+        const trellis_ptr: [*]const u16 = @ptrCast(@alignCast(trellis_lease.data().ptr));
+        const suh_ptr: [*]const u16 = @ptrCast(@alignCast(suh_lease.data().ptr));
+        const svh_ptr: [*]const u16 = @ptrCast(@alignCast(svh_lease.data().ptr));
+        const slot: usize = if (k == hidden) 254 else 255;
+        var compute_ms: f64 = 0;
+        const started = tf_qualcomm_monotonic_ms();
+        const status = tf_qualcomm_backend_exl3_paged_once(self.backend, slot, k, m, input.len / k, words, trellis_ptr, suh_ptr, svh_ptr, input.ptr, output.ptr, &compute_ms);
+        self.projection_wall_ms += tf_qualcomm_monotonic_ms() - started;
+        if (status != 0) return error.BridgeFailed;
+        self.projection_ms += compute_ms;
+        self.projection_count += 1;
+        self.resident_weight_uploads += 1;
+        self.resident_weight_bytes_uploaded += trellis_lease.data().len + suh_lease.data().len + svh_lease.data().len;
+    }
 };
 
 var prof_gdn: f64 = 0;
@@ -1630,10 +1810,14 @@ var prof_fa: f64 = 0;
 var prof_on = false;
 
 fn denseBatched(runner: *Runner, name: []const u8, input: []const f32, output: []f32) !void {
-    const tensor = runner.file.get(name) orelse return error.MissingTensor;
+    const tensor = runner.file.lookup(name) orelse return error.MissingTensor;
     const count = input.len / hidden;
-    if (tensor.dtype != .f16 or tensor.rank != 2 or tensor.dim(0) != output.len / count or tensor.dim(1) != hidden) return error.UnexpectedTensor;
+    if ((tensor.dtype != .f16 and tensor.dtype != .bf16 and tensor.dtype != .f32) or tensor.rank != 2 or tensor.dim(0) != output.len / count or tensor.dim(1) != hidden) return error.UnexpectedTensor;
     const out_w = tensor.dim(0);
+    if (tensor.dtype != .f16) {
+        for (0..count) |row| try denseVector(runner.file, name, input[row * hidden ..][0..hidden], output[row * out_w ..][0..out_w]);
+        return;
+    }
     const words: [*]const u16 = @ptrCast(@alignCast(tensor.bytes.ptr));
     var j: usize = 0;
     while (j < out_w) : (j += 1) {
@@ -1659,9 +1843,9 @@ fn denseBatched(runner: *Runner, name: []const u8, input: []const f32, output: [
 }
 
 fn dense(runner: *Runner, name: []const u8, input: []const f32, output: []f32) !void {
-    const tensor = runner.file.get(name) orelse return error.MissingTensor;
-    if (tensor.dtype != .f16 or tensor.rank != 2 or tensor.dim(0) != output.len or tensor.dim(1) != input.len) return error.UnexpectedTensor;
-    if (runner.use_resident_weights) {
+    const tensor = runner.file.lookup(name) orelse return error.MissingTensor;
+    if ((tensor.dtype != .f16 and tensor.dtype != .bf16 and tensor.dtype != .f32) or tensor.rank != 2 or tensor.dim(0) != output.len or tensor.dim(1) != input.len) return error.UnexpectedTensor;
+    if (runner.use_resident_weights and tensor.dtype == .f16) {
         const t0 = if (prof_on) tf_qualcomm_monotonic_ms() else 0;
         const words: [*]const u16 = @ptrCast(@alignCast(tensor.bytes.ptr));
         tf_qualcomm_dense_f16(words, input.ptr, output.ptr, output.len, input.len);
@@ -1670,22 +1854,22 @@ fn dense(runner: *Runner, name: []const u8, input: []const f32, output: []f32) !
     }
     for (output, 0..) |*out, row| {
         var sum: f32 = 0;
-        for (input, 0..) |x, col| sum += f16Value(tensor.bytes, row * input.len + col) * x;
+        for (input, 0..) |x, col| sum += value(tensor, row * input.len + col) * x;
         out.* = sum;
     }
 }
 
-fn rmsNorm(file: *const st.File, name: []const u8, input: []const f32, output: []f32, constant_bias: f32) !void {
-    const tensor = file.get(name) orelse return error.MissingTensor;
+fn rmsNorm(file: *const st.Checkpoint, name: []const u8, input: []const f32, output: []f32, constant_bias: f32) !void {
+    const tensor = file.lookup(name) orelse return error.MissingTensor;
     if ((tensor.dtype != .f16 and tensor.dtype != .bf16 and tensor.dtype != .f32) or tensor.rank != 1 or tensor.dim(0) != input.len or output.len != input.len) return error.UnexpectedTensor;
     var sum: f32 = 0;
     for (input) |x| sum += x * x;
     const inv = 1.0 / @sqrt(sum / @as(f32, @floatFromInt(input.len)) + eps);
-    for (output, 0..) |*out, i| out.* = roundF16(input[i] * inv * (value(tensor, i) + constant_bias));
+    for (output, 0..) |*out, i| out.* = quantizeF16(input[i] * inv * (value(tensor, i) + constant_bias));
 }
 
 fn residualAdd(hidden_state: []f32, update: []const f32) void {
-    for (hidden_state, update) |*h, u| h.* = roundF16(h.* + u);
+    for (hidden_state, update) |*h, u| h.* += u;
 }
 
 const DecodeState = struct {
@@ -2261,8 +2445,8 @@ fn linearAttentionBatch(runner: *Runner, decode: *DecodeState, layer: usize, inp
     } else try runner.project(try tensorName(&projection_buffer, "{s}.out_proj", .{base}), gated, output);
 }
 
-fn headNorm(file: *const st.File, name: []const u8, input: []const f32, heads: usize, output: []f32) !void {
-    const tensor = file.get(name) orelse return error.MissingTensor;
+fn headNorm(file: *const st.Checkpoint, name: []const u8, input: []const f32, heads: usize, output: []f32) !void {
+    const tensor = file.lookup(name) orelse return error.MissingTensor;
     const width = input.len / heads;
     if (input.len != output.len or width != attention_width or tensor.dtype != .bf16 or !tensor.is(.bf16, &.{width})) return error.UnexpectedTensor;
     for (0..heads) |head| {
@@ -2523,7 +2707,131 @@ fn fullAttentionBatch(runner: *Runner, decode: *DecodeState, layer: usize, start
     } else try runner.project(try tensorName(&projection_buffer, "{s}.o_proj", .{base}), attended, output);
 }
 
+fn denseVector(file: *const st.Checkpoint, name: []const u8, input: []const f32, output: []f32) !void {
+    const tensor = file.lookup(name) orelse return error.MissingTensor;
+    if ((tensor.dtype != .f16 and tensor.dtype != .bf16 and tensor.dtype != .f32) or tensor.rank != 2 or tensor.dim(0) != output.len or tensor.dim(1) != input.len) return error.UnexpectedTensor;
+    for (output, 0..) |*out, row| {
+        var sum: f32 = 0;
+        for (input, 0..) |x, col| sum += x * value(tensor, row * input.len + col);
+        out.* = sum;
+    }
+}
+
+fn moeMlpBatch(runner: *Runner, layer: usize, input: []const f32, output: []f32) !void {
+    if (comptime experts == 0 or top_k == 0 or shared_intermediate == 0) return error.NotMoeProfile;
+    if (input.len == 0 or input.len % hidden != 0 or output.len != input.len) return error.UnexpectedTensor;
+    const count = input.len / hidden;
+    const allocator = runner.allocator;
+    @memset(output, 0);
+
+    var router_name_buf: [256]u8 = undefined;
+    var shared_gate_name_buf: [256]u8 = undefined;
+    const router_name = try tensorName(&router_name_buf, "{s}.layers.{d}.mlp.gate.weight", .{ prefix, layer });
+    const shared_gate_name = try tensorName(&shared_gate_name_buf, "{s}.layers.{d}.mlp.shared_expert_gate.weight", .{ prefix, layer });
+    const router_logits = try allocator.alloc(f32, count * experts);
+    for (0..count) |row| try denseVector(runner.file, router_name, input[row * hidden ..][0..hidden], router_logits[row * experts ..][0..experts]);
+    for (router_logits) |*logit| logit.* = quantizeF16(logit.*);
+    const route_ids = try allocator.alloc(usize, count * top_k);
+    const route_weights = try allocator.alloc(f32, count * top_k);
+    for (0..count) |row| {
+        const logits = router_logits[row * experts ..][0..experts];
+        const ids = route_ids[row * top_k ..][0..top_k];
+        const weights = route_weights[row * top_k ..][0..top_k];
+        @memset(ids, 0);
+        @memset(weights, -std.math.inf(f32));
+        for (logits, 0..) |logit, expert| {
+            if (logit < weights[top_k - 1]) continue;
+            weights[top_k - 1] = logit;
+            ids[top_k - 1] = expert;
+            var at = top_k - 1;
+            while (at > 0 and (weights[at] > weights[at - 1] or
+                (weights[at] == weights[at - 1] and ids[at] < ids[at - 1]))) : (at -= 1)
+            {
+                std.mem.swap(f32, &weights[at], &weights[at - 1]);
+                std.mem.swap(usize, &ids[at], &ids[at - 1]);
+            }
+        }
+        try moe_routing.normalizeTopK(weights);
+    }
+
+    // Group all rows routed to the same expert. A packed tensor is paged and
+    // decoded once per expert per layer instead of once per token. Contributions
+    // stay in route slots so the final accumulation order remains identical to
+    // the scalar reference.
+    const contributions = try allocator.alloc(f32, count * top_k * hidden);
+    @memset(contributions, 0);
+    const expert_rows = try allocator.alloc(usize, count);
+    const expert_routes = try allocator.alloc(usize, count);
+    const expert_input = try allocator.alloc(f32, count * hidden);
+    const expert_gate = try allocator.alloc(f32, count * intermediate);
+    const expert_up = try allocator.alloc(f32, count * intermediate);
+    const expert_activated = try allocator.alloc(f32, count * intermediate);
+    const expert_down = try allocator.alloc(f32, count * hidden);
+    for (0..experts) |expert| {
+        var routed_count: usize = 0;
+        for (0..count) |row| for (0..top_k) |route| {
+            if (route_ids[row * top_k + route] != expert) continue;
+            expert_rows[routed_count] = row;
+            expert_routes[routed_count] = route;
+            @memcpy(expert_input[routed_count * hidden ..][0..hidden], input[row * hidden ..][0..hidden]);
+            routed_count += 1;
+        };
+        if (routed_count == 0) continue;
+
+        var gate_name_buf: [256]u8 = undefined;
+        var up_name_buf: [256]u8 = undefined;
+        var down_name_buf: [256]u8 = undefined;
+        const gate_name = try tensorName(&gate_name_buf, "{s}.layers.{d}.mlp.experts.{d}.gate_proj", .{ prefix, layer, expert });
+        const up_name = try tensorName(&up_name_buf, "{s}.layers.{d}.mlp.experts.{d}.up_proj", .{ prefix, layer, expert });
+        const down_name = try tensorName(&down_name_buf, "{s}.layers.{d}.mlp.experts.{d}.down_proj", .{ prefix, layer, expert });
+        try runner.projectPaged(gate_name, expert_input[0 .. routed_count * hidden], expert_gate[0 .. routed_count * intermediate]);
+        try runner.projectPaged(up_name, expert_input[0 .. routed_count * hidden], expert_up[0 .. routed_count * intermediate]);
+        for (expert_activated[0 .. routed_count * intermediate], 0..) |*out, i| {
+            out.* = quantizeF16(silu(quantizeF16(expert_gate[i])) * quantizeF16(expert_up[i]));
+        }
+        try runner.projectPaged(down_name, expert_activated[0 .. routed_count * intermediate], expert_down[0 .. routed_count * hidden]);
+        for (0..routed_count) |assignment| {
+            const row = expert_rows[assignment];
+            const route = expert_routes[assignment];
+            const destination = contributions[(row * top_k + route) * hidden ..][0..hidden];
+            const source = expert_down[assignment * hidden ..][0..hidden];
+            const weight = route_weights[row * top_k + route];
+            for (destination, source) |*out, value_| out.* = weight * value_;
+        }
+    }
+
+    var shared_gate_proj_buf: [256]u8 = undefined;
+    var shared_up_proj_buf: [256]u8 = undefined;
+    var shared_down_proj_buf: [256]u8 = undefined;
+    const shared_gate_proj = try tensorName(&shared_gate_proj_buf, "{s}.layers.{d}.mlp.shared_expert.gate_proj", .{ prefix, layer });
+    const shared_up_proj = try tensorName(&shared_up_proj_buf, "{s}.layers.{d}.mlp.shared_expert.up_proj", .{ prefix, layer });
+    const shared_down_proj = try tensorName(&shared_down_proj_buf, "{s}.layers.{d}.mlp.shared_expert.down_proj", .{ prefix, layer });
+    const shared_gate = try allocator.alloc(f32, count * shared_intermediate);
+    const shared_up = try allocator.alloc(f32, count * shared_intermediate);
+    const shared_activated = try allocator.alloc(f32, count * shared_intermediate);
+    const shared_down = try allocator.alloc(f32, count * hidden);
+    const shared_scale = try allocator.alloc(f32, count);
+    try runner.projectPaged(shared_gate_proj, input, shared_gate);
+    try runner.projectPaged(shared_up_proj, input, shared_up);
+    for (shared_activated, 0..) |*out, i| {
+        out.* = quantizeF16(silu(quantizeF16(shared_gate[i])) * quantizeF16(shared_up[i]));
+    }
+    try runner.projectPaged(shared_down_proj, shared_activated, shared_down);
+    for (0..count) |row| try denseVector(runner.file, shared_gate_name, input[row * hidden ..][0..hidden], shared_scale[row..][0..1]);
+    for (0..count) |row| {
+        const y = output[row * hidden ..][0..hidden];
+        for (0..top_k) |route| {
+            const contribution = contributions[(row * top_k + route) * hidden ..][0..hidden];
+            for (y, contribution) |*out, value_| out.* += value_;
+        }
+        const scale = sigmoid(shared_scale[row]);
+        const shared = shared_down[row * hidden ..][0..hidden];
+        for (y, shared) |*out, value_| out.* += scale * value_;
+    }
+}
+
 fn mlp(runner: *Runner, layer: usize, input: []const f32, output: []f32) !void {
+    if (comptime experts > 0) return moeMlpBatch(runner, layer, input, output);
     const a = runner.allocator;
     var base_buffer: [256]u8 = undefined;
     const base = try tensorName(&base_buffer, "{s}.layers.{d}.mlp", .{ prefix, layer });
@@ -2550,6 +2858,7 @@ fn mlp(runner: *Runner, layer: usize, input: []const f32, output: []f32) !void {
 }
 
 fn mlpBatch(runner: *Runner, layer: usize, input: []const f32, output: []f32) !void {
+    if (comptime experts > 0) return moeMlpBatch(runner, layer, input, output);
     if (input.len == 0 or input.len % hidden != 0) return error.UnexpectedTensor;
     const count = input.len / hidden;
     if (output.len != count * hidden) return error.UnexpectedTensor;
@@ -2623,7 +2932,7 @@ fn refineHeadCandidates(embedding: [*]const u16, state: []const f32, candidates:
     return refined;
 }
 
-fn tiedHeadScalar(file: *const st.File, state: []const f32) ![5]Top {
+fn tiedHeadScalar(file: *const st.Checkpoint, state: []const f32) ![5]Top {
     const embedding = try require(file, prefix ++ ".embed_tokens.weight", .f16, &.{ vocab, hidden });
     var top: [5]Top = @splat(.{ .id = 0, .logit = -std.math.inf(f32) });
     for (0..vocab) |token| {
@@ -2639,6 +2948,12 @@ fn tiedHeadScalar(file: *const st.File, state: []const f32) ![5]Top {
 }
 
 fn tiedHead(runner: *Runner, state: []const f32, cpu_threads: i32) ![5]Top {
+    if (comptime !profile.tied_embeddings) {
+        const logits = try runner.allocator.alloc(f32, vocab);
+        defer runner.allocator.free(logits);
+        try runner.project("lm_head", state, logits);
+        return topFive(logits);
+    }
     const embedding = try require(runner.file, prefix ++ ".embed_tokens.weight", .f16, &.{ vocab, hidden });
     const embedding_words: [*]const u16 = @ptrCast(@alignCast(embedding.bytes.ptr));
     if (runner.use_resident_head) {
@@ -2944,6 +3259,8 @@ pub fn main(init: std.process.Init) !u8 {
     const corpus_filter_len: ?usize = if (init.environ_map.get("TENSORFOLD_CORPUS_LENGTH")) |encoded| try std.fmt.parseInt(usize, encoded, 10) else null;
     if (corpus_filter_len != null and !corpus_mode) return error.InvalidArgument;
     const hidden_dump_path = init.environ_map.get("TENSORFOLD_HIDDEN_DUMP");
+    const layer_dump_path = init.environ_map.get("TENSORFOLD_LAYER_DUMP");
+    const norm_dump_path = init.environ_map.get("TENSORFOLD_NORM_DUMP");
     const verify_inputs_text = init.environ_map.get("TENSORFOLD_VERIFY_INPUTS");
     const verify_inputs: ?[]usize = if (verify_inputs_text) |encoded| try parseTokenList(init.gpa, encoded, 16) else null;
     defer if (verify_inputs) |tokens_to_verify| init.gpa.free(tokens_to_verify);
@@ -2975,10 +3292,10 @@ pub fn main(init: std.process.Init) !u8 {
     const stream_tokens = init.environ_map.get("TENSORFOLD_STREAM_TOKENS") != null;
     const mtp_policy_dump = init.environ_map.get("TENSORFOLD_MTP_POLICY_DUMP") != null;
     if (use_live_mtp and verify_inputs != null) return error.InvalidArgument;
-    if (hidden_dump_path != null and request_count != 1) return error.InvalidArgument;
+    if ((hidden_dump_path != null or layer_dump_path != null or norm_dump_path != null) and request_count != 1) return error.InvalidArgument;
     if (verify_inputs != null and (corpus_mode or serial_corpus_prefill or !serve_mode or cli_prompt_len <= 1)) return error.InvalidArgument;
     if (use_live_mtp and (serial_corpus_prefill or !serve_mode)) return error.InvalidArgument;
-    if (worker_mode and (corpus_mode or verify_inputs != null or hidden_dump_path != null or !resident_mode)) return error.InvalidArgument;
+    if (worker_mode and (corpus_mode or verify_inputs != null or hidden_dump_path != null or layer_dump_path != null or norm_dump_path != null or !resident_mode)) return error.InvalidArgument;
     var max_prompt_len = if (worker_mode) max_worker_prompt_tokens else cli_prompt_len;
     for (corpus_values) |prompt| {
         if (prompt.len == 0 or prompt.len > 2048) return error.InvalidArgument;
@@ -2997,8 +3314,11 @@ pub fn main(init: std.process.Init) !u8 {
         (!corpus_mode and cli_prompt_len > max_worker_prompt_tokens) or request_count == 0 or
         (!corpus_mode and requests > 16) or (request_count > 1 and !resident_mode)) return error.InvalidArgument;
 
-    var file = try st.File.open(init.gpa, init.io, args[2]);
-    defer file.close(init.io);
+    var file = if (std.mem.endsWith(u8, args[2], ".safetensors"))
+        try st.Checkpoint.openPath(init.gpa, init.io, args[2])
+    else
+        try st.Checkpoint.openModel(init.gpa, init.io, args[2]);
+    defer file.close();
     const embedding = try require(&file, prefix ++ ".embed_tokens.weight", .f16, &.{ vocab, hidden });
     const backend = tf_qualcomm_backend_create(args[1].ptr, threads) orelse return error.BackendInitFailed;
     defer tf_qualcomm_backend_destroy(backend);
@@ -3009,16 +3329,33 @@ pub fn main(init: std.process.Init) !u8 {
         for (id) |c| if (!std.ascii.isHex(c)) return error.InvalidModelSha256;
     }
     if (cache_dir) |dir| try std.Io.Dir.cwd().createDirPath(init.io, dir);
-    var mtp_file: st.File = undefined;
+    if (comptime experts > 0) {
+        if (std.mem.endsWith(u8, args[2], ".safetensors") or use_live_mtp) return error.InvalidMoeConfiguration;
+    }
+    var expert_catalog: expert_pager.Catalog = undefined;
+    var paged_experts: expert_pager.Pager = undefined;
+    var expert_cache_ptr: ?*expert_pager.Pager = null;
+    if (comptime experts > 0) {
+        expert_catalog = try expert_pager.Catalog.open(init.gpa, init.io, args[2]);
+        const cache_mib = if (init.environ_map.get("TENSORFOLD_EXPERT_CACHE_MIB")) |encoded| try std.fmt.parseInt(usize, encoded, 10) else 512;
+        if (cache_mib < 64 or cache_mib > 4096) return error.InvalidExpertCache;
+        paged_experts = try expert_pager.Pager.init(init.gpa, &expert_catalog, cache_mib << 20);
+        expert_cache_ptr = &paged_experts;
+    }
+    defer if (comptime experts > 0) {
+        paged_experts.deinit();
+        expert_catalog.deinit();
+    };
+    var mtp_file: st.Checkpoint = undefined;
     var mtp_backend: ?*anyopaque = null;
     if (mtp_sidecar_path) |sidecar_path| {
-        mtp_file = try st.File.open(init.gpa, init.io, sidecar_path);
+        mtp_file = try st.Checkpoint.openPath(init.gpa, init.io, sidecar_path);
         try mtp.validateMtp(&mtp_file);
         mtp_backend = tf_qualcomm_backend_create(args[1].ptr, threads) orelse return error.BackendInitFailed;
     }
     defer if (use_live_mtp) {
         tf_qualcomm_backend_destroy(mtp_backend);
-        mtp_file.close(init.io);
+        mtp_file.close();
     };
     var mtp_runtime: mtp.Runtime = .{ .allocator = init.gpa, .file = &mtp_file, .backend = mtp_backend };
     var scratch_arena: std.heap.ArenaAllocator = .init(init.gpa);
@@ -3033,9 +3370,10 @@ pub fn main(init: std.process.Init) !u8 {
         .file = &file,
         .backend = backend,
         .cpu_threads = @intCast(threads),
+        .backend_is_cpu = std.mem.eql(u8, args[1], "cpu"),
         .use_f16_weights = serve_mode and !prepare_cache_mode and !packed_mode and !q8_mode and !q4_mode,
         .use_resident_weights = resident_mode,
-        .use_packed_exl3 = packed_mode,
+        .use_packed_exl3 = packed_mode or experts > 0,
         .use_q8_weights = q8_mode,
         .use_q4_weights = q4_mode,
         .q8_attention_inputs = q4_attn_q8_mode or q4_attn_in_q8_mode,
@@ -3045,7 +3383,7 @@ pub fn main(init: std.process.Init) !u8 {
         .q8_output_layer_end = q8_output_layer_end_override orelse (if (q4_full_out_q8_l3_mode) 4 else if (q4_full_out_q8_l7_mode) 8 else if (q4_full_out_q8_q0_mode or q4_full_out_q8_q0_head_q8_mode or q4_full_out_q8_q0_head_q4_mode or q4_full_out_q8_q0_head_adaptive_mode or fused_tail_mode) layers / 4 else if (q4_full_out_q8_early_mode or q4_full_out_q8_q1_mode) layers / 2 else layers),
         .q8_output_layer_mask = q8_output_layer_mask,
         .q8_mlp = q4_mlp_q8_mode,
-        .use_resident_head = resident_mode and (request_count > 1 or use_live_mtp),
+        .use_resident_head = profile.tied_embeddings and resident_mode and (request_count > 1 or use_live_mtp),
         .use_q8_head = q4_full_out_q8_q0_head_q8_mode,
         .use_q4_head = q4_full_out_q8_q0_head_q4_mode,
         .use_adaptive_head = q4_full_out_q8_q0_head_adaptive_mode or fused_tail_mode,
@@ -3056,6 +3394,7 @@ pub fn main(init: std.process.Init) !u8 {
         .fast_activations = (fast_activations or q8_mode or q4_mode) and init.environ_map.get("TENSORFOLD_EXACT_ACTIVATIONS") == null,
         .cache_dir = cache_dir,
         .cache_model_id = cache_model_id,
+        .expert_cache = expert_cache_ptr,
     };
     var decode = try DecodeState.init(init.gpa, max_positions);
     defer decode.deinit(init.gpa);
@@ -3072,6 +3411,30 @@ pub fn main(init: std.process.Init) !u8 {
     else
         null;
     defer if (hidden_dump) |*dump| dump.close(init.io);
+    var layer_dump: ?std.Io.File = if (layer_dump_path) |path|
+        try std.Io.Dir.cwd().createFile(init.io, path, .{ .truncate = true })
+    else
+        null;
+    defer if (layer_dump) |*dump| dump.close(init.io);
+    var norm_dump: ?std.Io.File = if (norm_dump_path) |path|
+        try std.Io.Dir.cwd().createFile(init.io, path, .{ .truncate = true })
+    else
+        null;
+    defer if (norm_dump) |*dump| dump.close(init.io);
+    if (init.environ_map.get("TENSORFOLD_HEAD_INPUT")) |path| {
+        const raw = try std.Io.Dir.cwd().readFileAlloc(init.io, path, init.gpa, .limited(hidden * @sizeOf(f32) * max_worker_prompt_tokens));
+        defer init.gpa.free(raw);
+        if (raw.len == 0 or raw.len % (hidden * @sizeOf(f32)) != 0) return error.InvalidArgument;
+        const head_state = try init.gpa.alloc(f32, hidden);
+        defer init.gpa.free(head_state);
+        @memcpy(std.mem.sliceAsBytes(head_state), raw[raw.len - hidden * @sizeOf(f32) ..]);
+        const top = try tiedHead(&runner, head_state, threads);
+        std.debug.print(
+            "{{\"tensorfold\":\"qualcomm-exl3-head\",\"top5\":[[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}],[{d},{d}]]}}\n",
+            .{ top[0].id, top[0].logit, top[1].id, top[1].logit, top[2].id, top[2].logit, top[3].id, top[3].logit, top[4].id, top[4].logit },
+        );
+        return 0;
+    }
     var prompt_cache: ?PromptCache = if (worker_mode and use_live_mtp and fused_linear_layer_mask == 0) try PromptCache.init(init.gpa, 4) else null;
     defer if (prompt_cache) |*cache| cache.deinit(init.gpa);
     var exactness_snapshot: ?PromptSnapshot = if (target_ambiguity_margin != null) try PromptSnapshot.init(init.gpa) else null;
@@ -3218,6 +3581,9 @@ pub fn main(init: std.process.Init) !u8 {
                     for (0..chunk_count) |position| {
                         try rmsNorm(&file, input_norm, states[position * hidden ..][0..hidden], normalized[position * hidden ..][0..hidden], 1.0);
                     }
+                    if (norm_dump) |*dump| {
+                        try dump.writeStreamingAll(init.io, std.mem.sliceAsBytes(normalized));
+                    }
                     const norm_t1 = tf_qualcomm_monotonic_ms();
                     const norm_dl = norm_t1 - layer_t0;
                     pprof_norm += norm_dl;
@@ -3248,10 +3614,16 @@ pub fn main(init: std.process.Init) !u8 {
                         for (0..chunk_count) |position| {
                             try rmsNorm(&file, post_norm, states[position * hidden ..][0..hidden], normalized[position * hidden ..][0..hidden], 1.0);
                         }
+                        if (norm_dump) |*dump| {
+                            try dump.writeStreamingAll(init.io, std.mem.sliceAsBytes(normalized));
+                        }
                         const mlp_t3 = tf_qualcomm_monotonic_ms();
                         try mlpBatch(&runner, layer, normalized, updates);
                         pprof_mlp += tf_qualcomm_monotonic_ms() - mlp_t3;
                         residualAdd(states, updates);
+                    }
+                    if (layer_dump) |*dump| {
+                        try dump.writeStreamingAll(init.io, std.mem.sliceAsBytes(states));
                     }
                     if (pprof_on) {
                         const layer_end = tf_qualcomm_monotonic_ms();
@@ -3756,6 +4128,9 @@ pub fn main(init: std.process.Init) !u8 {
                 _ = scratch_arena.reset(.retain_capacity);
                 const input_norm = try tensorName(&name_buffer, "{s}.layers.{d}.input_layernorm.weight", .{ prefix, layer });
                 try rmsNorm(&file, input_norm, state, normed, 1.0);
+                if (norm_dump) |*dump| {
+                    try dump.writeStreamingAll(init.io, std.mem.sliceAsBytes(normed));
+                }
                 if ((layer + 1) % 4 == 0) {
                     try fullAttention(&runner, &decode, layer, position, normed, update);
                 } else {
@@ -3776,8 +4151,14 @@ pub fn main(init: std.process.Init) !u8 {
                     residualAdd(state, update);
                     const post_norm = try tensorName(&name_buffer, "{s}.layers.{d}.post_attention_layernorm.weight", .{ prefix, layer });
                     try rmsNorm(&file, post_norm, state, normed, 1.0);
+                    if (norm_dump) |*dump| {
+                        try dump.writeStreamingAll(init.io, std.mem.sliceAsBytes(normed));
+                    }
                     try mlp(&runner, layer, normed, update);
                     residualAdd(state, update);
+                }
+                if (layer_dump) |*dump| {
+                    try dump.writeStreamingAll(init.io, std.mem.sliceAsBytes(state));
                 }
             }
 
@@ -3831,7 +4212,7 @@ pub fn main(init: std.process.Init) !u8 {
         else
             0.0;
         const sample_id = if (corpus_mode) corpus_names[request_index] else "";
-        std.debug.print("{{\"tensorfold\":\"qualcomm-exl3-generate\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"fast_activations\":{},\"prefill_mode\":\"{s}\",\"sample_id\":\"{s}\",\"request_index\":{d},\"requests\":{d},\"checkpoint_tensors\":{d},\"prompt_tokens\":{d},\"generated_tokens\":{d},\"requested_generated_tokens\":{d},\"stopped_on_eos\":{},\"positions\":{d},\"tokens\":[", .{ profile.name, args[1], runner.fast_activations, if (serial_corpus_prefill) "serial" else "batched", sample_id, request_index, request_count, file.names.count(), prompt_len, generated_count, request_steps, stopped_on_eos, positions_evaluated });
+        std.debug.print("{{\"tensorfold\":\"qualcomm-exl3-generate\",\"model_profile\":\"{s}\",\"backend\":\"{s}\",\"fast_activations\":{},\"prefill_mode\":\"{s}\",\"sample_id\":\"{s}\",\"request_index\":{d},\"requests\":{d},\"checkpoint_tensors\":{d},\"prompt_tokens\":{d},\"generated_tokens\":{d},\"requested_generated_tokens\":{d},\"stopped_on_eos\":{},\"positions\":{d},\"tokens\":[", .{ profile.name, args[1], runner.fast_activations, if (serial_corpus_prefill) "serial" else "batched", sample_id, request_index, request_count, file.count(), prompt_len, generated_count, request_steps, stopped_on_eos, positions_evaluated });
         for (sequence[0 .. prompt_len + generated_count], 0..) |generated_token, i| {
             if (i != 0) std.debug.print(",", .{});
             std.debug.print("{d}", .{generated_token});

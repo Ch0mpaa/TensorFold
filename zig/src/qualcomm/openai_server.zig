@@ -122,6 +122,7 @@ const Worker = struct {
             }
         }
         try setEnv(a, "TENSORFOLD_Q8_OUTPUT_LAYER_END", "24");
+        if (std.mem.eql(u8, self.config.profile, "qwen3.5-35b-a3b")) try setEnv(a, "TENSORFOLD_EXPERT_CACHE_MIB", "512");
         try setEnv(a, "TENSORFOLD_FUSED_LINEAR_LAYER_MASK", "0");
         try setEnv(a, "TENSORFOLD_BENCH_QUIET", "1");
         try setEnv(a, "TENSORFOLD_STREAM_TOKENS", "1");
@@ -160,12 +161,12 @@ const Worker = struct {
                 self.config.backend,
                 self.config.model,
                 "0",
-                "6",
+                if (std.mem.eql(u8, self.config.profile, "qwen3.5-35b-a3b")) "16" else "6",
                 self.config.cache,
                 self.config.model_sha,
                 "1024",
                 "0",
-                "serve-q4-full-out-q8-q0-head-adaptive-tail",
+                if (std.mem.eql(u8, self.config.profile, "qwen3.5-35b-a3b")) "serve-packed" else "serve-q4-full-out-q8-q0-head-adaptive-tail",
                 "1",
             };
             var owned: [values.len][*:0]u8 = undefined;
@@ -606,16 +607,18 @@ pub fn main(init: std.process.Init) !u8 {
         return 65;
     };
     config.profile = try init.gpa.dupe(u8, info.profile);
+    defer freeServerConfig(init.gpa, config);
     const engine_name = std.fs.path.basename(config.engine);
     const engine_matches = if (std.mem.eql(u8, info.profile, "qwen3.5-4b"))
         std.mem.indexOf(u8, engine_name, "4b") != null
+    else if (std.mem.eql(u8, info.profile, "qwen3.5-35b-a3b"))
+        std.mem.indexOf(u8, engine_name, "35b-a3b") != null or std.mem.indexOf(u8, engine_name, "moe") != null
     else
-        std.mem.indexOf(u8, engine_name, "4b") == null;
+        std.mem.indexOf(u8, engine_name, "4b") == null and std.mem.indexOf(u8, engine_name, "35b-a3b") == null;
     if (!engine_matches) {
         std.debug.print("{{\"tensorfold\":\"qualcomm-model-refused\",\"error\":\"EngineProfileMismatch\",\"profile\":\"{s}\",\"engine\":\"{s}\"}}\n", .{ info.profile, engine_name });
         return 65;
     }
-    defer freeServerConfig(init.gpa, config);
     var text = try tokenizer_mod.loadTokenizer(init.io, init.gpa, config.tokenizer);
     defer text.deinit();
     var worker = Worker{ .allocator = init.gpa, .config = &config, .io = init.io };
