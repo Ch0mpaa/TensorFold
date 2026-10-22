@@ -43,10 +43,11 @@ The APK accepts only catalog entries with fixed repository IDs, artifact byte co
 | Qwen3.5-2B EXL3 8.00 bpw | 3.45 GB | 8.23 GB | 11.68 GB | 8 GiB |
 | Qwen3.5-4B EXL3 4.00 bpw | 4.23 GB | 21.39 GB | 25.62 GB | 10 GiB |
 | Qwen3.5-35B-A3B EXL3 2.54 bpw | 13.05 GB | none | 13.05 GB | 14 GiB, Snapdragon only |
+| Qwen3.5-35B-A3B EXL3 4.00 bpw | 19.40 GB | none | 19.40 GB | 14 GiB, Snapdragon only |
 
 Each download is HTTPS-only, bounded to approved Hugging Face delivery hosts, resumable into a `.part` file, size checked, SHA-256 checked, fsynced, and atomically renamed. Cancellation retains the partial file for a later resume. A 512 MiB safety reserve is kept beyond model and decoded-cache estimates. **Remove model files** deletes only the selected app-owned model and cache.
 
-First load constructs a decoded cache for the dense 2B/4B profiles and can take substantially longer than later starts. The experimental 2.54-bpw 35B-A3B profile never builds a decoded full-model cache: its 12.99 GB of weight shards stay packed (the catalog lists a 13.05 GB download allowance), selected routed experts enter a bounded LRU, and all other EXL3 projections execute from packed bytes. Every cache and pager entry is content-bound to the admitted checkpoint. A model is never marked verified from file presence or repository naming alone. The separate 19.33 GB 4.00-bpw HTP engineering candidate is not this app catalog entry.
+First load constructs a decoded cache for the dense 2B/4B profiles and can take substantially longer than later starts. The experimental 2.54-bpw 35B-A3B profile never builds a decoded full-model cache: its 12.99 GB of weight shards stay packed (the catalog lists a 13.05 GB download allowance), selected routed experts enter a bounded LRU, and all other EXL3 projections execute from packed bytes. Every cache and pager entry is content-bound to the admitted checkpoint. A model is never marked verified from file presence or repository naming alone. The 4.00-bpw 35B-A3B profile is the same packed MoE path at a higher bit-width: its 19.33 GB of weight shards stay packed across three safetensors shards, selected routed experts enter the same bounded LRU, and it likewise never builds a decoded full-model cache.
 
 ## Local chat and benchmark
 
@@ -97,16 +98,21 @@ different-model HTP or llama.cpp runs.
 
 ### 35B-A3B development status
 
-The Snapdragon-only 35B-A3B catalog entry is an experimental 2.54-bpw CPU
-qualification path, not a supported speed profile or a public release artifact.
-Its pinned revision is `af18e8ad45f4d529925bab859d79e163dc5abe60` in
-`turboderp/Qwen3.5-35B-A3B-exl3@2.54bpw`. On Phone B, the app-owned worker
-executes the complete packed checkpoint with no decoded full-model cache.
+The Snapdragon-only 35B-A3B catalog has two admitted profiles, both
+experimental CPU qualification paths, not supported speed profiles or public
+release artifacts. The 2.54-bpw profile is pinned to revision
+`af18e8ad45f4d529925bab859d79e163dc5abe60` in
+`turboderp/Qwen3.5-35B-A3B-exl3@2.54bpw`. The 4.00-bpw profile is pinned to
+revision `8a68a1aca688b768853bad4d926c0136ff62286c` in
+`turboderp/Qwen3.5-35B-A3B-exl3@4.00bpw` (19,329,446,010 weight bytes across
+three shards, 4-bit projections and a 6-bit head). On Phone B, the app-owned
+worker executes either packed checkpoint with no decoded full-model cache.
 TensorFold matches ExLlamaV3 for the first eight generated tokens of `hi`.
 Seven of eight ordered top-five lists match exactly; at the final observed step
 the same five IDs appear, with reference-tied IDs `13` and `440` reversed at
-ranks four and five. Its stream, with the input ID first, is
-`5834,11,353,1144,310,1791,264,3779,364`. A fixed regression test covers the
+ranks four and five. The 2.54-bpw stream, with the input ID first, is
+`5834,11,353,1144,310,1791,264,3779,364`; the 4.00-bpw stream is
+`5834,11,585,1318,310,1791,264,3779,364`. A fixed regression test covers the
 routing-normalization defect found during that comparison.
 
 Output-tile parallelism across 16 CPU workers reduced the one-token elapsed time
@@ -117,10 +123,8 @@ The private qualification APK containing this path hashes
 `bfb4a34e11047e6c525e4848a67421451412cabf63a271504a8fc2e8820799b2`;
 it is not a public release artifact.
 
-The separate privileged HTP engineering lane uses
-`turboderp/Qwen3.5-35B-A3B-exl3@4.00bpw`, revision
-`8a68a1aca688b768853bad4d926c0136ff62286c`, with 19,329,446,010 weight bytes,
-4-bit projections and a 6-bit head. Its CPU/HTP eight-token stream is
+The privileged HTP engineering lane uses the same 4.00-bpw checkpoint now
+admitted to the catalog. Its CPU/HTP eight-token stream is
 `5834,11,585,1318,310,1791,264,3779,364`, not the 2.54-bpw stream above.
 Eight-token CPU and initial HTP end-to-end rates were 0.068943 and 0.343639
 tok/s. A warm 64-token HTP run with only the head cached as decoded FP16 reached
