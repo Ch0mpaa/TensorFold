@@ -3,6 +3,11 @@ package expo.modules.tensorfoldlocalruntime
 import android.content.Context
 
 internal object QnnProbe {
+  private data class ProbeSet(
+    val projections: List<QnnProjectionResult>,
+    val persistent: QnnPersistentProjectionResult,
+  )
+
   private var cached: Map<String, Any?>? = null
 
   @JvmStatic private external fun nativeProjection(nativeDir: String, stubName: String): DoubleArray
@@ -14,6 +19,12 @@ internal object QnnProbe {
     payloadPath: String,
   ): DoubleArray
   @JvmStatic private external fun nativeLiveFullProjection(
+    nativeDir: String,
+    stubName: String,
+    payloadPath: String,
+  ): DoubleArray
+
+  @JvmStatic private external fun nativePersistentLiveFullProjection(
     nativeDir: String,
     stubName: String,
     payloadPath: String,
@@ -32,6 +43,7 @@ internal object QnnProbe {
         unavailable("No packaged full-block projection matches this SoC.", QnnProjectionResult.fullBlockTolerance),
         unavailable("No packaged live checkpoint projection matches this SoC.", QnnProjectionResult.fullBlockTolerance),
         unavailable("No prepared full projection matches this SoC.", QnnProjectionResult.liveFullTolerance),
+        persistentUnavailable("No prepared persistent full projection matches this SoC."),
       ).also { cached = it }
     }
     val nativeDir = context.applicationInfo.nativeLibraryDir
@@ -39,23 +51,29 @@ internal object QnnProbe {
     val fullPayloadPath = context.filesDir.resolve("tensorfold/qnn/live-full-projection-v2.bin").absolutePath
     val probes = try {
       System.loadLibrary("tensorfold_qnn_probe")
-      listOf(
-        QnnProjectionResult.fromNative(nativeProjection(nativeDir, "libQnnHtpV79Stub.so"), QnnProjectionResult.syntheticTolerance),
-        QnnProjectionResult.fromNative(nativeCheckpointProjection(nativeDir, "libQnnHtpV79Stub.so")),
-        QnnProjectionResult.fromNative(nativeFullProjection(nativeDir, "libQnnHtpV79Stub.so"), QnnProjectionResult.fullBlockTolerance),
-        QnnProjectionResult.fromNative(nativeLiveCheckpointProjection(nativeDir, "libQnnHtpV79Stub.so", payloadPath), QnnProjectionResult.fullBlockTolerance),
-        QnnProjectionResult.fromNative(nativeLiveFullProjection(nativeDir, "libQnnHtpV79Stub.so", fullPayloadPath), QnnProjectionResult.liveFullTolerance),
+      ProbeSet(
+        listOf(
+          QnnProjectionResult.fromNative(nativeProjection(nativeDir, "libQnnHtpV79Stub.so"), QnnProjectionResult.syntheticTolerance),
+          QnnProjectionResult.fromNative(nativeCheckpointProjection(nativeDir, "libQnnHtpV79Stub.so")),
+          QnnProjectionResult.fromNative(nativeFullProjection(nativeDir, "libQnnHtpV79Stub.so"), QnnProjectionResult.fullBlockTolerance),
+          QnnProjectionResult.fromNative(nativeLiveCheckpointProjection(nativeDir, "libQnnHtpV79Stub.so", payloadPath), QnnProjectionResult.fullBlockTolerance),
+          QnnProjectionResult.fromNative(nativeLiveFullProjection(nativeDir, "libQnnHtpV79Stub.so", fullPayloadPath), QnnProjectionResult.liveFullTolerance),
+        ),
+        QnnPersistentProjectionResult.fromNative(nativePersistentLiveFullProjection(nativeDir, "libQnnHtpV79Stub.so", fullPayloadPath)),
       )
     } catch (failure: Throwable) {
-      listOf(
-        QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.syntheticTolerance),
-        QnnProjectionResult(-100, 0.0, Double.NaN),
-        QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance),
-        QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance),
-        QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.liveFullTolerance),
+      ProbeSet(
+        listOf(
+          QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.syntheticTolerance),
+          QnnProjectionResult(-100, 0.0, Double.NaN),
+          QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance),
+          QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance),
+          QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.liveFullTolerance),
+        ),
+        QnnPersistentProjectionResult(-100, 0.0, 0.0, 0.0, 0.0, 0.0, Double.NaN, 0.0),
       )
     }
-    return result(probes[0].passed, architecture, probes[0], probes[1], probes[2], probes[3], probes[4])
+    return result(probes.projections[0].passed, architecture, probes.projections[0], probes.projections[1], probes.projections[2], probes.projections[3], probes.projections[4], probes.persistent)
       .also { cached = it }
   }
 
@@ -67,9 +85,33 @@ internal object QnnProbe {
     "reason" to reason,
   )
 
+  private fun persistentUnavailable(reason: String) = linkedMapOf<String, Any?>(
+    "available" to false,
+    "createMs" to 0.0,
+    "finalizeMs" to 0.0,
+    "firstExecuteMs" to 0.0,
+    "warmMedianMs" to 0.0,
+    "warmLastMs" to 0.0,
+    "maxAbsoluteError" to Double.NaN,
+    "tolerance" to QnnProjectionResult.liveFullTolerance,
+    "reason" to reason,
+  )
+
   private fun detail(probe: QnnProjectionResult) = linkedMapOf<String, Any?>(
     "available" to probe.passed,
     "elapsedMs" to probe.elapsedMs,
+    "maxAbsoluteError" to probe.maxAbsoluteError,
+    "tolerance" to probe.tolerance,
+    "reason" to probe.reason(),
+  )
+
+  private fun persistentDetail(probe: QnnPersistentProjectionResult) = linkedMapOf<String, Any?>(
+    "available" to probe.passed,
+    "createMs" to probe.createMs,
+    "finalizeMs" to probe.finalizeMs,
+    "firstExecuteMs" to probe.firstExecuteMs,
+    "warmMedianMs" to probe.warmMedianMs,
+    "warmLastMs" to probe.warmLastMs,
     "maxAbsoluteError" to probe.maxAbsoluteError,
     "tolerance" to probe.tolerance,
     "reason" to probe.reason(),
@@ -83,6 +125,7 @@ internal object QnnProbe {
     full: QnnProjectionResult,
     live: QnnProjectionResult,
     liveFull: QnnProjectionResult,
+    persistentFull: QnnPersistentProjectionResult,
   ) = linkedMapOf<String, Any?>(
     "available" to available,
     "architecture" to architecture,
@@ -95,6 +138,7 @@ internal object QnnProbe {
     "fullBlockProjection" to detail(full),
     "liveCheckpointProjection" to detail(live),
     "liveFullProjection" to detail(liveFull),
+    "persistentFullProjection" to persistentDetail(persistentFull),
   )
 
   private fun result(
@@ -105,6 +149,7 @@ internal object QnnProbe {
     full: Map<String, Any?>,
     live: Map<String, Any?>,
     liveFull: Map<String, Any?>,
+    persistentFull: Map<String, Any?>,
   ) = linkedMapOf<String, Any?>(
     "available" to available,
     "architecture" to architecture,
@@ -117,5 +162,6 @@ internal object QnnProbe {
     "fullBlockProjection" to full,
     "liveCheckpointProjection" to live,
     "liveFullProjection" to liveFull,
+    "persistentFullProjection" to persistentFull,
   )
 }

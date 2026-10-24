@@ -71,6 +71,17 @@ internal object HardwareProbe {
           "tolerance" to QnnProjectionResult.liveFullTolerance,
           "reason" to "QNN applies only to Qualcomm devices.",
         ),
+        "persistentFullProjection" to linkedMapOf<String, Any?>(
+          "available" to false,
+          "createMs" to 0.0,
+          "finalizeMs" to 0.0,
+          "firstExecuteMs" to 0.0,
+          "warmMedianMs" to 0.0,
+          "warmLastMs" to 0.0,
+          "maxAbsoluteError" to Double.NaN,
+          "tolerance" to QnnProjectionResult.liveFullTolerance,
+          "reason" to "QNN applies only to Qualcomm devices.",
+        ),
         "reason" to "QNN applies only to Qualcomm devices.",
       )
     val vulkan11 = vk >= ((1 shl 22) or (1 shl 12))

@@ -49,4 +49,29 @@ class QnnProjectionResultTest {
       QnnProjectionResult(-122, 0.0, Double.NaN, QnnProjectionResult.liveFullTolerance).reason(),
     )
   }
+
+  @Test fun persistentProjectionParsesAllSeparatedMeasurementsAndFailsClosed() {
+    val passing = QnnPersistentProjectionResult.fromNative(
+      doubleArrayOf(0.0, 3.0, 4.0, 5.0, 2.0, 2.5, 0.0093, 0.01),
+    )
+    assertTrue(passing.passed)
+    assertEquals(3.0, passing.createMs, 0.0)
+    assertEquals(4.0, passing.finalizeMs, 0.0)
+    assertEquals(2.0, passing.warmMedianMs, 0.0)
+    assertFalse(QnnPersistentProjectionResult.fromNative(doubleArrayOf(0.0)).passed)
+    assertFalse(QnnPersistentProjectionResult.fromNative(
+      doubleArrayOf(0.0, 3.0, 4.0, 5.0, 2.0, 2.5, 0.02, 0.01),
+    ).passed)
+  }
+
+  @Test fun persistentProjectionReportsFailClosedStateReasons() {
+    assertEquals(
+      "QNN HTP persistent session is in an invalid state.",
+      QnnPersistentProjectionResult(-114, 0.0, 0.0, 0.0, 0.0, 0.0, Double.NaN, 0.0).reason(),
+    )
+    assertEquals(
+      "QNN HTP persistent session received an invalid tensor shape.",
+      QnnPersistentProjectionResult(-115, 0.0, 0.0, 0.0, 0.0, 0.0, Double.NaN, 0.0).reason(),
+    )
+  }
 }

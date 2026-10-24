@@ -123,12 +123,13 @@ foreach ($Entry in $QnnFiles.GetEnumerator()) {
 }
 $Clang = Join-Path $AndroidNdk "toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe"
 $QnnProbe = Join-Path $Mobile "modules/tensorfold-local-runtime/native/qnn_probe.cpp"
+$QnnSessionBridge = Join-Path $Mobile "modules/tensorfold-local-runtime/native/qnn_session_bridge.cpp"
 $QnnInclude = Join-Path $QairtSdk "include"
 $QnnLibrary = Join-Path $QairtSdk "lib/aarch64-android"
 if (-not (Test-Path "$QnnInclude/QNN/QnnInterface.h") -or -not (Test-Path "$QnnLibrary/libQnnHtp.so")) {
     throw "QAIRT QNN headers or HTP runtime are missing."
 }
-& $Clang "--target=aarch64-linux-android31" -shared -fPIC -O2 -I$QnnInclude -L$QnnLibrary -Wl,-soname,libtensorfold_qnn_probe.so -Wl,-z,now $QnnProbe -lQnnHtp -ldl -llog -o (Join-Path $Runtime "libtensorfold_qnn_probe.so")
+& $Clang "--target=aarch64-linux-android31" -shared -fPIC -O2 -I$QnnInclude -L$QnnLibrary -Wl,-soname,libtensorfold_qnn_probe.so -Wl,-z,now $QnnProbe $QnnSessionBridge -lQnnHtp -ldl -llog -o (Join-Path $Runtime "libtensorfold_qnn_probe.so")
 if ($LASTEXITCODE -ne 0) { throw "TensorFold QNN app-UID probe build failed." }
 New-Item -ItemType Directory -Force "$Mobile/assets" | Out-Null
 Copy-Item -Force "$QairtSdk/NOTICE.txt" "$Mobile/assets/QAIRT_NOTICE.txt"

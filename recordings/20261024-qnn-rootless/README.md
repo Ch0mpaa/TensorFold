@@ -130,8 +130,21 @@ Full 2048x6144 app-owned projection passed (2.50 ms, max error 0.0093).
 
 Model inference remained CPU-selected.
 
+### Persistent live-full receipt
+
+The same validated v2 payload ran through one persistent QNN graph session.
+Every execution returned status `0`; final error stayed within the
+content-bound tolerance.
+
+```text
+Persistent full projection passed (create 95.59 ms, finalize 116.53 ms, first 2.67 ms, warm median 1.24 ms, warm last 1.22 ms, max error 0.0093).
+```
+
+The five warm executions reused the finalized graph. This is a projection
+measurement, not a complete-layer or model speed claim.
+
 Final release APK SHA-256:
-`5abc9e98fa71d0da419f5da8065769c7763e79a1928095a3db54917db3e0670b`.
+`93313fa7b7f22dd8bb135ee88e70ed17fa01c2c89b7bb260c824e9dcd33f3d1a`.
 
 ## Samsung S20 Ultra — Snapdragon 865
 

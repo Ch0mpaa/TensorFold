@@ -237,6 +237,26 @@ This is a projection gate, not model offload. It is reported separately as
 `liveFullProjection`; TensorFold model inference stays CPU-only until complete
 layers and the autoregressive path pass retained-token parity.
 
+### Persistent live-full QNN gate
+
+The app also exposes `persistentFullProjection` as a separate measurement-only
+gate for that exact v2 payload. Its opaque native session owns the QNN loader,
+backend, device, context, profile, graph, tensor descriptors, and one bounded
+(64 MiB maximum) private weight copy. It creates and finalizes once, executes
+the same input once plus five warm repetitions without allocation in the
+execute path, then performs parity on the final QNN output. It reports create,
+finalize, first-execute, warm-median, warm-last, maximum-error, and the
+payload-bound tolerance separately; it does not claim that warm execution is
+faster. Every execution must return zero and final error must be within the
+stored tolerance. Fail-closed session statuses are `-113` busy, `-114` invalid
+state, and `-115` shape mismatch. This remains a CPU-model-backend gate.
+
+On stock Phone B, the release-app session passed every execution and final
+parity check. Session creation took `95.59 ms`, graph finalization `116.53 ms`,
+the first execution `2.67 ms`, and five warm executions had a `1.24 ms` median
+and `1.22 ms` last value. Final maximum error remained `0.0093`. This measures
+one persistent projection graph, not a complete layer or model.
+
 
 The `qualcomm-probe` target implements the non-invasive portion of gate 1. It
 loads `/vendor/lib64/libcdsprpc.so` and checks the required 64-bit remote-handle

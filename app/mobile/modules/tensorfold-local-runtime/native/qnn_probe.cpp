@@ -14,9 +14,9 @@
 
 #include <QNN/QnnInterface.h>
 #include <QNN/QnnOpDef.h>
+#include "qnn_session_bridge.h"
 #include "qnn_checkpoint_projection.h"
 #include "qnn_full_projection.h"
-#include "qnn_matmul_bridge.h"
 
 namespace {
 namespace checkpoint = tensorfold::qnn_checkpoint_projection;
@@ -423,6 +423,80 @@ static jdoubleArray runLiveProjection(JNIEnv* env, jstring native_dir, jstring s
   return jniResultWithTolerance(env, native_result, payload.spec.tolerance);
 }
 
+static jdoubleArray runPersistentLiveFullProjection(JNIEnv* env, jstring native_dir, jstring stub_name,
+                                                    jstring payload_path) {
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  jdouble values[] = {-121.0, 0.0, 0.0, 0.0, 0.0, 0.0, kNaN, 0.0};
+  if (native_dir == nullptr || stub_name == nullptr || payload_path == nullptr) {
+    jdoubleArray result = env->NewDoubleArray(8);
+    if (result != nullptr) env->SetDoubleArrayRegion(result, 0, 8, values);
+    return result;
+  }
+  const char* path = env->GetStringUTFChars(payload_path, nullptr);
+  if (path == nullptr) return nullptr;
+  LivePayload payload;
+  const int32_t payload_status = loadPayload(path, true, &payload);
+  env->ReleaseStringUTFChars(payload_path, path);
+  if (payload_status != 0) {
+    values[0] = payload_status;
+  } else {
+    const char* dir = env->GetStringUTFChars(native_dir, nullptr);
+    const char* stub = env->GetStringUTFChars(stub_name, nullptr);
+    if (dir == nullptr || stub == nullptr) {
+      if (dir != nullptr) env->ReleaseStringUTFChars(native_dir, dir);
+      if (stub != nullptr) env->ReleaseStringUTFChars(stub_name, stub);
+      values[0] = TF_QNN_MATMUL_LOAD_FAILURE;
+    } else {
+      TfQnnSessionConfig config = {dir, stub, payload.spec.input_columns, payload.spec.output_columns,
+          payload.spec.input_scale, payload.spec.input_offset, payload.spec.weight_scale,
+          payload.spec.weight_offset, payload.spec.output_scale, payload.spec.output_offset};
+      TfQnnSessionTiming timing{};
+      TfQnnSession* session = nullptr;
+      int32_t status = tf_qnn_session_create(&config, &session, &timing);
+      values[1] = timing.create_ms;
+      if (status == 0) status = tf_qnn_session_set_weights(session, payload.spec.weights,
+          static_cast<uint64_t>(payload.spec.input_columns) * payload.spec.output_columns);
+      if (status == 0) {
+        status = tf_qnn_session_finalize(session, &timing);
+        values[2] = timing.finalize_ms;
+      }
+      std::array<uint8_t, kLiveFullM> output{};
+      std::array<double, 5> warm{};
+      if (status == 0) {
+        status = tf_qnn_session_execute(session, payload.spec.input, payload.spec.input_columns,
+                                        output.data(), output.size(), &timing);
+        values[3] = timing.execute_ms;
+      }
+      for (size_t index = 0; status == 0 && index < warm.size(); ++index) {
+        status = tf_qnn_session_execute(session, payload.spec.input, payload.spec.input_columns,
+                                        output.data(), output.size(), &timing);
+        warm[index] = timing.execute_ms;
+      }
+      if (status == 0) {
+        std::array<double, 5> sorted = warm;
+        for (size_t left = 0; left < sorted.size(); ++left) {
+          for (size_t right = left + 1; right < sorted.size(); ++right) {
+            if (sorted[right] < sorted[left]) { const double value = sorted[left]; sorted[left] = sorted[right]; sorted[right] = value; }
+          }
+        }
+        values[4] = sorted[2];
+        values[5] = warm.back();
+        status = tf_qnn_session_parity(session, output.data(), output.size(), payload.spec.reference,
+                                       payload.spec.output_columns, payload.spec.tolerance, &timing);
+        values[6] = timing.max_abs_error;
+        values[7] = payload.spec.tolerance;
+      }
+      values[0] = status;
+      tf_qnn_session_destroy(session);
+      env->ReleaseStringUTFChars(native_dir, dir);
+      env->ReleaseStringUTFChars(stub_name, stub);
+    }
+  }
+  jdoubleArray result = env->NewDoubleArray(8);
+  if (result != nullptr) env->SetDoubleArrayRegion(result, 0, 8, values);
+  return result;
+}
+
 extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeProjection(
     JNIEnv* env, jclass, jstring native_dir, jstring stub_name) {
@@ -451,4 +525,10 @@ extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeLiveFullProjection(
     JNIEnv* env, jclass, jstring native_dir, jstring stub_name, jstring payload_path) {
   return runLiveProjection(env, native_dir, stub_name, payload_path, true);
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativePersistentLiveFullProjection(
+    JNIEnv* env, jclass, jstring native_dir, jstring stub_name, jstring payload_path) {
+  return runPersistentLiveFullProjection(env, native_dir, stub_name, payload_path);
 }

@@ -25,6 +25,9 @@ internal data class QnnProjectionResult(
     status == -112 -> "QNN HTP output exceeded the projection tolerance."
     status == -120 -> "Live checkpoint payload is not prepared in this app's private storage."
     status == -121 -> "Live checkpoint payload is malformed or failed its integrity check."
+    status == -113 -> "QNN HTP persistent session is busy."
+    status == -114 -> "QNN HTP persistent session is in an invalid state."
+    status == -115 -> "QNN HTP persistent session received an invalid tensor shape."
     status == -122 -> "Live checkpoint payload is stale for the pinned model identity."
     else -> "QNN HTP projection failed with status $status."
   }
@@ -42,6 +45,37 @@ internal data class QnnProjectionResult(
       values.size == 4 && values[3].isFinite() && values[3] >= 0.0 ->
         QnnProjectionResult(values[0].toInt(), values[1], values[2], values[3])
       else -> QnnProjectionResult(-102, 0.0, Double.NaN, tolerance)
+    }
+  }
+}
+
+internal data class QnnPersistentProjectionResult(
+  val status: Int,
+  val createMs: Double,
+  val finalizeMs: Double,
+  val firstExecuteMs: Double,
+  val warmMedianMs: Double,
+  val warmLastMs: Double,
+  val maxAbsoluteError: Double,
+  val tolerance: Double,
+) {
+  val passed: Boolean get() =
+    status == 0 && maxAbsoluteError.isFinite() && tolerance.isFinite() && tolerance >= 0.0 &&
+      maxAbsoluteError <= tolerance
+
+  fun reason(): String? = if (passed) null else QnnProjectionResult(
+    status, firstExecuteMs, maxAbsoluteError, tolerance,
+  ).reason()
+
+  companion object {
+    fun fromNative(values: DoubleArray): QnnPersistentProjectionResult = if (
+      values.size == 8 && values[7].isFinite() && values[7] >= 0.0
+    ) {
+      QnnPersistentProjectionResult(
+        values[0].toInt(), values[1], values[2], values[3], values[4], values[5], values[6], values[7],
+      )
+    } else {
+      QnnPersistentProjectionResult(-114, 0.0, 0.0, 0.0, 0.0, 0.0, Double.NaN, 0.0)
     }
   }
 }
