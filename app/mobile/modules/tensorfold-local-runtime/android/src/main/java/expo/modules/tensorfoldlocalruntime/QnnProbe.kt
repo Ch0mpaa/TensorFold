@@ -166,6 +166,16 @@ internal object QnnProbe {
     "tolerance" to 0.0,
     "recipe" to null,
     "reason" to reason,
+    "qkvQnnExecutionMaxAbsoluteError" to Double.NaN,
+    "qkvTolerance" to 0.0,
+    "zQnnExecutionMaxAbsoluteError" to Double.NaN,
+    "zTolerance" to 0.0,
+    "qkvExecutionOriginalMaxAbsoluteError" to Double.NaN,
+    "qkvQnnOriginalMaxAbsoluteError" to Double.NaN,
+    "qkvOriginalReferenceMaxMagnitude" to Double.NaN,
+    "zExecutionOriginalMaxAbsoluteError" to Double.NaN,
+    "zQnnOriginalMaxAbsoluteError" to Double.NaN,
+    "zOriginalReferenceMaxMagnitude" to Double.NaN,
   )
 
   private fun detail(probe: QnnProjectionResult) = linkedMapOf<String, Any?>(
@@ -209,6 +219,16 @@ internal object QnnProbe {
     "recipe" to bundle.getString("recipe"),
     "status" to bundle.getInt("status", -114),
     "reason" to bundle.getString("reason"),
+    "qkvQnnExecutionMaxAbsoluteError" to bundle.getDouble("qkvQnnExecutionMaxAbsoluteError"),
+    "qkvTolerance" to bundle.getDouble("qkvTolerance"),
+    "zQnnExecutionMaxAbsoluteError" to bundle.getDouble("zQnnExecutionMaxAbsoluteError"),
+    "zTolerance" to bundle.getDouble("zTolerance"),
+    "qkvExecutionOriginalMaxAbsoluteError" to bundle.getDouble("qkvExecutionOriginalMaxAbsoluteError"),
+    "qkvQnnOriginalMaxAbsoluteError" to bundle.getDouble("qkvQnnOriginalMaxAbsoluteError"),
+    "qkvOriginalReferenceMaxMagnitude" to bundle.getDouble("qkvOriginalReferenceMaxMagnitude"),
+    "zExecutionOriginalMaxAbsoluteError" to bundle.getDouble("zExecutionOriginalMaxAbsoluteError"),
+    "zQnnOriginalMaxAbsoluteError" to bundle.getDouble("zQnnOriginalMaxAbsoluteError"),
+    "zOriginalReferenceMaxMagnitude" to bundle.getDouble("zOriginalReferenceMaxMagnitude"),
   )
 
   private fun result(

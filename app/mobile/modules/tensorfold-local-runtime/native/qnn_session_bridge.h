@@ -59,6 +59,43 @@ TF_QNN_BRIDGE_EXPORT int32_t tf_qnn_session_parity(
 // Releases the session object. The pointer is invalid after this call.
 TF_QNN_BRIDGE_EXPORT void tf_qnn_session_destroy(TfQnnSession* session);
 
+typedef struct TfQnnPairSession TfQnnPairSession;
+typedef struct TfQnnPairSessionConfig {
+  const char* native_dir;
+  const char* stub_name;
+  uint32_t k;
+  uint32_t qkv_m;
+  uint32_t z_m;
+} TfQnnPairSessionConfig;
+
+typedef struct TfQnnPairSessionTiming {
+  int32_t status;
+  double create_ms;
+  double finalize_ms;
+  double execute_ms;
+  double qkv_max_abs_error;
+  double z_max_abs_error;
+} TfQnnPairSessionTiming;
+
+TF_QNN_BRIDGE_EXPORT int32_t tf_qnn_pair_session_create(
+    const TfQnnPairSessionConfig* config, TfQnnPairSession** session,
+    TfQnnPairSessionTiming* timing);
+TF_QNN_BRIDGE_EXPORT int32_t tf_qnn_pair_session_set_payload(
+    TfQnnPairSession* session, const uint8_t* input, uint64_t input_bytes,
+    const uint8_t* qkv_weights, uint64_t qkv_weight_bytes,
+    const uint8_t* z_weights, uint64_t z_weight_bytes);
+TF_QNN_BRIDGE_EXPORT int32_t tf_qnn_pair_session_finalize(
+    TfQnnPairSession* session, TfQnnPairSessionTiming* timing);
+TF_QNN_BRIDGE_EXPORT int32_t tf_qnn_pair_session_execute(
+    TfQnnPairSession* session, uint8_t* qkv_output, uint64_t qkv_output_bytes,
+    uint8_t* z_output, uint64_t z_output_bytes, TfQnnPairSessionTiming* timing);
+TF_QNN_BRIDGE_EXPORT int32_t tf_qnn_pair_session_parity(
+    TfQnnPairSession* session, const uint8_t* qkv_output, uint64_t qkv_output_bytes,
+    const float* qkv_reference, float qkv_tolerance, const uint8_t* z_output,
+    uint64_t z_output_bytes, const float* z_reference, float z_tolerance,
+    TfQnnPairSessionTiming* timing);
+TF_QNN_BRIDGE_EXPORT void tf_qnn_pair_session_destroy(TfQnnPairSession* session);
+
 #ifdef __cplusplus
 }
 #endif

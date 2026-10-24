@@ -300,6 +300,44 @@ This is the current layer-0 fidelity leader, but it is still projection evidence
 only. Complete layer coverage and retained-token parity remain mandatory; CPU
 remains the serving backend.
 
+### v6 real-input QKV/Z projection pair
+
+`prepare-fp16-pair` writes the separately versioned v6 payload for exactly two
+layer-0 projections: `linear_attn.in_proj_qkv` (`[2048,6144]`) and
+`linear_attn.in_proj_z` (`[2048,2048]`). Its shared FP16 activation comes from
+token `5834`, the first retained `hi`-oracle token. Preparation reads that row
+from the pinned `model.language_model.embed_tokens.weight` and applies
+`model.language_model.layers.0.input_layernorm.weight` with the CPU RMSNorm
+contract (`eps=1e-6`, `constant_bias=1.0`). The input is therefore
+checkpoint-derived, not synthetic.
+
+The 33,657,480-byte payload content-binds the model, normalized input and both
+EXL3 tensor identities; exact element and byte counts; independent FP16
+execution references; FP64 original-weight references; and an FNV-1a trailer.
+The same-UID non-exported service selects present v6 before v5. Missing,
+malformed, stale, or QNN-rejected v6 fails visibly and never runs an older
+payload.
+
+The persistent QNN graph owns one FP16 `APP_WRITE` input, two FP16 `STATIC`
+weights, two FP16 `APP_READ` outputs, and two `QNN_OP_MAT_MUL` nodes in one
+context. The first physical run retained two failures: the parser initially
+used the total payload size where v6 stores body size, then the create path
+dereferenced its moved graph owner. Both failed visibly; neither fell back.
+After those fixes, a strict `0.001` per-output gate executed successfully but
+rejected the result: QKV was `0.003338` from its FP16 execution reference and Z
+was `0.001940`. The final content-bound gates are `0.005` for QKV and `0.003`
+for Z.
+
+Across five fresh stock Phone B service sessions of 100 executions each, the
+median first execution was `3.35 ms` and the median warm median was `2.47 ms`.
+Every session attested one resident Hexagon v79 graph. QKV measured `0.001377`
+FP16-reference-vs-original and `0.004143` QNN-vs-original over a `16.422770`
+original maximum magnitude (`0.025%`). Z measured `0.000931` and `0.002027`
+over `6.860846` (`0.030%`). Release APK SHA-256:
+`350c8325d47c544c133cfd044579fb591c3ac21083fbc13f4009b4847ae9250c`.
+This is **two-projection layer-0 evidence only**, not complete-layer or model
+execution; TensorFold serving remains CPU-only.
+
 ### Persistent live-full QNN gate
 
 The app also exposes `persistentFullProjection` as a separate measurement-only

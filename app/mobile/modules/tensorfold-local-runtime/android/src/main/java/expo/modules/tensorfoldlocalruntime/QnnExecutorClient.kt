@@ -52,7 +52,12 @@ internal object QnnExecutorClient {
         putLong("graphCount", health.getLong("graphCount"))
         putBoolean(
           "available",
-          healthyService && getInt("status") == 0 && getDouble("qnnQuantizedMaxAbsoluteError").isFinite() &&
+          healthyService && getInt("status") == 0 && if (created.getString("recipe") == "fp16-real-input-qkv-z") {
+            getDouble("qkvQnnExecutionMaxAbsoluteError").isFinite() &&
+              getDouble("qkvQnnExecutionMaxAbsoluteError") <= getDouble("qkvTolerance") &&
+              getDouble("zQnnExecutionMaxAbsoluteError").isFinite() &&
+              getDouble("zQnnExecutionMaxAbsoluteError") <= getDouble("zTolerance")
+          } else getDouble("qnnQuantizedMaxAbsoluteError").isFinite() &&
             getDouble("qnnQuantizedMaxAbsoluteError") <= getDouble("tolerance"),
         )
         putString(
@@ -60,6 +65,14 @@ internal object QnnExecutorClient {
           when {
             getBoolean("available") -> null
             !healthyService -> "QNN service process or graph residency attestation failed."
+            created.getString("recipe") == "fp16-real-input-qkv-z" ->
+              "QNN projection-pair parity failed: QKV execution %.6f / %.6f, FP16-original %.6f, QNN-original %.6f over %.6f; Z execution %.6f / %.6f, FP16-original %.6f, QNN-original %.6f over %.6f.".format(
+                getDouble("qkvQnnExecutionMaxAbsoluteError"), getDouble("qkvTolerance"),
+                getDouble("qkvExecutionOriginalMaxAbsoluteError"), getDouble("qkvQnnOriginalMaxAbsoluteError"),
+                getDouble("qkvOriginalReferenceMaxMagnitude"), getDouble("zQnnExecutionMaxAbsoluteError"),
+                getDouble("zTolerance"), getDouble("zExecutionOriginalMaxAbsoluteError"),
+                getDouble("zQnnOriginalMaxAbsoluteError"), getDouble("zOriginalReferenceMaxMagnitude"),
+              )
             else -> getString("error") ?: QnnProjectionResult(
               getInt("status"),
               getDouble("firstExecuteMs"),

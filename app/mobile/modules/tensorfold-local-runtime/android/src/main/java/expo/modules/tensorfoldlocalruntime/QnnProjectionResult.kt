@@ -110,3 +110,22 @@ internal data class QnnServiceProjectionResult(
     }
   }
 }
+
+internal data class QnnPairServiceProjectionResult(
+  val status: Int,
+  val qkvError: Double,
+  val qkvTolerance: Double,
+  val zError: Double,
+  val zTolerance: Double,
+) {
+  val passed: Boolean get() = status == 0 && qkvError.isFinite() && zError.isFinite() &&
+    qkvTolerance.isFinite() && zTolerance.isFinite() && qkvTolerance >= 0.0 && zTolerance >= 0.0 &&
+    qkvError <= qkvTolerance && zError <= zTolerance
+
+  companion object {
+    fun fromNative(values: DoubleArray): QnnPairServiceProjectionResult = if (
+      values.size == 14 && values[5].isFinite() && values[7].isFinite()
+    ) QnnPairServiceProjectionResult(values[0].toInt(), values[4], values[5], values[6], values[7])
+    else QnnPairServiceProjectionResult(-114, Double.NaN, 0.0, Double.NaN, 0.0)
+  }
+}

@@ -14,6 +14,9 @@ export interface QnnServiceProjection {
   available: boolean; createMs: number; finalizeMs: number; firstExecuteMs: number; warmMedianMs: number; warmLastMs: number
   qnnQuantizedMaxAbsoluteError: number; quantizedOriginalMaxAbsoluteError: number; qnnOriginalMaxAbsoluteError: number
   originalReferenceMaxMagnitude: number; relativeQnnOriginalError: number; tolerance: number; reason: string | null
+  qkvQnnExecutionMaxAbsoluteError: number; qkvTolerance: number; zQnnExecutionMaxAbsoluteError: number; zTolerance: number
+  qkvExecutionOriginalMaxAbsoluteError: number; qkvQnnOriginalMaxAbsoluteError: number; qkvOriginalReferenceMaxMagnitude: number
+  zExecutionOriginalMaxAbsoluteError: number; zQnnOriginalMaxAbsoluteError: number; zOriginalReferenceMaxMagnitude: number
   recipe: string | null; serviceProcess: string; backend: string; servicePid: number; graphCount: number; repeats: 100; status: number
 }
 export interface QnnCapability {

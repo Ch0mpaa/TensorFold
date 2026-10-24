@@ -97,4 +97,17 @@ class QnnProjectionResultTest {
     assertFalse(stale.passed)
     assertEquals("QNN HTP persistent session is in an invalid state.", stale.reason())
   }
+
+  @Test fun pairServiceProjectionFailsClosedForMalformedArraysAndEitherProjectionGate() {
+    val passing = doubleArrayOf(0.0, 2.0, 1.0, 1.1, 0.009, 0.01, 0.008, 0.01,
+      0.2, 0.21, 12.0, 0.3, 0.31, 11.0)
+    assertTrue(QnnPairServiceProjectionResult.fromNative(passing).passed)
+    assertFalse(QnnPairServiceProjectionResult.fromNative(passing.copyOf(13)).passed)
+    assertFalse(QnnPairServiceProjectionResult.fromNative(
+      passing.also { it[4] = 0.02 },
+    ).passed)
+    assertFalse(QnnPairServiceProjectionResult.fromNative(
+      doubleArrayOf(0.0, 2.0, 1.0, 1.1, 0.009, 0.01, 0.02, 0.01, 0.2, 0.21, 12.0, 0.3, 0.31, 11.0),
+    ).passed)
+  }
 }
