@@ -94,11 +94,11 @@ internal object ModelCatalog {
       sharded = true,
       qualcommOnly = true,
       artifacts = listOf(
-        ModelArtifact("config.json", 3_831, "0f5be0ff8050ea2912b8cd6fcee776d756db753c8567658a67f98dac395b31b6"),
+        ModelArtifact("config.json", 3_830, "0f5be0ff8050ea2912b8cd6fcee776d756db753c8567658a67f98dac395b31b6"),
         ModelArtifact("tokenizer.json", 12_807_982, "5f9e4d4901a92b997e463c1f46055088b6cca5ca61a6522d1b9f64c4bb81cb42"),
         ModelArtifact("tokenizer_config.json", 16_710, "316230d6a809701f4db5ea8f8fc862bc3a6f3229c937c174e674ff3ca0a64ac8"),
         ModelArtifact("chat_template.jinja", 7_756, "a4aee8afcf2e0711942cf848899be66016f8d14a889ff9ede07bca099c28f715"),
-        ModelArtifact("quantization_config.json", 40_315_310, "0fffd0ab7d2bdc1d9017434429f7f93a3fc227a33307a82f3366e908ad9fbb9a"),
+        ModelArtifact("quantization_config.json", 40_315_309, "0fffd0ab7d2bdc1d9017434429f7f93a3fc227a33307a82f3366e908ad9fbb9a"),
         ModelArtifact("model.safetensors.index.json", 13_401_028, "5330149b9d1d12f4cc5ea3e5703196bce0b8f1e97522112b3aad7423635cb3fe"),
         ModelArtifact("model-00001-of-00003.safetensors", 8_258_803_070, "ae09fd598b8c0bd651904de8ec44cfbd8d7832ab0ae9de66df131cda40959be9"),
         ModelArtifact("model-00002-of-00003.safetensors", 8_518_626_585, "e47ffb46fe8dd9a97b97ce7e6e0a552bda20ac6eb9aae6ac8a19cb3c6549b92b"),

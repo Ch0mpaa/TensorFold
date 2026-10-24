@@ -52,4 +52,16 @@ class ModelSecurityTest {
     assertThrows(IllegalArgumentException::class.java) { ModelCatalog.require("../foreign") }
     assertThrows(IllegalArgumentException::class.java) { ModelCatalog.require("owner/unqualified") }
   }
+
+  @Test fun admittedMoeProfilesPinDistinctVerifiedArtifacts() {
+    val low = ModelCatalog.require("Qwen3.5-35B-A3B-exl3-2.54bpw")
+    val high = ModelCatalog.require("Qwen3.5-35B-A3B-exl3-4.00bpw")
+    assertEquals("1539df4e836d11bceba0e54a57696eedc30f1b5df040b20fc3241a0fed1c7199", low.modelIdentitySha256)
+    assertEquals("af55d67bc3ccd363896a4b132d2c7c4335cc1e91e54cdc55e32796109fbeba5d", high.modelIdentitySha256)
+    assertEquals(2, low.artifacts.count { it.name.endsWith(".safetensors") })
+    assertEquals(3, high.artifacts.count { it.name.endsWith(".safetensors") })
+    assertEquals(3_830L, high.artifacts.single { it.name == "config.json" }.bytes)
+    assertEquals(40_315_309L, high.artifacts.single { it.name == "quantization_config.json" }.bytes)
+    assertEquals(19_329_446_010L, high.artifacts.filter { it.name.endsWith(".safetensors") }.sumOf { it.bytes })
+  }
 }
