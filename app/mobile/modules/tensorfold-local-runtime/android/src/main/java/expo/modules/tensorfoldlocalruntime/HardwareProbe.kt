@@ -43,7 +43,15 @@ internal object HardwareProbe {
     val vk = vulkanVersion(context)
     val arm64 = Build.SUPPORTED_ABIS.contains("arm64-v8a")
     val qnn = if (platform == "qualcomm") QnnProbe.inspect(context, socModel) else
-      linkedMapOf<String, Any?>("available" to false, "architecture" to null, "probe" to "none", "reason" to "QNN applies only to Qualcomm devices.")
+      linkedMapOf<String, Any?>(
+        "available" to false,
+        "architecture" to null,
+        "probe" to "none",
+        "elapsedMs" to 0.0,
+        "maxAbsoluteError" to Double.NaN,
+        "tolerance" to QnnProjectionResult.tolerance,
+        "reason" to "QNN applies only to Qualcomm devices.",
+      )
     val vulkan11 = vk >= ((1 shl 22) or (1 shl 12))
     // The Vulkan backend starts and is fast on Adreno 830, but its retained
     // 4B output diverges from CPU/HTP. Keep the public runtime exact by
@@ -82,9 +90,9 @@ internal object HardwareProbe {
       "qnnHtp" to qnn,
       "htpAvailableToApp" to (qnn["available"] == true),
       "htpReason" to if (qnn["available"] == true)
-        "QNN HTP calculator passed from the ordinary app UID; TensorFold projections remain on CPU until their QNN graph passes parity."
+        "QNN HTP projection MatMul passed from the ordinary app UID; TensorFold model inference remains on CPU pending retained-token parity."
       else
-        "QNN app-UID probe unavailable: ${qnn["reason"] ?: "unknown"}. The public runtime remains on CPU.",
+        "QNN app-UID projection unavailable: ${qnn["reason"] ?: "unknown"}. The public runtime remains on CPU.",
     )
   }
 }

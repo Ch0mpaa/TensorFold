@@ -5,7 +5,7 @@ import android.content.Context
 internal object QnnProbe {
   private var cached: Map<String, Any?>? = null
 
-  @JvmStatic private external fun nativeCalculator(nativeDir: String, stubName: String, count: Int): Int
+  @JvmStatic private external fun nativeProjection(nativeDir: String, stubName: String): DoubleArray
 
   @Synchronized
   fun inspect(context: Context, socModel: String): Map<String, Any?> {
@@ -14,21 +14,23 @@ internal object QnnProbe {
       socModel.equals("SM8750", ignoreCase = true) -> "v79"
       else -> null
     }
-    if (architecture == null) return result(false, null, "No packaged QNN probe matches this SoC.").also { cached = it }
-    val stub = "libQnnHtpV79CalculatorStub.so"
-    val answer = try {
+    if (architecture == null) return result(false, null, QnnProjectionResult(-101, 0.0, Double.NaN), "No packaged QNN projection matches this SoC.").also { cached = it }
+    val projection = try {
       System.loadLibrary("tensorfold_qnn_probe")
-      nativeCalculator(context.applicationInfo.nativeLibraryDir, stub, 16)
+      QnnProjectionResult.fromNative(nativeProjection(context.applicationInfo.nativeLibraryDir, "libQnnHtpV79Stub.so"))
     } catch (failure: Throwable) {
-      return result(false, architecture, failure.javaClass.simpleName).also { cached = it }
+      QnnProjectionResult(-100, 0.0, Double.NaN)
     }
-    return result(answer == 0, architecture, if (answer == 0) null else "QNN calculator returned $answer").also { cached = it }
+    return result(projection.passed, architecture, projection, projection.reason()).also { cached = it }
   }
 
-  private fun result(available: Boolean, architecture: String?, reason: String?) = linkedMapOf<String, Any?>(
+  private fun result(available: Boolean, architecture: String?, projection: QnnProjectionResult, reason: String?) = linkedMapOf<String, Any?>(
     "available" to available,
     "architecture" to architecture,
-    "probe" to "qnn-calculator-v1",
+    "probe" to "qnn-htp-projection-v1",
+    "elapsedMs" to projection.elapsedMs,
+    "maxAbsoluteError" to projection.maxAbsoluteError,
+    "tolerance" to QnnProjectionResult.tolerance,
     "reason" to reason,
   )
 }

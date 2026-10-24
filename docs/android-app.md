@@ -6,7 +6,7 @@ TensorFold Mobile 1.1.0 adds an ordinary, rootless Android runtime to the existi
 
 The distributable APK and the privileged custom-kernel HTP prototype remain separate:
 
-- The public APK packages Qualcomm QAIRT 2.50 runtime components and an app-UID QNN HTP calculator probe alongside the vendor-independent GGML CPU/Vulkan engines. On stock Phone B, the shell validator and the ordinary TensorFold app UID both executed the calculator on Hexagon v79 without root. This proves QNN HTP access, not model inference.
+- The public APK packages Qualcomm QAIRT 2.50 runtime components and app-UID QNN HTP capability gates alongside the vendor-independent GGML CPU/Vulkan engines. On stock Phone B, the shell validator and the ordinary TensorFold app UID executed the calculator on Hexagon v79 without root; a real quantized QNN `MatMul` graph then matched its embedded CPU oracle exactly in 2.19 ms. This proves rootless QNN graph execution, not model inference.
 - Model execution still selects CPU: on Snapdragon SM8750 that path reproduced the retained 4B output `248068,198,90700,8340,25,271,16,13` exactly.
 - Vulkan is a quarantined candidate. It initialized on Adreno 830 and decoded quickly, but the same frozen 4B prompt produced different tokens beginning `213390,3319,...`.
 - The faster custom EXL3 HTP prototype remains a privileged developer path because an ordinary app UID cannot write directly to `/dev/fastrpc-cdsp`. The new QNN route must express and verify TensorFold projections through supported QNN graphs instead of relabelling the rooted custom kernel.

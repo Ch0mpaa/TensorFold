@@ -115,13 +115,23 @@ prerequisites present, Hexagon v79, and a passing calculator test after staging
 the matching stub and unsigned skeleton. The same validator passed on the stock
 Samsung S20 Ultra with its matching DSP v66 files.
 
-The Android build stages `libQnnHtp.so`, `libQnnSystem.so`, v79 stub/skeleton
-and calculator files from an explicit QAIRT SDK root, compiles a tiny JNI
-wrapper, and declares the OEM-public `libcdsprpc.so` and `libadsprpc.so` in the
-manifest. The release APK then ran `Qnn_calculatorTest(16)` from the ordinary
-TensorFold app UID on Phone B and reported `QNN HTP v79 passed`. Model
-projections remain CPU-only until a QNN graph reproduces the CPU retained-token
-oracle; library presence or calculator success cannot select the model backend.
+The Android build stages `libQnnHtp.so`, `libQnnHtpPrepare.so`,
+`libQnnSystem.so`, the v79 stub/skeleton and calculator files from an explicit
+QAIRT SDK root, compiles and links a JNI bridge against the QAIRT QNN
+headers/runtime, and declares the OEM-public `libcdsprpc.so` and
+`libadsprpc.so` in the manifest. The app-UID calculator completed the transport
+gate.
+
+The next gate now passes on the same stock Phone B app UID. It constructs a
+real QNN HTP v79 context and graph containing a quantized `MatMul`, executes
+fixed matrix/vector inputs, copies its output to the app, and compares every
+element with its embedded CPU oracle. The first retained failure was graph
+creation because `libQnnHtpPrepare.so` was absent. Packaging that required
+graph-compiler component produced an exact result (maximum absolute error
+`0.000`) in `2.19 ms`. This projection gate remains separate from model-backend
+selection: TensorFold model inference is still CPU-only until retained-token
+parity passes; neither library presence, calculator success, nor this small
+projection selects HTP.
 
 
 The `qualcomm-probe` target implements the non-invasive portion of gate 1. It
