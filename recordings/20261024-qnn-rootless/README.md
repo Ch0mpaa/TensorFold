@@ -110,6 +110,27 @@ QNN HTP v79 fixed synthetic projection passed (1.75 ms). Checkpoint fixture pass
 Verified release APK SHA-256:
 `f45d59a7f20bdc6709e5c3f9cd2529daf1a93285db9ded17db43aa947c54d4dd`.
 
+### Complete live layer-0 projection
+
+The v2 app-private payload expands the same contract to the complete
+`linear_attn.in_proj_qkv` projection: 2,048 inputs, 6,144 outputs and
+12,582,912 weights decoded from the exact checkpoint. The source tensors
+(`trellis`, `suh`, `svh`, `mcg`) hash to
+`5ef6279518fbef7940d8da4011b6f0bb77375ffb3a6953ce9fc2c7752844343a`.
+The first run failed closed with `-121` because its FP64-derived tolerance did
+not exactly equal `stored_output_scale * 1.5f`. After fixing that serialized
+contract and regenerating the payload, the ordinary release app process
+reported:
+
+```text
+Full 2048x6144 app-owned projection passed (2.50 ms, max error 0.0093).
+```
+
+Model inference remained CPU-selected.
+
+Final release APK SHA-256:
+`5abc9e98fa71d0da419f5da8065769c7763e79a1928095a3db54917db3e0670b`.
+
 ## Samsung S20 Ultra — Snapdragon 865
 
 Device: `SM-G988U`, `SM8250`, stock Android 12/API 31.
@@ -128,4 +149,4 @@ The current APK packages only the v79 app-UID probe, so Samsung app-UID QNN rema
 
 ## Claim boundary
 
-The calculator proves rootless QNN DSP/HTP transport; the fixed graphs prove real QNN execution from the ordinary Phone B app UID; and both the shell probe and in-process release APK prove a block decoded directly from the pinned app-private safetensors checkpoint can pass through QNN. They do not prove full TensorFold model inference, retained-token parity, production throughput, or full NPU-only execution. The selected model backend remains CPU until the app-owned worker runs full model layers and the autoregressive path through QNN against frozen CPU oracles, with backend attestation in each receipt.
+The calculator proves rootless QNN DSP/HTP transport; the fixed graphs prove real QNN execution from the ordinary Phone B app UID; and the release APK proves both a block and a complete 2048x6144 projection decoded directly from the pinned app-private safetensors checkpoint can pass through QNN. They do not prove a complete layer, full TensorFold model inference, retained-token parity, production throughput, or full NPU-only execution. The selected model backend remains CPU until the app-owned worker runs every operation and the autoregressive path through QNN against frozen CPU oracles, with backend attestation in each receipt.

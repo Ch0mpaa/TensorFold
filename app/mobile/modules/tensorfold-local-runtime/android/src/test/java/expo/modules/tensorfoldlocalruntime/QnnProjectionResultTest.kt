@@ -34,4 +34,19 @@ class QnnProjectionResultTest {
     assertEquals("Live checkpoint payload is malformed or failed its integrity check.", malformed.reason())
     assertEquals("Live checkpoint payload is stale for the pinned model identity.", stale.reason())
   }
+
+  @Test fun fullProjectionUsesContentBoundNativeToleranceAndRejectsPayloadFailures() {
+    val passing = QnnProjectionResult.fromNative(
+      doubleArrayOf(0.0, 10.0, 0.1, 0.2),
+      QnnProjectionResult.liveFullTolerance,
+    )
+    assertTrue(passing.passed)
+    assertEquals(0.2, passing.tolerance, 0.0)
+    assertFalse(QnnProjectionResult.fromNative(doubleArrayOf(0.0, 10.0, 0.3, 0.2)).passed)
+    assertFalse(QnnProjectionResult(-120, 0.0, Double.NaN, QnnProjectionResult.liveFullTolerance).passed)
+    assertEquals(
+      "Live checkpoint payload is stale for the pinned model identity.",
+      QnnProjectionResult(-122, 0.0, Double.NaN, QnnProjectionResult.liveFullTolerance).reason(),
+    )
+  }
 }

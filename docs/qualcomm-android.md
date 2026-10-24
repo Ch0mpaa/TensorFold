@@ -205,6 +205,36 @@ TensorFold model inference is still CPU-only until full checkpoint-derived
 projections and the autoregressive path pass retained-token parity. Neither
 library presence, calculator success, nor these projection gates select HTP.
 
+`prepare-full` is a separate v2 preparation mode for the complete exact
+layer-0 `[2048,6144]` projection. It decodes every EXL3 tile from the same
+pinned checkpoint, deterministically quantizes all 12,582,912 weights and a
+fixed 2,048-element activation, computes 6,144 integer-domain references, and
+atomically writes `files/tensorfold/qnn/live-full-projection-v2.bin`. The app
+rejects missing, malformed, stale-model, wrong-tensor-identity, wrong-shape,
+wrong-size, or corrupt payloads before allocating QNN buffers; it uses a
+bounded dynamic 6,144-byte output only after validation. Run preparation as
+the app UID, then restart the release APK:
+
+```text
+tensorfold-qualcomm-exl3-qnn-projection prepare-full MODEL_SAFETENSORS \
+  files/tensorfold/qnn/live-full-projection-v2.bin
+```
+
+The first v2 payload was retained as a `-121` malformed/integrity failure: its
+FP64 tolerance was rounded independently from the stored FP32 output scale.
+Encoding `tolerance = stored_output_scale * 1.5f`, and validating the exact
+source-tensor identity
+`5ef6279518fbef7940d8da4011b6f0bb77375ffb3a6953ce9fc2c7752844343a`,
+fixed that contract. The stock Phone B release APK then reported:
+
+```text
+Full 2048x6144 app-owned projection passed (2.50 ms, max error 0.0093).
+```
+
+This is a projection gate, not model offload. It is reported separately as
+`liveFullProjection`; TensorFold model inference stays CPU-only until complete
+layers and the autoregressive path pass retained-token parity.
+
 
 The `qualcomm-probe` target implements the non-invasive portion of gate 1. It
 loads `/vendor/lib64/libcdsprpc.so` and checks the required 64-bit remote-handle

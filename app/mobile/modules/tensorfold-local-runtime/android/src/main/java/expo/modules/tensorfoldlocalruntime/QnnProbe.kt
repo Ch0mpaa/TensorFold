@@ -13,6 +13,11 @@ internal object QnnProbe {
     stubName: String,
     payloadPath: String,
   ): DoubleArray
+  @JvmStatic private external fun nativeLiveFullProjection(
+    nativeDir: String,
+    stubName: String,
+    payloadPath: String,
+  ): DoubleArray
 
   @Synchronized
   fun inspect(context: Context, socModel: String): Map<String, Any?> {
@@ -26,26 +31,20 @@ internal object QnnProbe {
         unavailable("No packaged checkpoint projection matches this SoC.", QnnProjectionResult.checkpointTolerance),
         unavailable("No packaged full-block projection matches this SoC.", QnnProjectionResult.fullBlockTolerance),
         unavailable("No packaged live checkpoint projection matches this SoC.", QnnProjectionResult.fullBlockTolerance),
+        unavailable("No prepared full projection matches this SoC.", QnnProjectionResult.liveFullTolerance),
       ).also { cached = it }
     }
     val nativeDir = context.applicationInfo.nativeLibraryDir
     val payloadPath = context.filesDir.resolve("tensorfold/qnn/live-checkpoint-v1.bin").absolutePath
+    val fullPayloadPath = context.filesDir.resolve("tensorfold/qnn/live-full-projection-v2.bin").absolutePath
     val probes = try {
       System.loadLibrary("tensorfold_qnn_probe")
       listOf(
-        QnnProjectionResult.fromNative(
-          nativeProjection(nativeDir, "libQnnHtpV79Stub.so"),
-          QnnProjectionResult.syntheticTolerance,
-        ),
+        QnnProjectionResult.fromNative(nativeProjection(nativeDir, "libQnnHtpV79Stub.so"), QnnProjectionResult.syntheticTolerance),
         QnnProjectionResult.fromNative(nativeCheckpointProjection(nativeDir, "libQnnHtpV79Stub.so")),
-        QnnProjectionResult.fromNative(
-          nativeFullProjection(nativeDir, "libQnnHtpV79Stub.so"),
-          QnnProjectionResult.fullBlockTolerance,
-        ),
-        QnnProjectionResult.fromNative(
-          nativeLiveCheckpointProjection(nativeDir, "libQnnHtpV79Stub.so", payloadPath),
-          QnnProjectionResult.fullBlockTolerance,
-        ),
+        QnnProjectionResult.fromNative(nativeFullProjection(nativeDir, "libQnnHtpV79Stub.so"), QnnProjectionResult.fullBlockTolerance),
+        QnnProjectionResult.fromNative(nativeLiveCheckpointProjection(nativeDir, "libQnnHtpV79Stub.so", payloadPath), QnnProjectionResult.fullBlockTolerance),
+        QnnProjectionResult.fromNative(nativeLiveFullProjection(nativeDir, "libQnnHtpV79Stub.so", fullPayloadPath), QnnProjectionResult.liveFullTolerance),
       )
     } catch (failure: Throwable) {
       listOf(
@@ -53,9 +52,10 @@ internal object QnnProbe {
         QnnProjectionResult(-100, 0.0, Double.NaN),
         QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance),
         QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance),
+        QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.liveFullTolerance),
       )
     }
-    return result(probes[0].passed, architecture, probes[0], probes[1], probes[2], probes[3])
+    return result(probes[0].passed, architecture, probes[0], probes[1], probes[2], probes[3], probes[4])
       .also { cached = it }
   }
 
@@ -82,6 +82,7 @@ internal object QnnProbe {
     checkpoint: QnnProjectionResult,
     full: QnnProjectionResult,
     live: QnnProjectionResult,
+    liveFull: QnnProjectionResult,
   ) = linkedMapOf<String, Any?>(
     "available" to available,
     "architecture" to architecture,
@@ -93,6 +94,7 @@ internal object QnnProbe {
     "checkpointProjection" to detail(checkpoint),
     "fullBlockProjection" to detail(full),
     "liveCheckpointProjection" to detail(live),
+    "liveFullProjection" to detail(liveFull),
   )
 
   private fun result(
@@ -102,6 +104,7 @@ internal object QnnProbe {
     checkpoint: Map<String, Any?>,
     full: Map<String, Any?>,
     live: Map<String, Any?>,
+    liveFull: Map<String, Any?>,
   ) = linkedMapOf<String, Any?>(
     "available" to available,
     "architecture" to architecture,
@@ -113,5 +116,6 @@ internal object QnnProbe {
     "checkpointProjection" to checkpoint,
     "fullBlockProjection" to full,
     "liveCheckpointProjection" to live,
+    "liveFullProjection" to liveFull,
   )
 }

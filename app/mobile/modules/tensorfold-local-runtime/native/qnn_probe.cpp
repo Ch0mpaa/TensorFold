@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <vector>
+#include <new>
 
 
 #include <QNN/QnnInterface.h>
@@ -56,9 +57,17 @@ constexpr char kLivePayloadMagic[] = "TFQNNLP1";
 constexpr uint32_t kLivePayloadVersion = 1;
 constexpr size_t kLivePayloadHeaderBytes = 256;
 constexpr size_t kLivePayloadBytes = kLivePayloadHeaderBytes + 128 + 128 * 128 + 128 * sizeof(float) + sizeof(uint64_t);
+constexpr char kLiveFullPayloadMagic[] = "TFQNNLF2";
+constexpr uint32_t kLiveFullPayloadVersion = 2;
+constexpr uint32_t kLiveFullK = 2048;
+constexpr uint32_t kLiveFullM = 6144;
+constexpr size_t kLiveFullPayloadHeaderBytes = 320;
+constexpr size_t kLiveFullPayloadBytes = kLiveFullPayloadHeaderBytes + kLiveFullK +
+    static_cast<size_t>(kLiveFullK) * kLiveFullM + kLiveFullM * sizeof(float) + sizeof(uint64_t);
 constexpr char kPinnedModelSha256[] = "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f";
 constexpr char kPinnedBlockSha256[] = "4ad47947dfa769a9d7eb2754732e855775bb3df70e66902bb2ee4429d27dc776";
 constexpr char kPinnedPayloadSha256[] = "556a06597ce4f7ddd01ed588305e92292cef5cf55cb00f71828a34e95b29795a";
+constexpr char kPinnedFullTensorIdentity[] = "5ef6279518fbef7940d8da4011b6f0bb77375ffb3a6953ce9fc2c7752844343a";
 
 uint32_t readU32(const uint8_t* bytes) {
   return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) |
@@ -101,45 +110,74 @@ bool isHexIdentity(const uint8_t* value) {
 
 struct LivePayload {
   std::vector<uint8_t> bytes;
-  std::array<float, 128> reference{};
+  std::vector<float> reference;
   ProjectionSpec spec{};
 };
 
-int32_t loadLivePayload(const char* path, LivePayload* payload) {
+int32_t loadPayload(const char* path, bool full, LivePayload* payload) {
   FILE* file = std::fopen(path, "rb");
   if (file == nullptr) return errno == ENOENT ? -120 : -121;
-  payload->bytes.resize(kLivePayloadBytes);
-  const size_t read = std::fread(payload->bytes.data(), 1, payload->bytes.size(), file);
-  const int trailing = std::fgetc(file);
-  std::fclose(file);
-  if (read != payload->bytes.size() || trailing != EOF) return -121;
-  const uint8_t* bytes = payload->bytes.data();
-  if (std::memcmp(bytes, kLivePayloadMagic, 8) != 0 || readU32(bytes + 8) != kLivePayloadVersion ||
-      readU32(bytes + 12) != kLivePayloadHeaderBytes || readU32(bytes + 16) != 128 ||
-      readU32(bytes + 20) != 128 || readU32(bytes + 244) != 128 ||
-      readU32(bytes + 248) != 128 * 128 || readU32(bytes + 252) != 128 * sizeof(float)) return -121;
-  if (std::memcmp(bytes + 52, kPinnedModelSha256, 64) != 0 ||
-      std::memcmp(bytes + 116, kPinnedBlockSha256, 64) != 0 ||
-      std::memcmp(bytes + 180, kPinnedPayloadSha256, 64) != 0) return -122;
-  if (!isHexIdentity(bytes + 116) || !isHexIdentity(bytes + 180) ||
-      readU64(bytes + payload->bytes.size() - sizeof(uint64_t)) !=
-          fnv1a64(bytes, payload->bytes.size() - sizeof(uint64_t))) return -121;
-  const float input_scale = readF32(bytes + 24);
-  const float weight_scale = readF32(bytes + 28);
-  const float output_scale = readF32(bytes + 32);
-  const float tolerance = readF32(bytes + 36);
-  if (!std::isfinite(input_scale) || !std::isfinite(weight_scale) || !std::isfinite(output_scale) ||
+  const size_t header_bytes = full ? kLiveFullPayloadHeaderBytes : kLivePayloadHeaderBytes;
+  std::array<uint8_t, kLiveFullPayloadHeaderBytes> header{};
+  if (std::fread(header.data(), 1, header_bytes, file) != header_bytes || std::fseek(file, 0, SEEK_END) != 0) {
+    std::fclose(file);
+    return -121;
+  }
+  const long file_size = std::ftell(file);
+  const size_t expected_bytes = full ? kLiveFullPayloadBytes : kLivePayloadBytes;
+  const uint32_t expected_k = full ? kLiveFullK : 128;
+  const uint32_t expected_m = full ? kLiveFullM : 128;
+  if (file_size < 0 || static_cast<uint64_t>(file_size) != expected_bytes || std::fseek(file, 0, SEEK_SET) != 0 ||
+      std::memcmp(header.data(), full ? kLiveFullPayloadMagic : kLivePayloadMagic, 8) != 0 ||
+      readU32(header.data() + 8) != (full ? kLiveFullPayloadVersion : kLivePayloadVersion) ||
+      readU32(header.data() + 12) != header_bytes || readU32(header.data() + 16) != expected_k ||
+      readU32(header.data() + 20) != expected_m || readU32(header.data() + 244) != expected_k ||
+      readU32(header.data() + 248) != expected_k * expected_m ||
+      readU32(header.data() + 252) != expected_m * sizeof(float)) {
+    std::fclose(file);
+    return -121;
+  }
+  if (std::memcmp(header.data() + 52, kPinnedModelSha256, 64) != 0 ||
+      (full && std::memcmp(header.data() + 116, kPinnedFullTensorIdentity, 64) != 0) ||
+      (!full && (std::memcmp(header.data() + 116, kPinnedBlockSha256, 64) != 0 ||
+                 std::memcmp(header.data() + 180, kPinnedPayloadSha256, 64) != 0))) {
+    std::fclose(file);
+    return -122;
+  }
+  const float input_scale = readF32(header.data() + 24);
+  const float weight_scale = readF32(header.data() + 28);
+  const float output_scale = readF32(header.data() + 32);
+  const float tolerance = readF32(header.data() + 36);
+  if (!isHexIdentity(header.data() + 116) || !isHexIdentity(header.data() + 180) ||
+      !std::isfinite(input_scale) || !std::isfinite(weight_scale) || !std::isfinite(output_scale) ||
       !std::isfinite(tolerance) || input_scale <= 0 || weight_scale <= 0 || output_scale <= 0 ||
-      tolerance != output_scale * 1.5f || readI32(bytes + 40) != -128 || readI32(bytes + 44) != -128 ||
-      readI32(bytes + 48) != -128) return -121;
-  const uint8_t* input = bytes + kLivePayloadHeaderBytes;
-  const uint8_t* weights = input + 128;
-  const uint8_t* reference_bytes = weights + 128 * 128;
+      tolerance != output_scale * 1.5f || readI32(header.data() + 40) != -128 ||
+      readI32(header.data() + 44) != -128 || readI32(header.data() + 48) != -128) {
+    std::fclose(file);
+    return -121;
+  }
+  try {
+    payload->bytes.resize(expected_bytes);
+    payload->reference.resize(expected_m);
+  } catch (const std::bad_alloc&) {
+    std::fclose(file);
+    return -121;
+  }
+  if (std::fread(payload->bytes.data(), 1, expected_bytes, file) != expected_bytes || std::fgetc(file) != EOF) {
+    std::fclose(file);
+    return -121;
+  }
+  std::fclose(file);
+  const uint8_t* bytes = payload->bytes.data();
+  if (readU64(bytes + expected_bytes - sizeof(uint64_t)) != fnv1a64(bytes, expected_bytes - sizeof(uint64_t))) return -121;
+  const uint8_t* input = bytes + header_bytes;
+  const uint8_t* weights = input + expected_k;
+  const uint8_t* reference_bytes = weights + static_cast<size_t>(expected_k) * expected_m;
   for (size_t index = 0; index < payload->reference.size(); ++index) {
     payload->reference[index] = readF32(reference_bytes + index * sizeof(float));
     if (!std::isfinite(payload->reference[index])) return -121;
   }
-  payload->spec = {input, weights, payload->reference.data(), 128, 128, input_scale, -128,
+  payload->spec = {input, weights, payload->reference.data(), expected_k, expected_m, input_scale, -128,
       weight_scale, -128, output_scale, -128, tolerance};
   return 0;
 }
@@ -182,6 +220,15 @@ jdoubleArray jniResult(JNIEnv* env, const TfQnnU8MatmulResult& native_result) {
       native_result.execution_ms, native_result.max_abs_error};
   jdoubleArray output = env->NewDoubleArray(3);
   if (output != nullptr) env->SetDoubleArrayRegion(output, 0, 3, values);
+  return output;
+}
+
+jdoubleArray jniResultWithTolerance(
+    JNIEnv* env, const TfQnnU8MatmulResult& native_result, double tolerance) {
+  const jdouble values[] = {static_cast<jdouble>(native_result.status),
+      native_result.execution_ms, native_result.max_abs_error, tolerance};
+  jdoubleArray output = env->NewDoubleArray(4);
+  if (output != nullptr) env->SetDoubleArrayRegion(output, 0, 4, values);
   return output;
 }
 }  // namespace
@@ -333,8 +380,8 @@ static jdoubleArray runProjection(JNIEnv* env, jstring native_dir, jstring stub_
   return jniResult(env, native_result);
 }
 
-static jdoubleArray runLiveCheckpointProjection(JNIEnv* env, jstring native_dir, jstring stub_name,
-                                                jstring payload_path) {
+static jdoubleArray runLiveProjection(JNIEnv* env, jstring native_dir, jstring stub_name,
+                                      jstring payload_path, bool full) {
   TfQnnU8MatmulResult native_result{};
   native_result.status = -121;
   native_result.max_abs_error = std::numeric_limits<double>::quiet_NaN();
@@ -342,7 +389,7 @@ static jdoubleArray runLiveCheckpointProjection(JNIEnv* env, jstring native_dir,
   const char* path = env->GetStringUTFChars(payload_path, nullptr);
   if (path == nullptr) return jniResult(env, native_result);
   LivePayload payload;
-  const int32_t payload_status = loadLivePayload(path, &payload);
+  const int32_t payload_status = loadPayload(path, full, &payload);
   env->ReleaseStringUTFChars(payload_path, path);
   if (payload_status != 0) {
     native_result.status = payload_status;
@@ -356,16 +403,24 @@ static jdoubleArray runLiveCheckpointProjection(JNIEnv* env, jstring native_dir,
     native_result.status = TF_QNN_MATMUL_LOAD_FAILURE;
     return jniResult(env, native_result);
   }
-  uint8_t output[128] = {};
+  std::vector<uint8_t> output;
+  try {
+    output.resize(payload.spec.output_columns);
+  } catch (const std::bad_alloc&) {
+    env->ReleaseStringUTFChars(native_dir, dir);
+    env->ReleaseStringUTFChars(stub_name, stub);
+    native_result.status = -121;
+    return jniResult(env, native_result);
+  }
   TfQnnU8MatmulRequest request = {dir, stub, payload.spec.input, payload.spec.weights,
-      payload.spec.reference, output, payload.spec.input_columns, payload.spec.output_columns,
+      payload.spec.reference, output.data(), payload.spec.input_columns, payload.spec.output_columns,
       payload.spec.input_scale, payload.spec.input_offset, payload.spec.weight_scale,
       payload.spec.weight_offset, payload.spec.output_scale, payload.spec.output_offset,
       payload.spec.tolerance};
   tf_qnn_execute_u8_matmul(&request, &native_result);
   env->ReleaseStringUTFChars(native_dir, dir);
   env->ReleaseStringUTFChars(stub_name, stub);
-  return jniResult(env, native_result);
+  return jniResultWithTolerance(env, native_result, payload.spec.tolerance);
 }
 
 extern "C" JNIEXPORT jdoubleArray JNICALL
@@ -389,5 +444,11 @@ Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeFullProjection(
 extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeLiveCheckpointProjection(
     JNIEnv* env, jclass, jstring native_dir, jstring stub_name, jstring payload_path) {
-  return runLiveCheckpointProjection(env, native_dir, stub_name, payload_path);
+  return runLiveProjection(env, native_dir, stub_name, payload_path, false);
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeLiveFullProjection(
+    JNIEnv* env, jclass, jstring native_dir, jstring stub_name, jstring payload_path) {
+  return runLiveProjection(env, native_dir, stub_name, payload_path, true);
 }

@@ -33,9 +33,15 @@ internal data class QnnProjectionResult(
     const val syntheticTolerance = 0.5
     const val checkpointTolerance = 0.0005
     const val fullBlockTolerance = 0.00263044941
+    // Successful live payloads return their content-bound native tolerance as
+    // the fourth result value. Zero fails closed for missing/malformed payloads.
+    const val liveFullTolerance = 0.0
 
-    fun fromNative(values: DoubleArray, tolerance: Double = checkpointTolerance): QnnProjectionResult =
-      if (values.size == 3) QnnProjectionResult(values[0].toInt(), values[1], values[2], tolerance)
-      else QnnProjectionResult(-102, 0.0, Double.NaN, tolerance)
+    fun fromNative(values: DoubleArray, tolerance: Double = checkpointTolerance): QnnProjectionResult = when {
+      values.size == 3 -> QnnProjectionResult(values[0].toInt(), values[1], values[2], tolerance)
+      values.size == 4 && values[3].isFinite() && values[3] >= 0.0 ->
+        QnnProjectionResult(values[0].toInt(), values[1], values[2], values[3])
+      else -> QnnProjectionResult(-102, 0.0, Double.NaN, tolerance)
+    }
   }
 }
