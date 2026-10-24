@@ -63,6 +63,7 @@
         }
       ],
       "./plugins/with-optional-camera",
+      "./plugins/with-qnn-public-libraries",
       [
         "expo-build-properties",
         {

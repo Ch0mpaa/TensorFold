@@ -4,6 +4,7 @@ param(
     [string]$GgmlSource = "D:/op13-root/src/ggml-hexagon-091b6a7",
     [string]$Zig = "D:/op13-root/tools/zig-0.17.0/zig.exe",
     [string]$AndroidLibc = "D:/op13-root/tools/android-ndk-r30-zig-libc-api36.txt",
+    [string]$QairtSdk = "D:/op13-root/tools/qairt-sdk/qairt/2.50.0.260828",
     [ValidateSet("debug", "release")][string]$Configuration = "debug"
 )
 
@@ -102,6 +103,26 @@ foreach ($Entry in $Files.GetEnumerator()) {
     if (-not (Test-Path $Entry.Key)) { throw "Missing runtime artifact: $($Entry.Key)" }
     Copy-Item -Force $Entry.Key (Join-Path $Runtime $Entry.Value)
 }
+
+$QnnFiles = @{
+    "$QairtSdk/bin/aarch64-android/qnn-platform-validator" = "libqnn_platform_validator.so"
+    "$QairtSdk/lib/aarch64-android/libQnnHtp.so" = "libQnnHtp.so"
+    "$QairtSdk/lib/aarch64-android/libQnnSystem.so" = "libQnnSystem.so"
+    "$QairtSdk/lib/aarch64-android/libQnnHtpV79Stub.so" = "libQnnHtpV79Stub.so"
+    "$QairtSdk/lib/aarch64-android/libQnnHtpV79CalculatorStub.so" = "libQnnHtpV79CalculatorStub.so"
+    "$QairtSdk/lib/hexagon-v79/unsigned/libQnnHtpV79Skel.so" = "libQnnHtpV79Skel.so"
+    "$QairtSdk/lib/hexagon-v79/unsigned/libCalculator_skel.so" = "libCalculator_skel.so"
+}
+foreach ($Entry in $QnnFiles.GetEnumerator()) {
+    if (-not (Test-Path $Entry.Key)) { throw "Missing QAIRT runtime artifact: $($Entry.Key)" }
+    Copy-Item -Force $Entry.Key (Join-Path $Runtime $Entry.Value)
+}
+$Clang = Join-Path $AndroidNdk "toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe"
+$QnnProbe = Join-Path $Mobile "modules/tensorfold-local-runtime/native/qnn_probe.cpp"
+& $Clang "--target=aarch64-linux-android31" -shared -fPIC -O2 -Wl,-soname,libtensorfold_qnn_probe.so $QnnProbe -ldl -llog -o (Join-Path $Runtime "libtensorfold_qnn_probe.so")
+if ($LASTEXITCODE -ne 0) { throw "TensorFold QNN app-UID probe build failed." }
+New-Item -ItemType Directory -Force "$Mobile/assets" | Out-Null
+Copy-Item -Force "$QairtSdk/NOTICE.txt" "$Mobile/assets/QAIRT_NOTICE.txt"
 
 Push-Location $Mobile
 try {

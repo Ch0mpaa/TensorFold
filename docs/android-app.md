@@ -4,12 +4,13 @@ TensorFold Mobile 1.1.0 adds an ordinary, rootless Android runtime to the existi
 
 ## Runtime strategy
 
-The distributable APK and the Qualcomm HTP engineering prototype are deliberately separate:
+The distributable APK and the privileged custom-kernel HTP prototype remain separate:
 
-- The public APK contains vendor-independent GGML CPU and Vulkan backends and no Hexagon/FastRPC dependency. It currently selects CPU: on Snapdragon SM8750 that path reproduced the retained 4B output `248068,198,90700,8340,25,271,16,13` exactly.
-- Vulkan is a quarantined candidate, not the public execution path. It initialized on Adreno 830 and decoded quickly, but the same frozen 4B prompt produced different tokens beginning `213390,3319,...`. The app therefore reports **Retained-token mismatch; portable CPU selected** and refuses to label or use Vulkan as qualified inference.
-- The faster Snapdragon HTP prototype remains a developer path. On the reference OnePlus firmware, an ordinary app UID cannot open `/dev/fastrpc-cdsp` for writing. Shipping that direct backend would require root, vendor signing, or an OEM-supported runtime and would not be a one-tap public app.
-- Snapdragon SM8750 and Google Tensor G5 are qualified on their exact, unprivileged CPU paths. The app identifies each platform explicitly; acceleration remains separately gated.
+- The public APK packages Qualcomm QAIRT 2.50 runtime components and an app-UID QNN HTP calculator probe alongside the vendor-independent GGML CPU/Vulkan engines. On stock Phone B, the shell validator and the ordinary TensorFold app UID both executed the calculator on Hexagon v79 without root. This proves QNN HTP access, not model inference.
+- Model execution still selects CPU: on Snapdragon SM8750 that path reproduced the retained 4B output `248068,198,90700,8340,25,271,16,13` exactly.
+- Vulkan is a quarantined candidate. It initialized on Adreno 830 and decoded quickly, but the same frozen 4B prompt produced different tokens beginning `213390,3319,...`.
+- The faster custom EXL3 HTP prototype remains a privileged developer path because an ordinary app UID cannot write directly to `/dev/fastrpc-cdsp`. The new QNN route must express and verify TensorFold projections through supported QNN graphs instead of relabelling the rooted custom kernel.
+- Snapdragon SM8750, Snapdragon SM8250 and Google Tensor G5 are qualified on their exact unprivileged CPU paths. Acceleration remains separately gated per backend and operation.
 - Google's dedicated Tensor TPU SDK remains a later adapter. The official SDK is currently distributed through its beta program and uses compiled LiteRT artifacts rather than TensorFold EXL3 checkpoints. The app makes no GPU or TPU claim from CPU results.
 
 NNAPI is not a fallback: Android deprecated it in Android 15.
@@ -102,10 +103,12 @@ A stock, unrooted Samsung Galaxy S20 Ultra 5G (`SM-G988U`) with Snapdragon
 865 (`SM8250`), 10.4 GiB RAM and Android 12/API 31 installed version 1.1.0/code
 2 after the source minimum SDK was lowered from 33 to 31. The installed APK
 hashed `833ffbdb355537cc9582d52b38186566cc8cd6cbaa8adb59d052a9183849ded8`.
-The app reported `qualcomm`, `compatible-unqualified`, CPU selected, Vulkan
-1.1.0 quarantined and ordinary-app HTP unavailable. It downloaded and verified
-the pinned 2B profile, built its app-private decoded cache, reached `ready`, and
-returned `LOCAL_OK` through private local chat at 2.6 tok/s.
+The app reported `qualcomm`, `compatible-unqualified`, CPU selected and Vulkan
+1.1.0 quarantined. A rootless shell QNN calculator passed on Hexagon v66; the
+current APK packages only the v79 app-UID probe, so Samsung app-UID HTP remains
+unqualified. The app downloaded and verified the pinned 2B profile, built its
+app-private decoded cache, reached `ready`, and returned `LOCAL_OK` through
+private local chat at 2.6 tok/s.
 
 The same `tensorfold-android-quick-v1` workload produced:
 

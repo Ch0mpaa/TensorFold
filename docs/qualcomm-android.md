@@ -18,10 +18,13 @@ execution are not being substituted for TensorFold.
 
 The separate 35B-A3B MoE work now has short-sequence CPU/HTP engineering
 evidence; it does not inherit the dense 2B/4B correctness or benchmark gates.
-The distributable Android APK remains on its qualified portable CPU path:
-FastRPC HTP is a privileged developer lane, and Vulkan remains disabled after
-its retained-token mismatch. None of the MoE figures below establishes
-ordinary-app HTP support, full NPU-only execution or a production release.
+The distributable Android APK still runs model inference on its qualified CPU
+path, while Vulkan remains disabled after its retained-token mismatch. QAIRT
+2.50's rootless calculator passes on Phone B from both shell and the ordinary
+TensorFold app UID (Hexagon v79), and from Samsung's unprivileged shell
+(Hexagon v66). That proves supported QNN DSP access, not TensorFold projection
+offload, full NPU-only execution or a production acceleration claim. The custom
+EXL3 FastRPC kernel remains a separate privileged developer lane.
 
 ## 35B-A3B: separate checkpoint and execution lanes
 
@@ -103,6 +106,23 @@ loader accepts before vendor libraries are introduced.
 Every gate must retain a CPU reference and a deterministic tiny-tensor test.
 Kernel or boot changes are out of scope until userspace profiling demonstrates
 that they are necessary.
+
+### Rootless QNN HTP gate
+
+QAIRT 2.50.0.260828 was fetched through the official `qairt-dev` package and
+`qairt-vm`. On stock Phone B, `qnn-platform-validator` reported QNN DSP
+prerequisites present, Hexagon v79, and a passing calculator test after staging
+the matching stub and unsigned skeleton. The same validator passed on the stock
+Samsung S20 Ultra with its matching DSP v66 files.
+
+The Android build stages `libQnnHtp.so`, `libQnnSystem.so`, v79 stub/skeleton
+and calculator files from an explicit QAIRT SDK root, compiles a tiny JNI
+wrapper, and declares the OEM-public `libcdsprpc.so` and `libadsprpc.so` in the
+manifest. The release APK then ran `Qnn_calculatorTest(16)` from the ordinary
+TensorFold app UID on Phone B and reported `QNN HTP v79 passed`. Model
+projections remain CPU-only until a QNN graph reproduces the CPU retained-token
+oracle; library presence or calculator success cannot select the model backend.
+
 
 The `qualcomm-probe` target implements the non-invasive portion of gate 1. It
 loads `/vendor/lib64/libcdsprpc.so` and checks the required 64-bit remote-handle

@@ -134,7 +134,7 @@ export default function LocalTensorFold() {
       {capabilities && !capabilities.runtimeInstalled && <Notice error>This APK is missing: {capabilities.missingRuntime.join(', ')}.</Notice>}
       {capabilities?.vulkanAvailable && !capabilities.vulkanQualified && <Notice>Vulkan is installed but disabled: {capabilities.vulkanReason}</Notice>}
       {capabilities?.platform === 'pixel-tensor' && <Body muted>Pixel Tensor detected. The exact portable CPU path is qualified on Pixel 10 Pro Fold; GPU and TPU acceleration remain separately gated.</Body>}
-      {capabilities?.platform === 'qualcomm' && <Body muted>The public app selects the exact portable CPU path. Direct HTP remains developer-only because Android does not grant ordinary apps FastRPC access.</Body>}
+      {capabilities?.platform === 'qualcomm' && <Body muted>{capabilities.htpAvailableToApp ? `QNN HTP ${capabilities.qnnHtp.architecture || ''} passed the ordinary-app calculator probe. TensorFold model projections remain on CPU until their QNN graph passes retained-token parity.` : capabilities.htpReason}</Body>}
     </View>
     <View style={{ gap: 12 }}><View style={layout.row}><Heading small>Models</Heading><Body muted>{status?.state || 'checking'}</Body></View>
       {transfer && ['downloading', 'verifying'].includes(transfer.state) && <Notice>{transfer.state === 'verifying' ? 'Verifying SHA-256' : `Downloading ${percent(transfer.bytesDone, transfer.bytesTotal)}`} · {bytes(transfer.bytesDone)} / {bytes(transfer.bytesTotal)}</Notice>}

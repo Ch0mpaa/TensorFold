@@ -42,6 +42,8 @@ internal object HardwareProbe {
     val platform = classifyPlatform(socManufacturer, socModel, Build.MANUFACTURER, Build.HARDWARE)
     val vk = vulkanVersion(context)
     val arm64 = Build.SUPPORTED_ABIS.contains("arm64-v8a")
+    val qnn = if (platform == "qualcomm") QnnProbe.inspect(context, socModel) else
+      linkedMapOf<String, Any?>("available" to false, "architecture" to null, "probe" to "none", "reason" to "QNN applies only to Qualcomm devices.")
     val vulkan11 = vk >= ((1 shl 22) or (1 shl 12))
     // The Vulkan backend starts and is fast on Adreno 830, but its retained
     // 4B output diverges from CPU/HTP. Keep the public runtime exact by
@@ -77,9 +79,12 @@ internal object HardwareProbe {
       "backend" to backend,
       "qualification" to qualification,
       "runtimeInstalled" to missingRuntime.isEmpty(),
-      "missingRuntime" to missingRuntime,
-      "htpAvailableToApp" to false,
-      "htpReason" to "The direct FastRPC HTP prototype requires vendor or root privileges; the public app uses Vulkan without privileged device access.",
+      "qnnHtp" to qnn,
+      "htpAvailableToApp" to (qnn["available"] == true),
+      "htpReason" to if (qnn["available"] == true)
+        "QNN HTP calculator passed from the ordinary app UID; TensorFold projections remain on CPU until their QNN graph passes parity."
+      else
+        "QNN app-UID probe unavailable: ${qnn["reason"] ?: "unknown"}. The public runtime remains on CPU.",
     )
   }
 }

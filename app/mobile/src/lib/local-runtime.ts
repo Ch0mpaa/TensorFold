@@ -25,7 +25,8 @@ export interface LocalCapabilities {
   qualification: 'qualified-reference' | 'compatible-unqualified' | 'pixel-device-validation-required' | 'unsupported'
   runtimeInstalled: boolean
   missingRuntime: string[]
-  htpAvailableToApp: false
+  qnnHtp: { available: boolean; architecture: string | null; probe: string; reason: string | null }
+  htpAvailableToApp: boolean
   htpReason: string
 }
 
