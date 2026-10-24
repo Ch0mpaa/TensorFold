@@ -231,6 +231,18 @@ pub fn build(b: *std.Build) void {
     }) }));
     test_step.dependOn(&model_admission_test.step);
     b.step("test-qualcomm-model-admission", "Qualified Android model admission tests").dependOn(&model_admission_test.step);
+    const exl3_qnn_projection_test = b.addRunArtifact(b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/exl3_qnn_projection.zig"),
+        .target = b.graph.host,
+        .optimize = .debug,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "exl3_format", .module = b.createModule(.{ .root_source_file = b.path("zig/src/core/exl3_format.zig"), .target = b.graph.host, .optimize = .debug }) },
+            .{ .name = "safetensors", .module = b.createModule(.{ .root_source_file = b.path("zig/src/core/safetensors.zig"), .target = b.graph.host, .optimize = .debug }) },
+        },
+    }) }));
+    test_step.dependOn(&exl3_qnn_projection_test.step);
+    b.step("test-qualcomm-exl3-qnn-projection", "Deterministic live-QNN projection preparation tests").dependOn(&exl3_qnn_projection_test.step);
     grammar_build.steps(b, target, xgrammar);
 }
 
@@ -414,6 +426,24 @@ fn qualcommTargets(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         exl3_model_probe.setLibCFile(.{ .cwd_relative = libc_file });
     const exl3_model_probe_step = b.step("qualcomm-exl3-model-probe", "Build the Android full-checkpoint EXL3 projection probe");
     exl3_model_probe_step.dependOn(&b.addInstallArtifact(exl3_model_probe, .{}).step);
+    const exl3_qnn_projection_module = b.createModule(.{
+        .root_source_file = b.path("zig/src/qualcomm/exl3_qnn_projection.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "exl3_format", .module = b.createModule(.{ .root_source_file = b.path("zig/src/core/exl3_format.zig"), .target = target, .optimize = optimize }) },
+            .{ .name = "safetensors", .module = b.createModule(.{ .root_source_file = b.path("zig/src/core/safetensors.zig"), .target = target, .optimize = optimize }) },
+        },
+    });
+    const exl3_qnn_projection = b.addExecutable(.{
+        .name = "tensorfold-qualcomm-exl3-qnn-projection",
+        .linkage = .dynamic,
+        .root_module = exl3_qnn_projection_module,
+    });
+    if (android_libc) |libc_file| exl3_qnn_projection.setLibCFile(.{ .cwd_relative = libc_file });
+    const exl3_qnn_projection_step = b.step("qualcomm-exl3-qnn-projection", "Build the Android live-checkpoint QNN projection probe");
+    exl3_qnn_projection_step.dependOn(&b.addInstallArtifact(exl3_qnn_projection, .{}).step);
 
     const qwen35_mtp_probe_module = b.createModule(.{
         .root_source_file = b.path("zig/src/qualcomm/qwen35_mtp_probe.zig"),

@@ -1,0 +1,216 @@
+const std = @import("std");
+const exl3 = @import("exl3_format");
+const st = @import("safetensors");
+
+const block = 128;
+const source_k = 2048;
+const source_m = 6144;
+const projection_name = "model.language_model.layers.0.linear_attn.in_proj_qkv";
+const model_sha256_hex = "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f";
+
+const BridgeRequest = extern struct {
+    native_dir: [*:0]const u8,
+    stub_name: [*:0]const u8,
+    input: [*]const u8,
+    weights: [*]const u8,
+    reference: [*]const f32,
+    output: [*]u8,
+    k: u32,
+    m: u32,
+    input_scale: f32,
+    input_offset: i32,
+    weight_scale: f32,
+    weight_offset: i32,
+    output_scale: f32,
+    output_offset: i32,
+    tolerance: f32,
+};
+
+const BridgeResult = extern struct {
+    status: i32,
+    execution_ms: f64,
+    max_abs_error: f64,
+};
+
+const Execute = *const fn (*const BridgeRequest, *BridgeResult) callconv(.c) i32;
+
+const Failure = error{
+    Usage,
+    Model,
+    Bridge,
+    Parity,
+};
+
+fn require(file: *const st.File, suffix: []const u8, dtype: st.DType) Failure!st.Tensor {
+    var name: [256]u8 = undefined;
+    const full = std.fmt.bufPrint(&name, "{s}.{s}", .{ projection_name, suffix }) catch return error.Model;
+    const tensor = file.get(full) orelse return error.Model;
+    if (tensor.dtype != dtype) return error.Model;
+    return tensor;
+}
+
+fn symmetricQuantize(value: f64, scale: f64) Failure!u8 {
+    if (!std.math.isFinite(value) or !std.math.isFinite(scale) or scale <= 0) return error.Model;
+    const magnitude = @floor(@abs(value) / scale + 0.5);
+    const signed: i32 = @intFromFloat(if (value < 0) -magnitude else magnitude);
+    if (signed < -127 or signed > 127) return error.Model;
+    return @intCast(signed + 128);
+}
+
+fn sha256Hex(bytes: []const u8) [64]u8 {
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+    return std.fmt.bytesToHex(digest, .lower);
+}
+
+fn quantizeProjection(decoded: []const f64, allocator: std.mem.Allocator) Failure!struct {
+    input: []u8,
+    weights: []u8,
+    reference: []f32,
+    input_scale: f32,
+    weight_scale: f32,
+    output_scale: f32,
+    block_sha256: [64]u8,
+    payload_sha256: [64]u8,
+} {
+    if (decoded.len != block * block) return error.Model;
+    const input = allocator.alloc(u8, block) catch return error.Model;
+    errdefer allocator.free(input);
+    const weights = allocator.alloc(u8, block * block) catch return error.Model;
+    errdefer allocator.free(weights);
+    const reference = allocator.alloc(f32, block) catch return error.Model;
+    errdefer allocator.free(reference);
+    const input_scale: f64 = 1.0 / 127.0;
+    var max_weight: f64 = 0;
+    for (decoded) |value| max_weight = @max(max_weight, @abs(value));
+    if (max_weight == 0) return error.Model;
+    const weight_scale: f64 = max_weight / 127.0;
+    for (input, 0..) |*entry, index| {
+        const signed: i32 = @intCast((index * 73 + 19) % 255);
+        entry.* = @intCast(signed + 1); // ((i * 73 + 19) % 255) - 127, shifted by 128.
+    }
+    for (decoded, 0..) |value, index| weights[index] = try symmetricQuantize(value, weight_scale);
+    var max_reference: f64 = 0;
+    var dots: [block]i32 = undefined;
+    for (0..block) |out_col| {
+        var dot: i32 = 0;
+        for (0..block) |inner| {
+            const lhs: i32 = @as(i32, input[inner]) - 128;
+            const rhs: i32 = @as(i32, weights[inner * block + out_col]) - 128;
+            dot += lhs * rhs;
+        }
+        dots[out_col] = dot;
+        const value = @as(f64, @floatFromInt(dot)) * input_scale * weight_scale;
+        max_reference = @max(max_reference, @abs(value));
+        reference[out_col] = @floatCast(value);
+    }
+    if (max_reference == 0) return error.Model;
+    const output_scale: f64 = max_reference / 100.0;
+    // Match the generated fixture's range proof before asking QNN to quantize output.
+    for (reference) |value| {
+        const rounded: i32 = @intFromFloat(@floor(@as(f64, value) / output_scale + 0.5));
+        if (rounded < -127 or rounded > 127) return error.Model;
+    }
+    var payload: std.ArrayList(u8) = .empty;
+    payload.ensureTotalCapacity(allocator, block + block * block + block * 4 + 3 * 8) catch return error.Model;
+    defer payload.deinit(allocator);
+    payload.appendSlice(allocator, input) catch return error.Model;
+    payload.appendSlice(allocator, weights) catch return error.Model;
+    for (dots) |dot| {
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(i32, bytes[0..], dot, .little);
+        payload.appendSlice(allocator, bytes[0..]) catch return error.Model;
+    }
+    for ([_]f64{ input_scale, weight_scale, output_scale }) |scale| {
+        var bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, bytes[0..], @bitCast(scale), .little);
+        payload.appendSlice(allocator, bytes[0..]) catch return error.Model;
+    }
+    return .{ .input = input, .weights = weights, .reference = reference, .input_scale = @floatCast(input_scale), .weight_scale = @floatCast(weight_scale), .output_scale = @floatCast(output_scale), .block_sha256 = sha256Hex(std.mem.sliceAsBytes(decoded)), .payload_sha256 = sha256Hex(payload.items) };
+}
+
+fn run(init: std.process.Init) Failure!void {
+    const args = init.minimal.args.toSlice(init.arena.allocator()) catch return error.Usage;
+    if (args.len != 5) return error.Usage;
+    const allocator = init.gpa;
+    var file = st.File.open(allocator, init.io, args[1]) catch return error.Model;
+    defer file.close(init.io);
+    const model_sha = sha256Hex(file.map.memory);
+    if (!std.mem.eql(u8, &model_sha, model_sha256_hex)) return error.Model;
+
+    const trellis = try require(&file, "trellis", .i16);
+    const suh = try require(&file, "suh", .f16);
+    const svh = try require(&file, "svh", .f16);
+    const mcg = try require(&file, "mcg", .i32);
+    if (trellis.rank != 3 or trellis.dim(0) * 16 != source_k or trellis.dim(1) * 16 != source_m or
+        trellis.dim(2) == 0 or trellis.dim(2) % 8 != 0 or suh.rank != 1 or svh.rank != 1 or
+        suh.dim(0) != source_k or svh.dim(0) != source_m or mcg.rank != 0 or
+        mcg.bytes.len != 4 or std.mem.readInt(u32, mcg.bytes[0..4], .little) != exl3.McgMul)
+        return error.Model;
+
+    const words = trellis.dim(2);
+    const all_trellis = std.mem.bytesAsSlice(i16, trellis.bytes);
+    const selected = allocator.alloc(i16, (block / 16) * (block / 16) * words) catch return error.Model;
+    defer allocator.free(selected);
+    for (0..block / 16) |tile_row| for (0..block / 16) |tile_col| {
+        const source = (tile_row * trellis.dim(1) + tile_col) * words;
+        const destination = (tile_row * (block / 16) + tile_col) * words;
+        @memcpy(selected[destination..][0..words], all_trellis[source..][0..words]);
+    };
+    const selected_suh = allocator.alloc(f16, block) catch return error.Model;
+    defer allocator.free(selected_suh);
+    const selected_svh = allocator.alloc(f16, block) catch return error.Model;
+    defer allocator.free(selected_svh);
+    @memcpy(std.mem.sliceAsBytes(selected_suh), suh.bytes[0 .. block * @sizeOf(f16)]);
+    @memcpy(std.mem.sliceAsBytes(selected_svh), svh.bytes[0 .. block * @sizeOf(f16)]);
+    const decoded = allocator.alloc(f64, block * block) catch return error.Model;
+    defer allocator.free(decoded);
+    const scratch = allocator.alloc(f64, 2 * block * block) catch return error.Model;
+    defer allocator.free(scratch);
+    exl3.dequantizeFast(.{ .halves = @intCast(words / 8) }, .mcg, selected, block / 16, block / 16, selected_suh, selected_svh, decoded, scratch);
+    const quantized = try quantizeProjection(decoded, allocator);
+    defer allocator.free(quantized.input);
+    defer allocator.free(quantized.weights);
+    defer allocator.free(quantized.reference);
+
+    var bridge = std.DynLib.open(args[4]) catch return error.Bridge;
+    defer bridge.close();
+    const execute = bridge.lookup(Execute, "tf_qnn_execute_u8_matmul") orelse return error.Bridge;
+    const output = allocator.alloc(u8, block) catch return error.Bridge;
+    defer allocator.free(output);
+    var result: BridgeResult = .{ .status = -99, .execution_ms = 0, .max_abs_error = std.math.nan(f64) };
+    const request: BridgeRequest = .{ .native_dir = args[2].ptr, .stub_name = args[3].ptr, .input = quantized.input.ptr, .weights = quantized.weights.ptr, .reference = quantized.reference.ptr, .output = output.ptr, .k = block, .m = block, .input_scale = quantized.input_scale, .input_offset = -128, .weight_scale = quantized.weight_scale, .weight_offset = -128, .output_scale = quantized.output_scale, .output_offset = -128, .tolerance = quantized.output_scale * 1.5 };
+    const status = execute(&request, &result);
+    const passed = status == 0 and result.status == 0 and std.math.isFinite(result.max_abs_error) and
+        result.max_abs_error <= request.tolerance;
+    std.debug.print(
+        "{{\"tensorfold\":\"qualcomm-exl3-qnn-projection\",\"model_sha256\":\"{s}\",\"tensor\":\"{s}\",\"source_shape\":[{d},{d}],\"block\":[0,0,128,128],\"block_sha256\":\"{s}\",\"payload_sha256\":\"{s}\",\"scales\":[{d:.9},{d:.9},{d:.9}],\"bridge_status\":{d},\"qnn_status\":{d},\"max_abs_error\":{d:.9},\"tolerance\":{d:.9},\"execution_ms\":{d:.6},\"passed\":{s}}}\n",
+        .{ model_sha[0..], projection_name, source_k, source_m, quantized.block_sha256[0..], quantized.payload_sha256[0..], quantized.input_scale, quantized.weight_scale, quantized.output_scale, status, result.status, result.max_abs_error, request.tolerance, result.execution_ms, if (passed) "true" else "false" },
+    );
+    if (status != 0 or result.status != 0)
+        return if (status == -112 or result.status == -112) error.Parity else error.Bridge;
+    if (!passed) return error.Parity;
+}
+
+pub fn main(init: std.process.Init) !u8 {
+    run(init) catch |failure| switch (failure) {
+        error.Usage => {
+            std.debug.print("usage: tensorfold-qualcomm-exl3-qnn-projection MODEL_SAFETENSORS NATIVE_DIR STUB_NAME QNN_BRIDGE_SO\n", .{});
+            return 64;
+        },
+        error.Model => return 4,
+        error.Bridge => return 5,
+        error.Parity => return 6,
+    };
+    return 0;
+}
+
+test "generator-contract activation is stable" {
+    var decoded: [block * block]f64 = @splat(1.0);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const q = try quantizeProjection(&decoded, arena.allocator());
+    try std.testing.expectEqualSlices(u8, &.{ 20, 93, 166, 239, 57 }, q.input[0..5]);
+    try std.testing.expectEqual(@as(u8, 255), q.weights[0]);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 127.0), q.input_scale, 1e-7);
+}

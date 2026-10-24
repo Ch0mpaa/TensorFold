@@ -144,6 +144,42 @@ per-tensor parameters reserve output headroom; parity tolerance is 1.5 output
 LSBs. On the retained app-UID run, this full block passed on QNN HTP v79 in
 `1.96 ms` with `0.0009` maximum absolute error.
 
+### Live pinned-checkpoint QNN projection
+
+`qualcomm-exl3-qnn-projection` is the shell-only bridge gate for one actual
+layer-0 `[128,128]` block from
+`model.language_model.layers.0.linear_attn.in_proj_qkv`. It memory-maps the
+2B 8.00-bpw safetensors file, refuses any SHA-256 other than
+`a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f`,
+validates the companion EXL3 tensors and MCG codebook, and FP64-decodes the
+first tile block. It then applies the same deterministic symmetric-u8
+quantization contract as the generated full-block gate, calculates integer CPU
+dots only as an independent oracle, and calls the packaged QNN bridge through
+`tf_qnn_execute_u8_matmul`. The bridge creates and releases all QNN handles
+per call; it never substitutes a CPU result for QNN output.
+
+```text
+zig build qualcomm-exl3-qnn-projection -Dtarget=aarch64-linux-android \
+  -Doptimize=ReleaseSafe -Dandroid-libc=/path/to/android-libc.txt
+
+tensorfold-qualcomm-exl3-qnn-projection MODEL_SAFETENSORS NATIVE_DIR \
+  libQnnHtpV79Stub.so /data/local/tmp/libtensorfold_qnn_probe.so
+```
+
+The sole stdout receipt is JSON and records model/tensor/block and quantization
+hashes, scales, bridge/QNN stages, maximum real-domain error, timing and
+`passed`. Exit `0` requires QNN execution and tolerance parity; `4`, `5`, and
+`6` distinguish model validation, bridge load/execution, and parity failure.
+On stock Phone B's unprivileged shell, the exact pinned checkpoint passed:
+the runtime-decoded block hash was
+`4ad47947dfa769a9d7eb2754732e855775bb3df70e66902bb2ee4429d27dc776`,
+the quantized payload hash was
+`556a06597ce4f7ddd01ed588305e92292cef5cf55cb00f71828a34e95b29795a`,
+QNN executed in `1.933906 ms`, and maximum error was `0.001135342` against
+the declared `0.003202019` tolerance. This is live-checkpoint engineering
+evidence; the app-UID fixed projection gates above remain the distribution
+proof until the live bridge is invoked by the app-owned worker.
+
 The first retained failure was graph creation because
 `libQnnHtpPrepare.so` was absent. Packaging that required graph-compiler
 component fixed it. These gates remain separate from model-backend selection:

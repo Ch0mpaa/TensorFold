@@ -69,6 +69,22 @@ QNN HTP v79 synthetic projection MatMul passed (1.91 ms, max error 0.000). Check
 
 Verified full-block APK SHA-256: `88102fc211b7e4a801bbb95b7b75a32ecbcebcfa71751fa16e57987e74bf697e`.
 
+### Live pinned-checkpoint block
+
+The engineering probe then memory-mapped the actual pinned 3,438,956,902-byte
+2B safetensors file on Phone B, verified its full SHA-256, extracted and
+FP64-decoded the first 128x128 block of layer 0
+`linear_attn.in_proj_qkv`, quantized it at runtime, and called the same QNN C
+bridge from an unprivileged shell process. The candidate output came only from
+`graphExecute`; CPU dots supplied the parity oracle.
+
+```json
+{"tensorfold":"qualcomm-exl3-qnn-projection","model_sha256":"a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f","tensor":"model.language_model.layers.0.linear_attn.in_proj_qkv","source_shape":[2048,6144],"block":[0,0,128,128],"block_sha256":"4ad47947dfa769a9d7eb2754732e855775bb3df70e66902bb2ee4429d27dc776","payload_sha256":"556a06597ce4f7ddd01ed588305e92292cef5cf55cb00f71828a34e95b29795a","scales":[0.007874016,0.000938727,0.002134679],"bridge_status":0,"qnn_status":0,"max_abs_error":0.001135342,"tolerance":0.003202019,"execution_ms":1.933906,"passed":true}
+```
+
+Exit code: `0`. This is live-checkpoint shell engineering evidence, not an
+app-owned model-backend claim.
+
 ## Samsung S20 Ultra — Snapdragon 865
 
 Device: `SM-G988U`, `SM8250`, stock Android 12/API 31.
@@ -87,4 +103,4 @@ The current APK packages only the v79 app-UID probe, so Samsung app-UID QNN rema
 
 ## Claim boundary
 
-The calculator proves rootless QNN DSP/HTP transport; the synthetic, checkpoint slice and complete 128x128 block prove real QNN graphs can execute correctly from the ordinary Phone B app UID. They do not prove full TensorFold model inference, retained-token parity, production throughput, or full NPU-only execution. The selected model backend remains CPU until full model layers and the autoregressive path pass their frozen CPU oracles and backend attestation is included in each receipt.
+The calculator proves rootless QNN DSP/HTP transport; the synthetic, checkpoint slice and complete 128x128 block prove real QNN graphs can execute correctly from the ordinary Phone B app UID; and the live shell probe proves the same block can be decoded directly from the pinned safetensors checkpoint and executed through QNN. They do not prove full TensorFold model inference, retained-token parity, production throughput, or full NPU-only execution. The selected model backend remains CPU until the app-owned worker runs full model layers and the autoregressive path through QNN against frozen CPU oracles, with backend attestation in each receipt.
