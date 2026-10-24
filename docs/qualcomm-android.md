@@ -180,9 +180,11 @@ the declared `0.003202019` tolerance.
 
 The first attempt to execute the same packaged probe as an app-UID child failed
 closed with bridge status `-100`: an `exec` child does not inherit Android's
-manifest-granted linker namespace for OEM `libcdsprpc.so`. TensorFold does not
-copy a device-specific OEM RPC library into the APK. Instead, the packaged
-probe's `prepare` mode validates and decodes the checkpoint without loading QNN,
+manifest-granted linker namespace for OEM `libcdsprpc.so`. Explicitly adding
+`/vendor/lib64` advanced that probe to QNN device creation, which still failed
+closed with `-104`. TensorFold does not copy a device-specific OEM RPC library
+into the APK.
+Instead, the packaged probe's `prepare` mode validates and decodes the checkpoint without loading QNN,
 then atomically writes a bounded versioned payload under
 `files/tensorfold/qnn/live-checkpoint-v1.bin`. The payload carries the pinned
 model, block and quantization identities, dimensions, scales, offsets, all

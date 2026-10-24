@@ -98,10 +98,12 @@ or stale (`-122`) payloads before calling QNN. A live pass is reported separatel
 from the fixed gates and does not change the CPU model backend.
 
 The direct app-UID child execution attempt was retained as a failure:
-`bridge_status=-100`, exit `5`. Android did not apply the manifest-granted OEM
-RPC linker namespace after `exec`; no device-specific `libcdsprpc.so` was copied
-into the APK. The successful path prepared the payload as the app UID, then
-restarted the release APK so JNI consumed it inside the ordinary app process:
+`bridge_status=-100`, exit `5`. Explicitly adding `/vendor/lib64` advanced it
+to QNN device creation, which still failed with `-104`, exit `5`. Android did
+not give the `exec` child the same supported QNN environment as the manifest
+declared app process; no device-specific `libcdsprpc.so` was copied into the
+APK.
+The successful path prepared the payload as the app UID, then restarted the release APK so JNI consumed it inside the ordinary app process:
 
 ```text
 QNN HTP v79 fixed synthetic projection passed (1.75 ms). Checkpoint fixture passed. Fixed 128x128 EXL3 block passed (1.92 ms, max error 0.0009). Live app-owned checkpoint projection passed in process (1.85 ms, max error 0.0011). TensorFold model inference remains on CPU pending retained-token parity.
