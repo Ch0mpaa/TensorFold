@@ -14,6 +14,12 @@ enum TfQnnSessionStatus {
   TF_QNN_SESSION_BUSY = -113,
   TF_QNN_SESSION_STATE = -114,
   TF_QNN_SESSION_SHAPE = -115,
+  TF_QNN_RMSNORM_SQUARE_FAILURE = -123,
+  TF_QNN_RMSNORM_MEAN_FAILURE = -124,
+  TF_QNN_RMSNORM_EPSILON_FAILURE = -125,
+  TF_QNN_RMSNORM_RSQRT_FAILURE = -126,
+  TF_QNN_RMSNORM_SCALE_FAILURE = -127,
+  TF_QNN_RMSNORM_GAMMA_FAILURE = -128,
 };
 
 typedef struct TfQnnSessionConfig {
@@ -66,6 +72,8 @@ typedef struct TfQnnPairSessionConfig {
   uint32_t k;
   uint32_t qkv_m;
   uint32_t z_m;
+  // v6 is zero. v7 owns the RMSNorm tensors and parameters in this session.
+  uint32_t rmsnorm;
 } TfQnnPairSessionConfig;
 
 typedef struct TfQnnPairSessionTiming {
@@ -84,6 +92,10 @@ TF_QNN_BRIDGE_EXPORT int32_t tf_qnn_pair_session_set_payload(
     TfQnnPairSession* session, const uint8_t* input, uint64_t input_bytes,
     const uint8_t* qkv_weights, uint64_t qkv_weight_bytes,
     const uint8_t* z_weights, uint64_t z_weight_bytes);
+TF_QNN_BRIDGE_EXPORT int32_t tf_qnn_rmsnorm_pair_session_set_payload(
+    TfQnnPairSession* session, const uint8_t* input, uint64_t input_bytes,
+    const uint8_t* gamma, uint64_t gamma_bytes, const uint8_t* qkv_weights,
+    uint64_t qkv_weight_bytes, const uint8_t* z_weights, uint64_t z_weight_bytes);
 TF_QNN_BRIDGE_EXPORT int32_t tf_qnn_pair_session_finalize(
     TfQnnPairSession* session, TfQnnPairSessionTiming* timing);
 TF_QNN_BRIDGE_EXPORT int32_t tf_qnn_pair_session_execute(

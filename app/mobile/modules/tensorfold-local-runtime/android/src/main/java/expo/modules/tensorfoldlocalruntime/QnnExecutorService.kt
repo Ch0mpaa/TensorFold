@@ -31,9 +31,11 @@ class QnnExecutorService : Service() {
     override fun createGraph(): Bundle {
       sameUid()
       return try {
-        val payload = filesDir.resolve("tensorfold/qnn/live-layer0-projection-pair-v6.bin").let {
+        val payload = filesDir.resolve("tensorfold/qnn/live-layer0-rmsnorm-projection-pair-v7.bin").let {
           when {
             it.isFile -> it
+            filesDir.resolve("tensorfold/qnn/live-layer0-projection-pair-v6.bin").isFile ->
+              filesDir.resolve("tensorfold/qnn/live-layer0-projection-pair-v6.bin")
             filesDir.resolve("tensorfold/qnn/live-full-projection-v5.bin").isFile ->
               filesDir.resolve("tensorfold/qnn/live-full-projection-v5.bin")
             filesDir.resolve("tensorfold/qnn/live-full-projection-v4.bin").isFile ->
@@ -44,6 +46,7 @@ class QnnExecutorService : Service() {
           }
         }
         val recipe = when {
+          payload.name.endsWith("-rmsnorm-projection-pair-v7.bin") -> "fp16-qnn-rmsnorm-qkv-z"
           payload.name.endsWith("-pair-v6.bin") -> "fp16-real-input-qkv-z"
           payload.name.endsWith("-v5.bin") -> "fp16-input-weight-output"
           payload.name.endsWith("-v4.bin") -> "axis-u8-output-channel"
@@ -84,7 +87,7 @@ class QnnExecutorService : Service() {
       if (repeats !in 1..100) return Bundle().apply { putInt("status", -115); putString("error", "Repeat count is outside the bounded QNN oracle range.") }
       return try {
         val values = worker.submit<DoubleArray> { QnnNative.execute(graphHandle, repeats) }.get()
-        val isPair = graphRecipes[graphHandle] == "fp16-real-input-qkv-z"
+        val isPair = graphRecipes[graphHandle] in setOf("fp16-real-input-qkv-z", "fp16-qnn-rmsnorm-qkv-z")
         val expectedSize = if (isPair) 14 else 10
         if (values.size != expectedSize) Bundle().apply {
           lastStatus = -114

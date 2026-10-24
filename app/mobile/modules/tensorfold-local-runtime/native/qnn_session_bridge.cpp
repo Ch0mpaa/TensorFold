@@ -313,7 +313,8 @@ struct TfQnnPairSession {
   TfQnnPairSessionConfig config{};
   std::string native_dir;
   std::string stub_name;
-  std::vector<uint8_t> input, qkv_weights, z_weights;
+  std::vector<uint8_t> input, gamma, qkv_weights, z_weights;
+  std::vector<_Float16> rmsnorm_mean_weights;
   void* rpc = nullptr;
   void* htp_stub = nullptr;
   const QnnInterface_t* provider = nullptr;
@@ -322,9 +323,18 @@ struct TfQnnPairSession {
   Qnn_ContextHandle_t context = nullptr;
   Qnn_ProfileHandle_t profile = nullptr;
   Qnn_GraphHandle_t graph = nullptr;
-  uint32_t input_dims[2]{1, 0}, qkv_dims[2]{}, z_dims[2]{}, qkv_out_dims[2]{}, z_out_dims[2]{};
-  Qnn_Tensor_t input_tensor = QNN_TENSOR_INIT, qkv_weight = QNN_TENSOR_INIT,
-      z_weight = QNN_TENSOR_INIT, qkv_output = QNN_TENSOR_INIT, z_output = QNN_TENSOR_INIT;
+  uint32_t input_dims[2]{1, 0}, gamma_dims[1]{0}, normalized_dims[2]{1, 0},
+      qkv_dims[2]{}, z_dims[2]{}, qkv_out_dims[2]{}, z_out_dims[2]{};
+  uint32_t scalar_dims[2]{1, 1}, mean_weight_dims[2]{0, 1};
+  _Float16 rmsnorm_epsilon = static_cast<_Float16>(1.0e-6f);
+  Qnn_Tensor_t input_tensor = QNN_TENSOR_INIT, gamma_tensor = QNN_TENSOR_INIT,
+      normalized_tensor = QNN_TENSOR_INIT, rms_square = QNN_TENSOR_INIT,
+      rms_mean_weight = QNN_TENSOR_INIT, rms_mean = QNN_TENSOR_INIT,
+      rms_epsilon_tensor = QNN_TENSOR_INIT, rms_stabilized = QNN_TENSOR_INIT,
+      rms_inverse = QNN_TENSOR_INIT, rms_unit = QNN_TENSOR_INIT,
+      qkv_weight = QNN_TENSOR_INIT, z_weight = QNN_TENSOR_INIT,
+      qkv_output = QNN_TENSOR_INIT, z_output = QNN_TENSOR_INIT;
+  Qnn_Param_t rmsnorm_unary_params[1]{QNN_PARAM_INIT};
   void cleanup() {
     if (provider != nullptr) {
       const auto& qnn = provider->QNN_INTERFACE_VER_NAME;
@@ -350,17 +360,28 @@ extern "C" int32_t tf_qnn_pair_session_create(const TfQnnPairSessionConfig* conf
                                                 TfQnnPairSessionTiming* timing) {
   clearPairTiming(timing, TF_QNN_MATMUL_INVALID_ARGUMENT);
   if (out == nullptr || config == nullptr || config->native_dir == nullptr || config->stub_name == nullptr ||
-      config->k == 0 || config->qkv_m == 0 || config->z_m == 0 ||
+      config->k == 0 || config->qkv_m == 0 || config->z_m == 0 || config->rmsnorm > 1 ||
       (static_cast<uint64_t>(config->k) * (config->qkv_m + config->z_m) * sizeof(uint16_t)) >
           kMaximumWeightBytes) return TF_QNN_MATMUL_INVALID_ARGUMENT;
   *out = nullptr;
   timespec start{}, end{}; clock_gettime(CLOCK_MONOTONIC, &start);
   auto* session = new (std::nothrow) TfQnnPairSession();
   if (session == nullptr) return TF_QNN_MATMUL_LOAD_FAILURE;
-  try { session->native_dir = config->native_dir; session->stub_name = config->stub_name; }
-  catch (const std::bad_alloc&) { delete session; return TF_QNN_MATMUL_LOAD_FAILURE; }
-  session->config = *config; session->config.native_dir = session->native_dir.c_str(); session->config.stub_name = session->stub_name.c_str();
-  setenv("ADSP_LIBRARY_PATH", session->config.native_dir, 1);
+  session->config = *config;
+  try {
+    session->native_dir = config->native_dir;
+    session->stub_name = config->stub_name;
+    if (config->rmsnorm != 0) {
+      const _Float16 mean_weight = static_cast<_Float16>(
+          1.0f / static_cast<float>(config->k));
+      session->rmsnorm_mean_weights.assign(config->k, mean_weight);
+    }
+  } catch (const std::bad_alloc&) {
+    delete session;
+    return TF_QNN_MATMUL_LOAD_FAILURE;
+  }
+  session->config.native_dir = session->native_dir.c_str();
+  session->config.stub_name = session->stub_name.c_str();
   session->rpc = dlopen("libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL);
   if (session->rpc == nullptr) session->rpc = dlopen("libadsprpc.so", RTLD_NOW | RTLD_GLOBAL);
   session->htp_stub = session->rpc == nullptr ? nullptr : dlopen(session->config.stub_name, RTLD_NOW | RTLD_GLOBAL);
@@ -389,7 +410,7 @@ extern "C" int32_t tf_qnn_pair_session_create(const TfQnnPairSessionConfig* conf
 extern "C" int32_t tf_qnn_pair_session_set_payload(TfQnnPairSession* session,
     const uint8_t* input, uint64_t input_bytes, const uint8_t* qkv_weights, uint64_t qkv_bytes,
     const uint8_t* z_weights, uint64_t z_bytes) {
-  if (session == nullptr || input == nullptr || qkv_weights == nullptr || z_weights == nullptr) return TF_QNN_MATMUL_INVALID_ARGUMENT;
+  if (session == nullptr || session->config.rmsnorm != 0 || input == nullptr || qkv_weights == nullptr || z_weights == nullptr) return TF_QNN_MATMUL_INVALID_ARGUMENT;
   std::unique_lock<std::mutex> lock(session->mutex, std::try_to_lock);
   if (!lock.owns_lock()) return TF_QNN_SESSION_BUSY;
   if (session->state != TfQnnPairSession::State::kCreated) return TF_QNN_SESSION_STATE;
@@ -402,6 +423,22 @@ extern "C" int32_t tf_qnn_pair_session_set_payload(TfQnnPairSession* session,
   session->state = TfQnnPairSession::State::kPayloadSet; return 0;
 }
 
+extern "C" int32_t tf_qnn_rmsnorm_pair_session_set_payload(TfQnnPairSession* session,
+    const uint8_t* input, uint64_t input_bytes, const uint8_t* gamma, uint64_t gamma_bytes,
+    const uint8_t* qkv_weights, uint64_t qkv_bytes, const uint8_t* z_weights, uint64_t z_bytes) {
+  if (session == nullptr || session->config.rmsnorm != 1 || input == nullptr || gamma == nullptr || qkv_weights == nullptr || z_weights == nullptr) return TF_QNN_MATMUL_INVALID_ARGUMENT;
+  std::unique_lock<std::mutex> lock(session->mutex, std::try_to_lock);
+  if (!lock.owns_lock()) return TF_QNN_SESSION_BUSY;
+  if (session->state != TfQnnPairSession::State::kCreated) return TF_QNN_SESSION_STATE;
+  const uint64_t vector_bytes = static_cast<uint64_t>(session->config.k) * sizeof(uint16_t);
+  const uint64_t qkv_required = static_cast<uint64_t>(session->config.k) * session->config.qkv_m * sizeof(uint16_t);
+  const uint64_t z_required = static_cast<uint64_t>(session->config.k) * session->config.z_m * sizeof(uint16_t);
+  if (input_bytes != vector_bytes || gamma_bytes != vector_bytes || qkv_bytes != qkv_required || z_bytes != z_required) return TF_QNN_SESSION_SHAPE;
+  try { session->input.assign(input, input + input_bytes); session->gamma.assign(gamma, gamma + gamma_bytes); session->qkv_weights.assign(qkv_weights, qkv_weights + qkv_bytes); session->z_weights.assign(z_weights, z_weights + z_bytes); }
+  catch (const std::bad_alloc&) { return TF_QNN_MATMUL_TENSOR_FAILURE; }
+  session->state = TfQnnPairSession::State::kPayloadSet; return 0;
+}
+
 extern "C" int32_t tf_qnn_pair_session_finalize(TfQnnPairSession* session, TfQnnPairSessionTiming* timing) {
   clearPairTiming(timing, TF_QNN_SESSION_STATE);
   if (session == nullptr) return TF_QNN_MATMUL_INVALID_ARGUMENT;
@@ -409,25 +446,152 @@ extern "C" int32_t tf_qnn_pair_session_finalize(TfQnnPairSession* session, TfQnn
   if (!lock.owns_lock()) { if (timing != nullptr) timing->status = TF_QNN_SESSION_BUSY; return TF_QNN_SESSION_BUSY; }
   if (session->state != TfQnnPairSession::State::kPayloadSet) return TF_QNN_SESSION_STATE;
   timespec start{}, end{}; clock_gettime(CLOCK_MONOTONIC, &start);
-  session->input_dims[1] = session->config.k; session->qkv_dims[0] = session->config.k; session->qkv_dims[1] = session->config.qkv_m;
-  session->z_dims[0] = session->config.k; session->z_dims[1] = session->config.z_m; session->qkv_out_dims[0] = 1; session->qkv_out_dims[1] = session->config.qkv_m; session->z_out_dims[0] = 1; session->z_out_dims[1] = session->config.z_m;
-  setFloat16(&session->input_tensor, "pair_input", QNN_TENSOR_TYPE_APP_WRITE, session->input_dims, 2, nullptr, 0);
-  setFloat16(&session->qkv_weight, "pair_qkv_weight", QNN_TENSOR_TYPE_STATIC, session->qkv_dims, 2, session->qkv_weights.data(), session->qkv_weights.size());
-  setFloat16(&session->z_weight, "pair_z_weight", QNN_TENSOR_TYPE_STATIC, session->z_dims, 2, session->z_weights.data(), session->z_weights.size());
-  setFloat16(&session->qkv_output, "pair_qkv_output", QNN_TENSOR_TYPE_APP_READ, session->qkv_out_dims, 2, nullptr, 0);
-  setFloat16(&session->z_output, "pair_z_output", QNN_TENSOR_TYPE_APP_READ, session->z_out_dims, 2, nullptr, 0);
+  session->input_dims[1] = session->config.k;
+  session->gamma_dims[0] = session->config.k;
+  session->normalized_dims[1] = session->config.k;
+  session->mean_weight_dims[0] = session->config.k;
+  session->qkv_dims[0] = session->config.k;
+  session->qkv_dims[1] = session->config.qkv_m;
+  session->z_dims[0] = session->config.k;
+  session->z_dims[1] = session->config.z_m;
+  session->qkv_out_dims[0] = 1;
+  session->qkv_out_dims[1] = session->config.qkv_m;
+  session->z_out_dims[0] = 1;
+  session->z_out_dims[1] = session->config.z_m;
+  setFloat16(&session->input_tensor, "pair_input", QNN_TENSOR_TYPE_APP_WRITE,
+             session->input_dims, 2, nullptr, 0);
+  if (session->config.rmsnorm != 0) {
+    setFloat16(&session->gamma_tensor, "pair_rmsnorm_gamma", QNN_TENSOR_TYPE_STATIC,
+               session->gamma_dims, 1, session->gamma.data(), session->gamma.size());
+    setFloat16(&session->rms_square, "pair_rms_square", QNN_TENSOR_TYPE_NATIVE,
+               session->normalized_dims, 2, nullptr, 0);
+    setFloat16(&session->rms_mean_weight, "pair_rms_mean_weight", QNN_TENSOR_TYPE_STATIC,
+               session->mean_weight_dims, 2, session->rmsnorm_mean_weights.data(),
+               session->rmsnorm_mean_weights.size() * sizeof(_Float16));
+    setFloat16(&session->rms_mean, "pair_rms_mean", QNN_TENSOR_TYPE_NATIVE,
+               session->scalar_dims, 2, nullptr, 0);
+    setFloat16(&session->rms_epsilon_tensor, "pair_rms_epsilon", QNN_TENSOR_TYPE_STATIC,
+               session->scalar_dims, 2, &session->rmsnorm_epsilon,
+               sizeof(session->rmsnorm_epsilon));
+    setFloat16(&session->rms_stabilized, "pair_rms_stabilized", QNN_TENSOR_TYPE_NATIVE,
+               session->scalar_dims, 2, nullptr, 0);
+    setFloat16(&session->rms_inverse, "pair_rms_inverse", QNN_TENSOR_TYPE_NATIVE,
+               session->scalar_dims, 2, nullptr, 0);
+    setFloat16(&session->rms_unit, "pair_rms_unit", QNN_TENSOR_TYPE_NATIVE,
+               session->normalized_dims, 2, nullptr, 0);
+    setFloat16(&session->normalized_tensor, "pair_rmsnorm_output", QNN_TENSOR_TYPE_NATIVE,
+               session->normalized_dims, 2, nullptr, 0);
+    session->rmsnorm_unary_params[0] = QNN_PARAM_INIT;
+    session->rmsnorm_unary_params[0].name = QNN_OP_ELEMENT_WISE_UNARY_PARAM_OPERATION;
+    session->rmsnorm_unary_params[0].paramType = QNN_PARAMTYPE_SCALAR;
+    session->rmsnorm_unary_params[0].scalarParam = QNN_SCALAR_INIT;
+    session->rmsnorm_unary_params[0].scalarParam.dataType = QNN_DATATYPE_UINT_32;
+    session->rmsnorm_unary_params[0].scalarParam.uint32Value =
+        QNN_OP_ELEMENT_WISE_UNARY_OPERATION_RSQRT;
+  }
+  setFloat16(&session->qkv_weight, "pair_qkv_weight", QNN_TENSOR_TYPE_STATIC,
+             session->qkv_dims, 2, session->qkv_weights.data(), session->qkv_weights.size());
+  setFloat16(&session->z_weight, "pair_z_weight", QNN_TENSOR_TYPE_STATIC,
+             session->z_dims, 2, session->z_weights.data(), session->z_weights.size());
+  setFloat16(&session->qkv_output, "pair_qkv_output", QNN_TENSOR_TYPE_APP_READ,
+             session->qkv_out_dims, 2, nullptr, 0);
+  setFloat16(&session->z_output, "pair_z_output", QNN_TENSOR_TYPE_APP_READ,
+             session->z_out_dims, 2, nullptr, 0);
   const auto& qnn = session->provider->QNN_INTERFACE_VER_NAME;
-  int32_t status = qnn.graphCreate(session->context, "tensorfold_projection_pair", nullptr, &session->graph) == QNN_SUCCESS ? 0 : TF_QNN_MATMUL_GRAPH_FAILURE;
-  if (status == 0 && (qnn.tensorCreateGraphTensor(session->graph, &session->input_tensor) != QNN_SUCCESS || qnn.tensorCreateGraphTensor(session->graph, &session->qkv_weight) != QNN_SUCCESS || qnn.tensorCreateGraphTensor(session->graph, &session->z_weight) != QNN_SUCCESS || qnn.tensorCreateGraphTensor(session->graph, &session->qkv_output) != QNN_SUCCESS || qnn.tensorCreateGraphTensor(session->graph, &session->z_output) != QNN_SUCCESS)) status = TF_QNN_MATMUL_TENSOR_FAILURE;
-  Qnn_Tensor_t qkv_inputs[] = {session->input_tensor, session->qkv_weight}; Qnn_Tensor_t qkv_outputs[] = {session->qkv_output};
-  Qnn_Tensor_t z_inputs[] = {session->input_tensor, session->z_weight}; Qnn_Tensor_t z_outputs[] = {session->z_output};
-  Qnn_OpConfig_t qkv_matmul = QNN_OPCONFIG_INIT; qkv_matmul.v1.name = "pair_qkv_matmul"; qkv_matmul.v1.packageName = "qti.aisw"; qkv_matmul.v1.typeName = QNN_OP_MAT_MUL; qkv_matmul.v1.numOfInputs = 2; qkv_matmul.v1.inputTensors = qkv_inputs; qkv_matmul.v1.numOfOutputs = 1; qkv_matmul.v1.outputTensors = qkv_outputs;
-  Qnn_OpConfig_t z_matmul = QNN_OPCONFIG_INIT; z_matmul.v1.name = "pair_z_matmul"; z_matmul.v1.packageName = "qti.aisw"; z_matmul.v1.typeName = QNN_OP_MAT_MUL; z_matmul.v1.numOfInputs = 2; z_matmul.v1.inputTensors = z_inputs; z_matmul.v1.numOfOutputs = 1; z_matmul.v1.outputTensors = z_outputs;
-  if (status == 0 && qnn.graphAddNode(session->graph, qkv_matmul) != QNN_SUCCESS) status = TF_QNN_MATMUL_NODE_FAILURE;
-  if (status == 0 && qnn.graphAddNode(session->graph, z_matmul) != QNN_SUCCESS) status = TF_QNN_MATMUL_NODE_FAILURE;
-  if (status == 0 && qnn.graphFinalize(session->graph, session->profile, nullptr) != QNN_SUCCESS) status = TF_QNN_MATMUL_FINALIZE_FAILURE;
-  clock_gettime(CLOCK_MONOTONIC, &end); if (timing != nullptr) { timing->status = status; timing->finalize_ms = elapsedMs(start, end); }
-  if (status == 0) session->state = TfQnnPairSession::State::kFinalized; return status;
+  int32_t status = qnn.graphCreate(
+      session->context,
+      session->config.rmsnorm != 0 ? "tensorfold_rmsnorm_projection_pair" :
+                                     "tensorfold_projection_pair",
+      nullptr, &session->graph) == QNN_SUCCESS ? 0 : TF_QNN_MATMUL_GRAPH_FAILURE;
+  auto createTensor = [&](Qnn_Tensor_t* tensor) {
+    return qnn.tensorCreateGraphTensor(session->graph, tensor) == QNN_SUCCESS;
+  };
+  if (status == 0 && (!createTensor(&session->input_tensor) ||
+      (session->config.rmsnorm != 0 &&
+       (!createTensor(&session->gamma_tensor) || !createTensor(&session->rms_square) ||
+        !createTensor(&session->rms_mean_weight) || !createTensor(&session->rms_mean) ||
+        !createTensor(&session->rms_epsilon_tensor) ||
+        !createTensor(&session->rms_stabilized) || !createTensor(&session->rms_inverse) ||
+        !createTensor(&session->rms_unit) || !createTensor(&session->normalized_tensor))) ||
+      !createTensor(&session->qkv_weight) || !createTensor(&session->z_weight) ||
+      !createTensor(&session->qkv_output) || !createTensor(&session->z_output))) {
+    status = TF_QNN_MATMUL_TENSOR_FAILURE;
+  }
+  auto addBinary = [&](const char* name, const char* type, Qnn_Tensor_t* left,
+                       Qnn_Tensor_t* right, Qnn_Tensor_t* output) {
+    Qnn_Tensor_t inputs[] = {*left, *right};
+    Qnn_Tensor_t outputs[] = {*output};
+    Qnn_OpConfig_t op = QNN_OPCONFIG_INIT;
+    op.v1.name = name; op.v1.packageName = "qti.aisw"; op.v1.typeName = type;
+    op.v1.numOfInputs = 2; op.v1.inputTensors = inputs;
+    op.v1.numOfOutputs = 1; op.v1.outputTensors = outputs;
+    return qnn.graphAddNode(session->graph, op) == QNN_SUCCESS;
+  };
+  if (status == 0 && session->config.rmsnorm != 0) {
+    if (!addBinary("pair_rms_square", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                   &session->input_tensor, &session->input_tensor, &session->rms_square)) {
+      status = TF_QNN_RMSNORM_SQUARE_FAILURE;
+    }
+    Qnn_Tensor_t mean_inputs[] = {session->rms_square, session->rms_mean_weight};
+    Qnn_Tensor_t mean_outputs[] = {session->rms_mean};
+    Qnn_OpConfig_t mean = QNN_OPCONFIG_INIT;
+    mean.v1.name = "pair_rms_mean"; mean.v1.packageName = "qti.aisw";
+    mean.v1.typeName = QNN_OP_MAT_MUL;
+    mean.v1.numOfInputs = 2; mean.v1.inputTensors = mean_inputs;
+    mean.v1.numOfOutputs = 1; mean.v1.outputTensors = mean_outputs;
+    if (status == 0 && qnn.graphAddNode(session->graph, mean) != QNN_SUCCESS)
+      status = TF_QNN_RMSNORM_MEAN_FAILURE;
+    if (status == 0 && !addBinary("pair_rms_add_epsilon", QNN_OP_ELEMENT_WISE_ADD,
+                                  &session->rms_mean, &session->rms_epsilon_tensor,
+                                  &session->rms_stabilized))
+      status = TF_QNN_RMSNORM_EPSILON_FAILURE;
+    Qnn_Tensor_t inverse_inputs[] = {session->rms_stabilized};
+    Qnn_Tensor_t inverse_outputs[] = {session->rms_inverse};
+    Qnn_OpConfig_t inverse = QNN_OPCONFIG_INIT;
+    inverse.v1.name = "pair_rms_rsqrt"; inverse.v1.packageName = "qti.aisw";
+    inverse.v1.typeName = QNN_OP_ELEMENT_WISE_UNARY;
+    inverse.v1.numOfInputs = 1; inverse.v1.inputTensors = inverse_inputs;
+    inverse.v1.numOfOutputs = 1; inverse.v1.outputTensors = inverse_outputs;
+    inverse.v1.numOfParams = 1; inverse.v1.params = session->rmsnorm_unary_params;
+    if (status == 0 && qnn.graphAddNode(session->graph, inverse) != QNN_SUCCESS)
+      status = TF_QNN_RMSNORM_RSQRT_FAILURE;
+    if (status == 0 && !addBinary("pair_rms_scale", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                                  &session->input_tensor, &session->rms_inverse,
+                                  &session->rms_unit))
+      status = TF_QNN_RMSNORM_SCALE_FAILURE;
+    if (status == 0 && !addBinary("pair_rms_gamma", QNN_OP_ELEMENT_WISE_MULTIPLY,
+                                  &session->rms_unit, &session->gamma_tensor,
+                                  &session->normalized_tensor))
+      status = TF_QNN_RMSNORM_GAMMA_FAILURE;
+  }
+  Qnn_Tensor_t qkv_inputs[] = {
+      session->config.rmsnorm != 0 ? session->normalized_tensor : session->input_tensor,
+      session->qkv_weight};
+  Qnn_Tensor_t qkv_outputs[] = {session->qkv_output};
+  Qnn_Tensor_t z_inputs[] = {
+      session->config.rmsnorm != 0 ? session->normalized_tensor : session->input_tensor,
+      session->z_weight};
+  Qnn_Tensor_t z_outputs[] = {session->z_output};
+  Qnn_OpConfig_t qkv_matmul = QNN_OPCONFIG_INIT;
+  qkv_matmul.v1.name = "pair_qkv_matmul"; qkv_matmul.v1.packageName = "qti.aisw";
+  qkv_matmul.v1.typeName = QNN_OP_MAT_MUL;
+  qkv_matmul.v1.numOfInputs = 2; qkv_matmul.v1.inputTensors = qkv_inputs;
+  qkv_matmul.v1.numOfOutputs = 1; qkv_matmul.v1.outputTensors = qkv_outputs;
+  Qnn_OpConfig_t z_matmul = QNN_OPCONFIG_INIT;
+  z_matmul.v1.name = "pair_z_matmul"; z_matmul.v1.packageName = "qti.aisw";
+  z_matmul.v1.typeName = QNN_OP_MAT_MUL;
+  z_matmul.v1.numOfInputs = 2; z_matmul.v1.inputTensors = z_inputs;
+  z_matmul.v1.numOfOutputs = 1; z_matmul.v1.outputTensors = z_outputs;
+  if (status == 0 && qnn.graphAddNode(session->graph, qkv_matmul) != QNN_SUCCESS)
+    status = TF_QNN_MATMUL_NODE_FAILURE;
+  if (status == 0 && qnn.graphAddNode(session->graph, z_matmul) != QNN_SUCCESS)
+    status = TF_QNN_MATMUL_NODE_FAILURE;
+  if (status == 0 && qnn.graphFinalize(session->graph, session->profile, nullptr) != QNN_SUCCESS)
+    status = TF_QNN_MATMUL_FINALIZE_FAILURE;
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  if (timing != nullptr) { timing->status = status; timing->finalize_ms = elapsedMs(start, end); }
+  if (status == 0) session->state = TfQnnPairSession::State::kFinalized;
+  return status;
 }
 
 extern "C" int32_t tf_qnn_pair_session_execute(TfQnnPairSession* session, uint8_t* qkv_output,

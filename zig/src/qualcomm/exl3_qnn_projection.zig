@@ -739,6 +739,136 @@ fn writeFp16PairPreparedPayload(path: []const u8, model_sha: [64]u8, embedding: 
     output.sync(io) catch return error.Payload;
     std.Io.Dir.cwd().rename(temporary, std.Io.Dir.cwd(), path, io) catch return error.Payload;
 }
+
+const rmsnorm_pair_payload_magic = "TFQNNRP7";
+const rmsnorm_pair_payload_version: u32 = 7;
+const rmsnorm_pair_payload_header_bytes: u32 = 704;
+const rmsnorm_pair_epsilon: f32 = 1e-6;
+
+fn writeRmsNormPairPreparedPayload(path: []const u8, model_sha: [64]u8, embedding: st.Tensor, layernorm: st.Tensor, qkv: [4]st.Tensor, qkv_words: usize, z: [4]st.Tensor, z_words: usize, allocator: std.mem.Allocator, io: std.Io) Failure!void {
+    if (embedding.rank != 2 or embedding.dim(0) <= input_token or embedding.dim(1) != source_k or layernorm.rank != 1 or layernorm.dim(0) != source_k) return error.Model;
+    const raw = allocator.alloc(f16, source_k) catch return error.Payload;
+    defer allocator.free(raw);
+    const gamma = allocator.alloc(f16, source_k) catch return error.Payload;
+    defer allocator.free(gamma);
+    const original_raw = allocator.alloc(f64, source_k) catch return error.Payload;
+    defer allocator.free(original_raw);
+    const original_gamma = allocator.alloc(f64, source_k) catch return error.Payload;
+    defer allocator.free(original_gamma);
+    var execution_mean_square: f32 = 0;
+    var original_mean_square: f64 = 0;
+    for (0..source_k) |k| {
+        const raw_value = try tensorFloatAt(embedding, input_token * source_k + k);
+        const gamma_value = (try tensorFloatAt(layernorm, k)) + 1.0;
+        if (!std.math.isFinite(raw_value) or !std.math.isFinite(gamma_value)) return error.Model;
+        raw[k] = @floatCast(raw_value);
+        gamma[k] = @floatCast(gamma_value);
+        if (!std.math.isFinite(@as(f64, raw[k])) or !std.math.isFinite(@as(f64, gamma[k]))) return error.Model;
+        execution_mean_square += @as(f32, raw[k]) * @as(f32, raw[k]);
+        original_raw[k] = raw_value;
+        original_gamma[k] = gamma_value;
+        original_mean_square += raw_value * raw_value;
+    }
+    const execution_inverse_rms: f32 = 1.0 / @sqrt(execution_mean_square / @as(f32, @floatFromInt(source_k)) + rmsnorm_pair_epsilon);
+    const original_inverse_rms: f64 = 1.0 / @sqrt(original_mean_square / @as(f64, @floatFromInt(source_k)) + 1e-6);
+    if (!std.math.isFinite(execution_inverse_rms) or !std.math.isFinite(original_inverse_rms)) return error.Model;
+    const normalized = allocator.alloc(f16, source_k) catch return error.Payload;
+    defer allocator.free(normalized);
+    const original_normalized = allocator.alloc(f64, source_k) catch return error.Payload;
+    defer allocator.free(original_normalized);
+    for (0..source_k) |k| {
+        normalized[k] = @floatCast(@as(f32, raw[k]) * execution_inverse_rms * @as(f32, gamma[k]));
+        original_normalized[k] = original_raw[k] * original_inverse_rms * original_gamma[k];
+        if (!std.math.isFinite(@as(f64, normalized[k])) or !std.math.isFinite(original_normalized[k])) return error.Model;
+    }
+    const qkv_decoded = try decodePairProjection(qkv[0], qkv[1], qkv[2], source_k, source_m, qkv_words, allocator);
+    defer allocator.free(qkv_decoded);
+    const z_decoded = try decodePairProjection(z[0], z[1], z[2], source_k, z_source_m, z_words, allocator);
+    defer allocator.free(z_decoded);
+    const qkv_weights = allocator.alloc(f16, qkv_decoded.len) catch return error.Payload;
+    defer allocator.free(qkv_weights);
+    const z_weights = allocator.alloc(f16, z_decoded.len) catch return error.Payload;
+    defer allocator.free(z_weights);
+    for (qkv_weights, qkv_decoded) |*destination, value| {
+        destination.* = @floatCast(value);
+        if (!std.math.isFinite(@as(f64, destination.*))) return error.Model;
+    }
+    for (z_weights, z_decoded) |*destination, value| {
+        destination.* = @floatCast(value);
+        if (!std.math.isFinite(@as(f64, destination.*))) return error.Model;
+    }
+    const qkv_execution = allocator.alloc(f32, source_m) catch return error.Payload;
+    defer allocator.free(qkv_execution);
+    const qkv_original = allocator.alloc(f64, source_m) catch return error.Payload;
+    defer allocator.free(qkv_original);
+    const z_execution = allocator.alloc(f32, z_source_m) catch return error.Payload;
+    defer allocator.free(z_execution);
+    const z_original = allocator.alloc(f64, z_source_m) catch return error.Payload;
+    defer allocator.free(z_original);
+    for (0..source_m) |m| {
+        var execution: f32 = 0;
+        var original: f64 = 0;
+        for (0..source_k) |k| {
+            execution += @as(f32, normalized[k]) * @as(f32, qkv_weights[k * source_m + m]);
+            original += original_normalized[k] * qkv_decoded[k * source_m + m];
+        }
+        if (!std.math.isFinite(execution) or !std.math.isFinite(original)) return error.Model;
+        qkv_execution[m] = execution;
+        qkv_original[m] = original;
+    }
+    for (0..z_source_m) |m| {
+        var execution: f32 = 0;
+        var original: f64 = 0;
+        for (0..source_k) |k| {
+            execution += @as(f32, normalized[k]) * @as(f32, z_weights[k * z_source_m + m]);
+            original += original_normalized[k] * z_decoded[k * z_source_m + m];
+        }
+        if (!std.math.isFinite(execution) or !std.math.isFinite(original)) return error.Model;
+        z_execution[m] = execution;
+        z_original[m] = original;
+    }
+    var body: std.ArrayList(u8) = .empty;
+    defer body.deinit(allocator);
+    inline for (.{ std.mem.sliceAsBytes(raw), std.mem.sliceAsBytes(gamma), std.mem.sliceAsBytes(qkv_weights), std.mem.sliceAsBytes(z_weights), std.mem.sliceAsBytes(qkv_execution), std.mem.sliceAsBytes(qkv_original), std.mem.sliceAsBytes(z_execution), std.mem.sliceAsBytes(z_original) }) |part| body.appendSlice(allocator, part) catch return error.Payload;
+    var execution_bytes: std.ArrayList(u8) = .empty;
+    defer execution_bytes.deinit(allocator);
+    execution_bytes.appendSlice(allocator, std.mem.sliceAsBytes(qkv_execution)) catch return error.Payload;
+    execution_bytes.appendSlice(allocator, std.mem.sliceAsBytes(z_execution)) catch return error.Payload;
+    var original_bytes: std.ArrayList(u8) = .empty;
+    defer original_bytes.deinit(allocator);
+    original_bytes.appendSlice(allocator, std.mem.sliceAsBytes(qkv_original)) catch return error.Payload;
+    original_bytes.appendSlice(allocator, std.mem.sliceAsBytes(z_original)) catch return error.Payload;
+    var model_identity: [32]u8 = undefined;
+    _ = std.fmt.hexToBytes(&model_identity, &model_sha) catch return error.Model;
+    var payload: std.ArrayList(u8) = .empty;
+    defer payload.deinit(allocator);
+    payload.appendSlice(allocator, rmsnorm_pair_payload_magic) catch return error.Payload;
+    try appendInt(&payload, allocator, u32, rmsnorm_pair_payload_version);
+    try appendInt(&payload, allocator, u32, rmsnorm_pair_payload_header_bytes);
+    try appendInt(&payload, allocator, u32, source_k);
+    try appendInt(&payload, allocator, u32, source_m);
+    try appendInt(&payload, allocator, u32, z_source_m);
+    try appendFloat(&payload, allocator, rmsnorm_pair_epsilon);
+    try appendFloat(&payload, allocator, fp16_pair_qkv_tolerance);
+    try appendFloat(&payload, allocator, fp16_pair_z_tolerance);
+    try appendInt(&payload, allocator, u32, input_token);
+    inline for (.{ model_identity, sha256Digest(std.mem.sliceAsBytes(raw)), sha256Digest(std.mem.sliceAsBytes(gamma)), projectionDigest(projection_name, qkv[0], qkv[1], qkv[2], qkv[3]), projectionDigest(projection_z_name, z[0], z[1], z[2], z[3]), sha256Digest(body.items), sha256Digest(execution_bytes.items), sha256Digest(original_bytes.items) }) |identity| payload.appendSlice(allocator, &identity) catch return error.Payload;
+    inline for ([_]usize{ source_k, source_k * @sizeOf(f16), source_k, source_k * @sizeOf(f16), source_k * source_m, source_k * source_m * @sizeOf(f16), source_k * z_source_m, source_k * z_source_m * @sizeOf(f16), source_m, source_m * @sizeOf(f32), source_m, source_m * @sizeOf(f64), z_source_m, z_source_m * @sizeOf(f32), z_source_m, z_source_m * @sizeOf(f64), body.items.len }) |count| try appendInt(&payload, allocator, u64, count);
+    try appendInt(&payload, allocator, u32, payload_integrity_bytes);
+    while (payload.items.len < rmsnorm_pair_payload_header_bytes) payload.append(allocator, 0) catch return error.Payload;
+    if (payload.items.len != rmsnorm_pair_payload_header_bytes) return error.Payload;
+    payload.appendSlice(allocator, body.items) catch return error.Payload;
+    try appendInt(&payload, allocator, u64, fnv1a64(payload.items));
+    const temporary = std.fmt.allocPrint(allocator, "{s}.tmp", .{path}) catch return error.Payload;
+    defer allocator.free(temporary);
+    defer std.Io.Dir.cwd().deleteFile(io, temporary) catch {};
+    if (std.fs.path.dirname(path)) |parent| std.Io.Dir.cwd().createDirPath(io, parent) catch return error.Payload;
+    var output = std.Io.Dir.cwd().createFile(io, temporary, .{ .truncate = true }) catch return error.Payload;
+    defer output.close(io);
+    output.writePositionalAll(io, payload.items, 0) catch return error.Payload;
+    output.sync(io) catch return error.Payload;
+    std.Io.Dir.cwd().rename(temporary, std.Io.Dir.cwd(), path, io) catch return error.Payload;
+}
 fn writeFp16PreparedPayload(path: []const u8, model_sha: [64]u8, trellis: st.Tensor, suh: st.Tensor, svh: st.Tensor, words: usize, allocator: std.mem.Allocator, io: std.Io) Failure!void {
     const weight_count = source_k * source_m;
     const input = allocator.alloc(f16, source_k) catch return error.Payload;
@@ -833,9 +963,10 @@ fn run(init: std.process.Init) Failure!void {
     const preparing_channelwise = args.len == 4 and std.mem.eql(u8, args[1], "prepare-channelwise");
     const preparing_fp16 = args.len == 4 and std.mem.eql(u8, args[1], "prepare-fp16");
     const preparing_fp16_pair = args.len == 4 and std.mem.eql(u8, args[1], "prepare-fp16-pair");
-    if ((!(preparing or preparing_full or preparing_fidelity or preparing_channelwise or preparing_fp16 or preparing_fp16_pair) and args.len != 5) or ((preparing or preparing_full or preparing_fidelity or preparing_channelwise or preparing_fp16 or preparing_fp16_pair) and args.len != 4)) return error.Usage;
+    const preparing_rmsnorm_pair = args.len == 4 and std.mem.eql(u8, args[1], "prepare-rmsnorm-pair");
+    if ((!(preparing or preparing_full or preparing_fidelity or preparing_channelwise or preparing_fp16 or preparing_fp16_pair or preparing_rmsnorm_pair) and args.len != 5) or ((preparing or preparing_full or preparing_fidelity or preparing_channelwise or preparing_fp16 or preparing_fp16_pair or preparing_rmsnorm_pair) and args.len != 4)) return error.Usage;
     const allocator = init.gpa;
-    const model_path = if (preparing or preparing_full or preparing_fidelity or preparing_channelwise or preparing_fp16 or preparing_fp16_pair) args[2] else args[1];
+    const model_path = if (preparing or preparing_full or preparing_fidelity or preparing_channelwise or preparing_fp16 or preparing_fp16_pair or preparing_rmsnorm_pair) args[2] else args[1];
     var file = st.File.open(allocator, init.io, model_path) catch return error.Model;
     defer file.close(init.io);
     const model_sha = sha256Hex(file.map.memory);
@@ -854,7 +985,7 @@ fn run(init: std.process.Init) Failure!void {
     const words = trellis.dim(2);
     const tensor_identity = projectionTensorIdentity(trellis, suh, svh, mcg);
     if (!std.mem.eql(u8, &tensor_identity, full_tensor_identity)) return error.Model;
-    if (preparing_fp16_pair) {
+    if (preparing_fp16_pair or preparing_rmsnorm_pair) {
         const z = [4]st.Tensor{
             try requireProjectionPart(&file, projection_z_name, "trellis", .i16),
             try requireProjectionPart(&file, projection_z_name, "suh", .f16),
@@ -864,10 +995,14 @@ fn run(init: std.process.Init) Failure!void {
         const z_words = try requireProjectionContract(z[0], z[1], z[2], z[3], source_k, z_source_m);
         const embedding = file.get(embedding_name) orelse return error.Model;
         const layernorm = file.get(input_layernorm_name) orelse return error.Model;
-        try writeFp16PairPreparedPayload(args[3], model_sha, embedding, layernorm, .{ trellis, suh, svh, mcg }, words, z, z_words, allocator, init.io);
+        if (preparing_rmsnorm_pair) {
+            try writeRmsNormPairPreparedPayload(args[3], model_sha, embedding, layernorm, .{ trellis, suh, svh, mcg }, words, z, z_words, allocator, init.io);
+        } else {
+            try writeFp16PairPreparedPayload(args[3], model_sha, embedding, layernorm, .{ trellis, suh, svh, mcg }, words, z, z_words, allocator, init.io);
+        }
         std.debug.print(
-            "{{\"tensorfold\":\"qualcomm-exl3-qnn-projection\",\"mode\":\"prepare-fp16-pair\",\"token_id\":5834,\"model_sha256\":\"{s}\",\"tensors\":[\"{s}\",\"{s}\"],\"source_shapes\":[[2048,6144],[2048,2048]],\"payload\":\"{s}\",\"passed\":true}}\n",
-            .{ model_sha[0..], projection_name, projection_z_name, args[3] },
+            "{{\"tensorfold\":\"qualcomm-exl3-qnn-projection\",\"mode\":\"{s}\",\"recipe\":\"{s}\",\"token_id\":5834,\"model_sha256\":\"{s}\",\"tensors\":[\"{s}\",\"{s}\"],\"source_shapes\":[[2048,6144],[2048,2048]],\"payload\":\"{s}\",\"passed\":true}}\n",
+            .{ if (preparing_rmsnorm_pair) "prepare-rmsnorm-pair" else "prepare-fp16-pair", if (preparing_rmsnorm_pair) "fp16-qnn-rmsnorm-qkv-z" else "fp16-real-input-qkv-z", model_sha[0..], projection_name, projection_z_name, args[3] },
         );
         return;
     }
@@ -957,7 +1092,7 @@ fn run(init: std.process.Init) Failure!void {
 pub fn main(init: std.process.Init) !u8 {
     run(init) catch |failure| switch (failure) {
         error.Usage => {
-            std.debug.print("usage: tensorfold-qualcomm-exl3-qnn-projection MODEL_SAFETENSORS NATIVE_DIR STUB_NAME QNN_BRIDGE_SO\n       tensorfold-qualcomm-exl3-qnn-projection prepare MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-full MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-fidelity MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-channelwise MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-fp16 MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-fp16-pair MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n", .{});
+            std.debug.print("usage: tensorfold-qualcomm-exl3-qnn-projection MODEL_SAFETENSORS NATIVE_DIR STUB_NAME QNN_BRIDGE_SO\n       tensorfold-qualcomm-exl3-qnn-projection prepare MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-full MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-fidelity MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-channelwise MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-fp16 MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-fp16-pair MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-rmsnorm-pair MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n", .{});
             return 64;
         },
         error.Model => return 4,

@@ -29,6 +29,12 @@ internal data class QnnProjectionResult(
     status == -114 -> "QNN HTP persistent session is in an invalid state."
     status == -115 -> "QNN HTP persistent session received an invalid tensor shape."
     status == -122 -> "Live checkpoint payload is stale for the pinned model identity."
+    status == -123 -> "QNN HTP RMSNorm square node creation failed."
+    status == -124 -> "QNN HTP RMSNorm reduce-mean node creation failed."
+    status == -125 -> "QNN HTP RMSNorm epsilon-add node creation failed."
+    status == -126 -> "QNN HTP RMSNorm reciprocal-square-root node creation failed."
+    status == -127 -> "QNN HTP RMSNorm activation-scale node creation failed."
+    status == -128 -> "QNN HTP RMSNorm gamma-scale node creation failed."
     else -> "QNN HTP projection failed with status $status."
   }
 

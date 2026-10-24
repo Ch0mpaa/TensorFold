@@ -261,12 +261,45 @@ resident graph and completed all 100 executions. Service-side first execution
 took `2.66 ms` and the warm median was `1.41 ms`. Maximum
 QNN-vs-quantized error was `0.0094`; maximum quantized-vs-original error was
 `0.0438`; maximum QNN-vs-original error was `0.0353` over a `1.7047`
+
 original maximum magnitude (`2.07%` relative, down from v3's `5.17%`).
 Release APK SHA-256:
 `9a0c41db9e2499bc59e6c3487aae43aec7638ae733a83cce7ac790d82752f720`.
 The axis recipe is retained as the better weight-quantization candidate, but it
 is not a complete-layer or model admission. Exact retained-token parity remains
 mandatory before TensorFold can select QNN for serving.
+
+### RMSNorm projection-pair candidate
+
+`prepare-rmsnorm-pair` emits the separately versioned app-private
+`live-layer0-rmsnorm-projection-pair-v7.bin` wire format: magic `TFQNNRP7`,
+version `7`, a 704-byte little-endian header, then raw token-5834 FP16
+embedding `[2048]`, FP16 `input_layernorm.weight + 1.0` gamma `[2048]`, FP16
+QKV `[2048,6144]`, FP16 Z `[2048,2048]`, FP32 execution references, FP64
+original references, and an FNV-1a-64 trailer. The header pins the model and
+projection identities and records raw/gamma/content/reference SHA-256
+identities, all element and byte counts, epsilon `1e-6`, tolerances
+`0.005`/`0.003`, and token ID. The app validates the bounded schema, pinned
+identities, counts, padding and whole-payload trailer before graph allocation.
+
+Its receipt is `fp16-qnn-rmsnorm-qkv-z`. The retained candidate decomposes
+RMSNorm into FP16 square, an averaging MatMul, epsilon add, reciprocal square
+root, activation scale and gamma scale before the existing QKV and Z MatMuls.
+Raw embedding is `APP_WRITE`; gamma and averaging weights are `STATIC`; all
+intermediates are `NATIVE`. This can prove RMSNorm plus two projections only,
+never a complete layer or model execution.
+
+Phone B retained the rejected paths instead of hiding them. QAIRT HTP v79
+rejected native `RmsNorm` at node addition, both with omitted and explicit
+NULL beta. The decomposition accepted square but rejected FP16 `ReduceMean` at
+node addition, so the candidate replaced it with a proven MatMul by a static
+`1/2048` column. Before that final graph could be qualified, the `:qnn` process
+began failing at `QnnDevice_create` (`-104`). The verified v6 control then
+failed at the same stage before and after an approved Phone B reboot while the
+main-process QNN probes still passed. This is an environment/runtime blocker,
+not an RMSNorm result. The app-private v7 file was removed so the release app
+selects v6; a present v7 would still fail closed without running an older
+payload.
 
 ### FP16 v5 projection candidate
 

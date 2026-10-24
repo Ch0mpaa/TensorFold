@@ -52,7 +52,7 @@ internal object QnnExecutorClient {
         putLong("graphCount", health.getLong("graphCount"))
         putBoolean(
           "available",
-          healthyService && getInt("status") == 0 && if (created.getString("recipe") == "fp16-real-input-qkv-z") {
+          healthyService && getInt("status") == 0 && if (created.getString("recipe") in setOf("fp16-real-input-qkv-z", "fp16-qnn-rmsnorm-qkv-z")) {
             getDouble("qkvQnnExecutionMaxAbsoluteError").isFinite() &&
               getDouble("qkvQnnExecutionMaxAbsoluteError") <= getDouble("qkvTolerance") &&
               getDouble("zQnnExecutionMaxAbsoluteError").isFinite() &&
@@ -65,7 +65,7 @@ internal object QnnExecutorClient {
           when {
             getBoolean("available") -> null
             !healthyService -> "QNN service process or graph residency attestation failed."
-            created.getString("recipe") == "fp16-real-input-qkv-z" ->
+            created.getString("recipe") in setOf("fp16-real-input-qkv-z", "fp16-qnn-rmsnorm-qkv-z") ->
               "QNN projection-pair parity failed: QKV execution %.6f / %.6f, FP16-original %.6f, QNN-original %.6f over %.6f; Z execution %.6f / %.6f, FP16-original %.6f, QNN-original %.6f over %.6f.".format(
                 getDouble("qkvQnnExecutionMaxAbsoluteError"), getDouble("qkvTolerance"),
                 getDouble("qkvExecutionOriginalMaxAbsoluteError"), getDouble("qkvQnnOriginalMaxAbsoluteError"),

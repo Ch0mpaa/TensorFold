@@ -102,6 +102,13 @@ constexpr char kPinnedPairZIdentity[] = "ac61cff0c8789c435c95eb58e8872c2861235f0
 constexpr char kPinnedPairBodyIdentity[] = "7972fd5a7242191ef1490ab0318a0a74e2c90a38cc6348d377684547c27c63cb";
 constexpr char kPinnedPairExecutionIdentity[] = "69a47bea3cf285ecd98865d138e6f774addb7402245eb64d4ddac1bdde6c29fd";
 constexpr char kPinnedPairOriginalIdentity[] = "fa624186173b7d003036aeee7082c6324dbadb8ffaccddb20a322ef8bfc16c09";
+constexpr char kLiveRmsNormProjectionPairPayloadMagic[] = "TFQNNRP7";
+constexpr uint32_t kLiveRmsNormProjectionPairPayloadVersion = 7;
+constexpr size_t kLiveRmsNormProjectionPairPayloadHeaderBytes = 704;
+constexpr float kLiveRmsNormProjectionPairEpsilon = 1.0e-6f;
+constexpr size_t kLiveRmsNormProjectionPairPayloadBytes = kLiveRmsNormProjectionPairPayloadHeaderBytes +
+    4 * kLiveFullK + 2 * static_cast<size_t>(kLiveFullK) * (kLiveFullM + kLiveProjectionPairZ) +
+    (kLiveFullM + kLiveProjectionPairZ) * (sizeof(float) + sizeof(double)) + sizeof(uint64_t);
 
 uint32_t readU32(const uint8_t* bytes) {
   return static_cast<uint32_t>(bytes[0]) | (static_cast<uint32_t>(bytes[1]) << 8) |
@@ -161,10 +168,12 @@ struct LiveProjectionPairPayload {
   std::vector<float> z_reference;
   std::vector<double> z_original;
   const uint8_t* input = nullptr;
+  const uint8_t* gamma = nullptr;
   const uint8_t* qkv_weights = nullptr;
   const uint8_t* z_weights = nullptr;
   float qkv_tolerance = 0.0f;
   float z_tolerance = 0.0f;
+  bool rmsnorm = false;
 };
 
 int32_t loadPayload(const char* path, bool full, bool fidelity, LivePayload* payload) {
@@ -424,6 +433,41 @@ int32_t loadFp16ProjectionPairPayload(const char* path, LiveProjectionPairPayloa
   for (size_t i = 0; i < kLiveFullM; ++i) { payload->qkv_reference[i] = readF32(qkv_refs + i * sizeof(float)); std::memcpy(&payload->qkv_original[i], qkv_original + i * sizeof(double), sizeof(double)); if (!std::isfinite(payload->qkv_reference[i]) || !std::isfinite(payload->qkv_original[i])) return -121; }
   for (size_t i = 0; i < kLiveProjectionPairZ; ++i) { payload->z_reference[i] = readF32(z_refs + i * sizeof(float)); std::memcpy(&payload->z_original[i], z_original + i * sizeof(double), sizeof(double)); if (!std::isfinite(payload->z_reference[i]) || !std::isfinite(payload->z_original[i])) return -121; }
   payload->qkv_tolerance = readF32(header.data() + 28); payload->z_tolerance = readF32(header.data() + 32); return 0;
+}
+
+int32_t loadFp16RmsNormProjectionPairPayload(const char* path, LiveProjectionPairPayload* payload) {
+  if (payload == nullptr) return -121;
+  FILE* file = std::fopen(path, "rb");
+  if (file == nullptr) return errno == ENOENT ? -120 : -121;
+  std::array<uint8_t, kLiveRmsNormProjectionPairPayloadHeaderBytes> header{};
+  if (std::fread(header.data(), 1, header.size(), file) != header.size() || std::fseek(file, 0, SEEK_END) != 0) { std::fclose(file); return -121; }
+  const long size = std::ftell(file);
+  const uint64_t qkv_bytes = 2ULL * kLiveFullK * kLiveFullM, z_bytes = 2ULL * kLiveFullK * kLiveProjectionPairZ;
+  const bool valid = size >= 0 && static_cast<uint64_t>(size) == kLiveRmsNormProjectionPairPayloadBytes && std::fseek(file, 0, SEEK_SET) == 0 &&
+      std::memcmp(header.data(), kLiveRmsNormProjectionPairPayloadMagic, 8) == 0 && readU32(header.data() + 8) == kLiveRmsNormProjectionPairPayloadVersion &&
+      readU32(header.data() + 12) == kLiveRmsNormProjectionPairPayloadHeaderBytes && readU32(header.data() + 16) == kLiveFullK &&
+      readU32(header.data() + 20) == kLiveFullM && readU32(header.data() + 24) == kLiveProjectionPairZ &&
+      readF32(header.data() + 28) == kLiveRmsNormProjectionPairEpsilon && readF32(header.data() + 32) == kLiveProjectionPairQkvTolerance &&
+      readF32(header.data() + 36) == kLiveProjectionPairZTolerance && readU32(header.data() + 40) == 5834 &&
+      matchesPinnedHexIdentity(header.data() + 44, kPinnedModelSha256) && matchesPinnedHexIdentity(header.data() + 140, kPinnedPairQkvIdentity) && matchesPinnedHexIdentity(header.data() + 172, kPinnedPairZIdentity) &&
+      readU64(header.data() + 300) == kLiveFullK && readU64(header.data() + 308) == 2ULL * kLiveFullK && readU64(header.data() + 316) == kLiveFullK && readU64(header.data() + 324) == 2ULL * kLiveFullK &&
+      readU64(header.data() + 332) == static_cast<uint64_t>(kLiveFullK) * kLiveFullM && readU64(header.data() + 340) == qkv_bytes &&
+      readU64(header.data() + 348) == static_cast<uint64_t>(kLiveFullK) * kLiveProjectionPairZ && readU64(header.data() + 356) == z_bytes &&
+      readU64(header.data() + 364) == kLiveFullM && readU64(header.data() + 372) == kLiveFullM * sizeof(float) && readU64(header.data() + 380) == kLiveFullM && readU64(header.data() + 388) == kLiveFullM * sizeof(double) &&
+      readU64(header.data() + 396) == kLiveProjectionPairZ && readU64(header.data() + 404) == kLiveProjectionPairZ * sizeof(float) && readU64(header.data() + 412) == kLiveProjectionPairZ && readU64(header.data() + 420) == kLiveProjectionPairZ * sizeof(double) &&
+      readU64(header.data() + 428) == kLiveRmsNormProjectionPairPayloadBytes - kLiveRmsNormProjectionPairPayloadHeaderBytes - sizeof(uint64_t) && readU32(header.data() + 436) == sizeof(uint64_t);
+  if (!valid) { std::fclose(file); return -121; }
+  for (size_t i = 440; i < header.size(); ++i) if (header[i] != 0) { std::fclose(file); return -121; }
+  try { payload->bytes.resize(kLiveRmsNormProjectionPairPayloadBytes); payload->qkv_reference.resize(kLiveFullM); payload->qkv_original.resize(kLiveFullM); payload->z_reference.resize(kLiveProjectionPairZ); payload->z_original.resize(kLiveProjectionPairZ); } catch (const std::bad_alloc&) { std::fclose(file); return -121; }
+  if (std::fread(payload->bytes.data(), 1, payload->bytes.size(), file) != payload->bytes.size() || std::fgetc(file) != EOF) { std::fclose(file); return -121; }
+  std::fclose(file); const uint8_t* bytes = payload->bytes.data();
+  if (readU64(bytes + payload->bytes.size() - sizeof(uint64_t)) != fnv1a64(bytes, payload->bytes.size() - sizeof(uint64_t))) return -121;
+  payload->input = bytes + kLiveRmsNormProjectionPairPayloadHeaderBytes; payload->gamma = payload->input + 2 * kLiveFullK; payload->qkv_weights = payload->gamma + 2 * kLiveFullK; payload->z_weights = payload->qkv_weights + qkv_bytes;
+  const uint8_t* qref = payload->z_weights + z_bytes; const uint8_t* qorig = qref + kLiveFullM * sizeof(float); const uint8_t* zref = qorig + kLiveFullM * sizeof(double); const uint8_t* zorig = zref + kLiveProjectionPairZ * sizeof(float);
+  for (size_t i = 0; i < kLiveFullM; ++i) { payload->qkv_reference[i] = readF32(qref + i * sizeof(float)); std::memcpy(&payload->qkv_original[i], qorig + i * sizeof(double), sizeof(double)); if (!std::isfinite(payload->qkv_reference[i]) || !std::isfinite(payload->qkv_original[i])) return -121; }
+  for (size_t i = 0; i < kLiveProjectionPairZ; ++i) { payload->z_reference[i] = readF32(zref + i * sizeof(float)); std::memcpy(&payload->z_original[i], zorig + i * sizeof(double), sizeof(double)); if (!std::isfinite(payload->z_reference[i]) || !std::isfinite(payload->z_original[i])) return -121; }
+  payload->qkv_tolerance = readF32(header.data() + 32); payload->z_tolerance = readF32(header.data() + 36); payload->rmsnorm = true;
+  return 0;
 }
 
 void setQuantizedU8(Qnn_Tensor_t* tensor, const char* name, Qnn_TensorType_t type,
@@ -856,9 +900,12 @@ Java_expo_modules_tensorfoldlocalruntime_QnnNative_create(
   auto graph = std::make_unique<ResidentGraph>();
   std::array<char, 8> magic{};
   FILE* payload_file = std::fopen(path, "rb");
+  const bool expects_rmsnorm_pair = std::strstr(path, "live-layer0-rmsnorm-projection-pair-v7.bin") != nullptr;
   const bool expects_pair = std::strstr(path, "live-layer0-projection-pair-v6.bin") != nullptr;
-  const bool is_pair = expects_pair || (payload_file != nullptr &&
+  const bool is_rmsnorm_pair = expects_rmsnorm_pair || (payload_file != nullptr &&
       std::fread(magic.data(), 1, magic.size(), payload_file) == magic.size() &&
+      std::memcmp(magic.data(), kLiveRmsNormProjectionPairPayloadMagic, magic.size()) == 0);
+  const bool is_pair = is_rmsnorm_pair || expects_pair || (payload_file != nullptr &&
       std::memcmp(magic.data(), kLiveProjectionPairPayloadMagic, magic.size()) == 0);
   const bool expects_fp16 = std::strstr(path, "live-full-projection-v5.bin") != nullptr;
   const bool is_fp16 = !is_pair && (expects_fp16 || (payload_file != nullptr &&
@@ -871,10 +918,11 @@ Java_expo_modules_tensorfoldlocalruntime_QnnNative_create(
       std::memcmp(magic.data(), kLiveChannelwisePayloadMagic, magic.size()) == 0;
   if (payload_file != nullptr) std::fclose(payload_file);
   graph->is_pair = is_pair;
-  int32_t status = is_pair ? loadFp16ProjectionPairPayload(path, &graph->pair_payload) :
-      (is_fp16 ? loadFp16Payload(path, &graph->payload) :
-       (is_channelwise ? loadChannelwisePayload(path, &graph->payload) :
-        loadPayload(path, true, true, &graph->payload)));
+  int32_t status = is_rmsnorm_pair ? loadFp16RmsNormProjectionPairPayload(path, &graph->pair_payload) :
+      (is_pair ? loadFp16ProjectionPairPayload(path, &graph->pair_payload) :
+       (is_fp16 ? loadFp16Payload(path, &graph->payload) :
+        (is_channelwise ? loadChannelwisePayload(path, &graph->payload) :
+         loadPayload(path, true, true, &graph->payload))));
   if (!is_pair && !is_fp16 && !is_channelwise && status == -121) status = loadPayload(path, true, false, &graph->payload);
   env->ReleaseStringUTFChars(payload_path, path);
   if (status != 0) return residentResult(env, {static_cast<jdouble>(status), 0.0, 0.0, 0.0, 0.0});
@@ -882,11 +930,14 @@ Java_expo_modules_tensorfoldlocalruntime_QnnNative_create(
   if (dir == nullptr) return residentResult(env, {-100.0, 0.0, 0.0, 0.0,
       is_pair ? graph->pair_payload.qkv_tolerance : graph->payload.spec.tolerance});
   if (is_pair) {
-    TfQnnPairSessionConfig config = {dir, "libQnnHtpV79Stub.so", kLiveFullK, kLiveFullM, kLiveProjectionPairZ};
+    TfQnnPairSessionConfig config = {dir, "libQnnHtpV79Stub.so", kLiveFullK, kLiveFullM, kLiveProjectionPairZ, graph->pair_payload.rmsnorm ? 1U : 0U};
     TfQnnPairSessionTiming timing{};
     status = tf_qnn_pair_session_create(&config, &graph->pair_session, &timing);
     const double create_ms = timing.create_ms;
-    if (status == 0) status = tf_qnn_pair_session_set_payload(graph->pair_session, graph->pair_payload.input,
+    if (status == 0 && graph->pair_payload.rmsnorm) status = tf_qnn_rmsnorm_pair_session_set_payload(graph->pair_session, graph->pair_payload.input,
+        2 * kLiveFullK, graph->pair_payload.gamma, 2 * kLiveFullK, graph->pair_payload.qkv_weights,
+        2ULL * kLiveFullK * kLiveFullM, graph->pair_payload.z_weights, 2ULL * kLiveFullK * kLiveProjectionPairZ);
+    if (status == 0 && !graph->pair_payload.rmsnorm) status = tf_qnn_pair_session_set_payload(graph->pair_session, graph->pair_payload.input,
         2 * kLiveFullK, graph->pair_payload.qkv_weights, 2ULL * kLiveFullK * kLiveFullM,
         graph->pair_payload.z_weights, 2ULL * kLiveFullK * kLiveProjectionPairZ);
     if (status == 0) status = tf_qnn_pair_session_finalize(graph->pair_session, &timing);
