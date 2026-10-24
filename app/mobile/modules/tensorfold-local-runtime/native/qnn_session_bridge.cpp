@@ -44,6 +44,27 @@ void setQuantizedU8(Qnn_Tensor_t* tensor, const char* name, Qnn_TensorType_t typ
   tensor->v1.clientBuf.data = data;
   tensor->v1.clientBuf.dataSize = size;
 }
+
+void setAxisQuantizedU8(Qnn_Tensor_t* tensor, const char* name, Qnn_TensorType_t type,
+                        uint32_t* dimensions, uint32_t rank, uint32_t axis,
+                        Qnn_ScaleOffset_t* scale_offsets, uint32_t count,
+                        void* data, uint64_t size) {
+  *tensor = QNN_TENSOR_INIT;
+  tensor->v1.name = name;
+  tensor->v1.type = type;
+  tensor->v1.dataFormat = QNN_TENSOR_DATA_FORMAT_FLAT_BUFFER;
+  tensor->v1.dataType = QNN_DATATYPE_UFIXED_POINT_8;
+  tensor->v1.quantizeParams.encodingDefinition = QNN_DEFINITION_DEFINED;
+  tensor->v1.quantizeParams.quantizationEncoding = QNN_QUANTIZATION_ENCODING_AXIS_SCALE_OFFSET;
+  tensor->v1.quantizeParams.axisScaleOffsetEncoding.axis = axis;
+  tensor->v1.quantizeParams.axisScaleOffsetEncoding.numScaleOffsets = count;
+  tensor->v1.quantizeParams.axisScaleOffsetEncoding.scaleOffset = scale_offsets;
+  tensor->v1.rank = rank;
+  tensor->v1.dimensions = dimensions;
+  tensor->v1.memType = QNN_TENSORMEMTYPE_RAW;
+  tensor->v1.clientBuf.data = data;
+  tensor->v1.clientBuf.dataSize = size;
+}
 }  // namespace
 
 struct TfQnnSession {
@@ -54,6 +75,7 @@ struct TfQnnSession {
   std::string native_dir;
   std::string stub_name;
   std::vector<uint8_t> weights;
+  std::vector<Qnn_ScaleOffset_t> weight_axis_scale_offsets;
   void* rpc = nullptr;
   void* htp_stub = nullptr;
   const QnnInterface_t* provider = nullptr;
@@ -88,20 +110,37 @@ struct TfQnnSession {
 extern "C" int32_t tf_qnn_session_create(const TfQnnSessionConfig* config,
                                           TfQnnSession** out, TfQnnSessionTiming* timing) {
   clearTiming(timing, TF_QNN_MATMUL_INVALID_ARGUMENT);
+  const bool axis_quantized = config != nullptr && config->weight_axis_scales != nullptr;
   if (out == nullptr || config == nullptr || config->native_dir == nullptr || config->stub_name == nullptr ||
       config->k == 0 || config->m == 0 || !std::isfinite(config->input_scale) ||
       !std::isfinite(config->weight_scale) || !std::isfinite(config->output_scale) ||
       config->input_scale <= 0 || config->weight_scale <= 0 || config->output_scale <= 0 ||
+      (axis_quantized && (config->weight_axis_offsets == nullptr || config->weight_axis_count != config->m ||
+                          config->weight_axis != 1)) ||
+      (!axis_quantized && (config->weight_axis_offsets != nullptr || config->weight_axis_count != 0 ||
+                           config->weight_axis != 0)) ||
       static_cast<uint64_t>(config->k) * config->m > kMaximumWeightBytes) return TF_QNN_MATMUL_INVALID_ARGUMENT;
   *out = nullptr;
   timespec start{}, end{}; clock_gettime(CLOCK_MONOTONIC, &start);
   TfQnnSession* session = new (std::nothrow) TfQnnSession();
   if (session == nullptr) return TF_QNN_MATMUL_LOAD_FAILURE;
   session->config = *config;
-  try { session->native_dir = config->native_dir; session->stub_name = config->stub_name; }
-  catch (const std::bad_alloc&) { delete session; return TF_QNN_MATMUL_LOAD_FAILURE; }
+  try {
+    session->native_dir = config->native_dir;
+    session->stub_name = config->stub_name;
+    if (axis_quantized) {
+      session->weight_axis_scale_offsets.resize(config->m);
+      for (uint32_t i = 0; i < config->m; ++i) {
+        if (!std::isfinite(config->weight_axis_scales[i]) || config->weight_axis_scales[i] <= 0)
+          throw std::bad_alloc();
+        session->weight_axis_scale_offsets[i] = {config->weight_axis_scales[i], config->weight_axis_offsets[i]};
+      }
+    }
+  } catch (const std::bad_alloc&) { delete session; return TF_QNN_MATMUL_LOAD_FAILURE; }
   session->config.native_dir = session->native_dir.c_str();
   session->config.stub_name = session->stub_name.c_str();
+  session->config.weight_axis_scales = nullptr;
+  session->config.weight_axis_offsets = nullptr;
   setenv("ADSP_LIBRARY_PATH", session->config.native_dir, 1);
   session->rpc = dlopen("libcdsprpc.so", RTLD_NOW | RTLD_GLOBAL);
   if (session->rpc == nullptr) session->rpc = dlopen("libadsprpc.so", RTLD_NOW | RTLD_GLOBAL);
@@ -155,7 +194,14 @@ extern "C" int32_t tf_qnn_session_finalize(TfQnnSession* session, TfQnnSessionTi
   session->weight_dims[0] = session->config.k; session->weight_dims[1] = session->config.m;
   session->output_dims[0] = 1; session->output_dims[1] = session->config.m;
   setQuantizedU8(&session->input, "persistent_projection_input", QNN_TENSOR_TYPE_APP_WRITE, session->input_dims, 2, session->config.input_scale, session->config.input_offset, nullptr, 0);
-  setQuantizedU8(&session->weight, "persistent_projection_weights", QNN_TENSOR_TYPE_STATIC, session->weight_dims, 2, session->config.weight_scale, session->config.weight_offset, session->weights.data(), session->weights.size());
+  if (session->config.weight_axis_count == 0) {
+    setQuantizedU8(&session->weight, "persistent_projection_weights", QNN_TENSOR_TYPE_STATIC, session->weight_dims, 2, session->config.weight_scale, session->config.weight_offset, session->weights.data(), session->weights.size());
+  } else {
+    setAxisQuantizedU8(&session->weight, "persistent_projection_weights", QNN_TENSOR_TYPE_STATIC,
+                       session->weight_dims, 2, session->config.weight_axis,
+                       session->weight_axis_scale_offsets.data(), session->config.weight_axis_count,
+                       session->weights.data(), session->weights.size());
+  }
   setQuantizedU8(&session->output, "persistent_projection_output", QNN_TENSOR_TYPE_APP_READ, session->output_dims, 2, session->config.output_scale, session->config.output_offset, nullptr, 0);
   const auto& qnn = session->provider->QNN_INTERFACE_VER_NAME;
   int32_t status = qnn.graphCreate(session->context, "tensorfold_persistent_projection", nullptr, &session->graph) == QNN_SUCCESS ? 0 : TF_QNN_MATMUL_GRAPH_FAILURE;

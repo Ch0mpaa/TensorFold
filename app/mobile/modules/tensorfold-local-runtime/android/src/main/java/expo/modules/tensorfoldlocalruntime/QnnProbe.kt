@@ -164,6 +164,7 @@ internal object QnnProbe {
     "originalReferenceMaxMagnitude" to Double.NaN,
     "relativeQnnOriginalError" to Double.NaN,
     "tolerance" to 0.0,
+    "recipe" to null,
     "reason" to reason,
   )
 
@@ -205,6 +206,7 @@ internal object QnnProbe {
     "originalReferenceMaxMagnitude" to bundle.getDouble("originalReferenceMaxMagnitude"),
     "relativeQnnOriginalError" to bundle.getDouble("relativeQnnOriginalError"),
     "tolerance" to bundle.getDouble("tolerance"),
+    "recipe" to bundle.getString("recipe"),
     "status" to bundle.getInt("status", -114),
     "reason" to bundle.getString("reason"),
   )

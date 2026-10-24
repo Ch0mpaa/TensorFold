@@ -24,6 +24,12 @@ class QnnProjectionResultTest {
     assertEquals("QNN HTP graph execution failed.", QnnProjectionResult(-111, 0.0, Double.NaN).reason())
   }
 
+  @Test fun unsupportedAxisEncodingKeepsItsExactQnnStage() {
+    val result = QnnProjectionResult(-108, 0.0, Double.NaN, QnnProjectionResult.liveFullTolerance)
+    assertFalse(result.passed)
+    assertEquals("QNN HTP tensor creation failed.", result.reason())
+  }
+
   @Test fun reportsLivePayloadFailuresWithoutTreatingThemAsQnnPasses() {
     val missing = QnnProjectionResult(-120, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance)
     val malformed = QnnProjectionResult(-121, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance)

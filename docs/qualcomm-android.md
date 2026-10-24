@@ -237,6 +237,37 @@ This is a projection gate, not model offload. It is reported separately as
 `liveFullProjection`; TensorFold model inference stays CPU-only until complete
 layers and the autoregressive path pass retained-token parity.
 
+`prepare-channelwise` writes v4 for the same exact projection. It derives one
+symmetric-u8 scale per output column (`axis = 1`, exactly 6,144 scales and
+offsets), retains independent quantized and FP64 references, and content-binds
+all counts, identities, references, scales, offsets, and integrity trailer.
+
+```text
+tensorfold-qualcomm-exl3-qnn-projection prepare-channelwise MODEL_SAFETENSORS \
+  files/tensorfold/qnn/live-full-projection-v4.bin
+```
+
+The service selects a present v4 file before v3/v2. Once selected, malformed
+payloads and unsupported QNN axis encoding preserve their exact stage failure;
+they never fall back to the older recipe. The result records
+`axis-u8-output-channel` plus QNN-vs-quantized, quantized-vs-original,
+QNN-vs-original, original maximum magnitude, and relative original error.
+These measurements remain projection evidence only and never admit a layer or
+model backend automatically.
+
+The stock Phone B release oracle accepted v4 through QAIRT 2.50 on Hexagon v79.
+The non-exported `dev.tensorfold.mobile:qnn` process (PID 12851) attested one
+resident graph and completed all 100 executions. Service-side first execution
+took `2.66 ms` and the warm median was `1.41 ms`. Maximum
+QNN-vs-quantized error was `0.0094`; maximum quantized-vs-original error was
+`0.0438`; maximum QNN-vs-original error was `0.0353` over a `1.7047`
+original maximum magnitude (`2.07%` relative, down from v3's `5.17%`).
+Release APK SHA-256:
+`9a0c41db9e2499bc59e6c3487aae43aec7638ae733a83cce7ac790d82752f720`.
+The axis recipe is retained as the better weight-quantization candidate, but it
+is not a complete-layer or model admission. Exact retained-token parity remains
+mandatory before TensorFold can select QNN for serving.
+
 ### Persistent live-full QNN gate
 
 The app also exposes `persistentFullProjection` as a separate measurement-only

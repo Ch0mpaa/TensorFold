@@ -29,13 +29,17 @@ class QnnExecutorService : Service() {
     override fun createGraph(): Bundle {
       sameUid()
       return try {
+        val payload = filesDir.resolve("tensorfold/qnn/live-full-projection-v4.bin").let {
+          when {
+            it.isFile -> it
+            filesDir.resolve("tensorfold/qnn/live-full-projection-v3.bin").isFile ->
+              filesDir.resolve("tensorfold/qnn/live-full-projection-v3.bin")
+            else -> filesDir.resolve("tensorfold/qnn/live-full-projection-v2.bin")
+          }
+        }
+        val recipe = if (payload.name.endsWith("-v4.bin")) "axis-u8-output-channel" else "symmetric-u8-per-tensor"
         val values = worker.submit<DoubleArray> {
-          QnnNative.create(
-            applicationInfo.nativeLibraryDir,
-            filesDir.resolve("tensorfold/qnn/live-full-projection-v3.bin").let {
-              if (it.isFile) it else filesDir.resolve("tensorfold/qnn/live-full-projection-v2.bin")
-            }.absolutePath,
-          )
+          QnnNative.create(applicationInfo.nativeLibraryDir, payload.absolutePath)
         }.get()
         lastStatus = values.getOrElse(0) { -114.0 }.toInt()
         Bundle().apply {
@@ -44,6 +48,7 @@ class QnnExecutorService : Service() {
           putDouble("createMs", values.getOrElse(2) { 0.0 })
           putDouble("finalizeMs", values.getOrElse(3) { 0.0 })
           putDouble("tolerance", values.getOrElse(4) { 0.0 })
+          putString("recipe", recipe)
         }
       } catch (_: Throwable) {
         Bundle().apply {

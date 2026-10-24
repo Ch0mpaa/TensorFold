@@ -70,6 +70,7 @@ internal object QnnExecutorClient {
         )
         putDouble("createMs", created.getDouble("createMs"))
         putDouble("finalizeMs", created.getDouble("finalizeMs"))
+        putString("recipe", created.getString("recipe"))
         putInt("repeats", 100)
       }
     } catch (_: Throwable) { unavailable("QNN service binder call failed or its graph handle became stale.") }

@@ -72,6 +72,11 @@ constexpr uint32_t kLiveFidelityPayloadVersion = 3;
 constexpr size_t kLiveFidelityPayloadHeaderBytes = 384;
 constexpr size_t kLiveFidelityPayloadBytes = kLiveFidelityPayloadHeaderBytes + kLiveFullK +
     static_cast<size_t>(kLiveFullK) * kLiveFullM + 2 * kLiveFullM * sizeof(float) + sizeof(uint64_t);
+constexpr char kLiveChannelwisePayloadMagic[] = "TFQNNLC4";
+constexpr uint32_t kLiveChannelwisePayloadVersion = 4;
+constexpr size_t kLiveChannelwisePayloadHeaderBytes = 448;
+constexpr size_t kLiveChannelwisePayloadBytes = kLiveChannelwisePayloadHeaderBytes + kLiveFullK +
+    static_cast<size_t>(kLiveFullK) * kLiveFullM + 4 * kLiveFullM * sizeof(float) + sizeof(uint64_t);
 constexpr char kPinnedModelSha256[] = "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f";
 constexpr char kPinnedBlockSha256[] = "4ad47947dfa769a9d7eb2754732e855775bb3df70e66902bb2ee4429d27dc776";
 constexpr char kPinnedPayloadSha256[] = "556a06597ce4f7ddd01ed588305e92292cef5cf55cb00f71828a34e95b29795a";
@@ -120,6 +125,9 @@ struct LivePayload {
   std::vector<uint8_t> bytes;
   std::vector<float> reference;
   std::vector<float> original_reference;
+  std::vector<float> weight_axis_scales;
+  std::vector<int32_t> weight_axis_offsets;
+  uint32_t weight_axis = 0;
   ProjectionSpec spec{};
 };
 
@@ -204,6 +212,67 @@ int32_t loadPayload(const char* path, bool full, bool fidelity, LivePayload* pay
   }
   payload->spec = {input, weights, payload->reference.data(), expected_k, expected_m, input_scale, -128,
       weight_scale, -128, output_scale, -128, tolerance};
+  return 0;
+}
+
+int32_t loadChannelwisePayload(const char* path, LivePayload* payload) {
+  FILE* file = std::fopen(path, "rb");
+  if (file == nullptr) return errno == ENOENT ? -120 : -121;
+  std::array<uint8_t, kLiveChannelwisePayloadHeaderBytes> header{};
+  if (std::fread(header.data(), 1, header.size(), file) != header.size() ||
+      std::fseek(file, 0, SEEK_END) != 0) { std::fclose(file); return -121; }
+  const long file_size = std::ftell(file);
+  if (file_size < 0 || static_cast<uint64_t>(file_size) != kLiveChannelwisePayloadBytes ||
+      std::fseek(file, 0, SEEK_SET) != 0 ||
+      std::memcmp(header.data(), kLiveChannelwisePayloadMagic, 8) != 0 ||
+      readU32(header.data() + 8) != kLiveChannelwisePayloadVersion ||
+      readU32(header.data() + 12) != kLiveChannelwisePayloadHeaderBytes ||
+      readU32(header.data() + 16) != kLiveFullK || readU32(header.data() + 20) != kLiveFullM ||
+      readU32(header.data() + 308) != kLiveFullK ||
+      readU32(header.data() + 312) != kLiveFullK * kLiveFullM ||
+      readU32(header.data() + 316) != kLiveFullM * sizeof(float) ||
+      readU32(header.data() + 320) != kLiveFullM * sizeof(float) ||
+      readU32(header.data() + 324) != kLiveFullM ||
+      readU32(header.data() + 328) != kLiveFullM * sizeof(int32_t) ||
+      readU32(header.data() + 332) != 1 || readU32(header.data() + 336) != 1 ||
+      std::memcmp(header.data() + 52, kPinnedModelSha256, 64) != 0 ||
+      std::memcmp(header.data() + 116, kPinnedFullTensorIdentity, 64) != 0 ||
+      !isHexIdentity(header.data() + 180) || !isHexIdentity(header.data() + 244) ||
+      !std::isfinite(readF32(header.data() + 24)) || readF32(header.data() + 24) <= 0 ||
+      !std::isfinite(readF32(header.data() + 32)) || readF32(header.data() + 32) <= 0 ||
+      readF32(header.data() + 36) != readF32(header.data() + 32) * 1.5f ||
+      readI32(header.data() + 40) != -128 || readI32(header.data() + 44) != 0 ||
+      readI32(header.data() + 48) != -128) { std::fclose(file); return -121; }
+  try {
+    payload->bytes.resize(kLiveChannelwisePayloadBytes);
+    payload->reference.resize(kLiveFullM); payload->original_reference.resize(kLiveFullM);
+    payload->weight_axis_scales.resize(kLiveFullM); payload->weight_axis_offsets.resize(kLiveFullM);
+  } catch (const std::bad_alloc&) { std::fclose(file); return -121; }
+  if (std::fread(payload->bytes.data(), 1, payload->bytes.size(), file) != payload->bytes.size() ||
+      std::fgetc(file) != EOF) { std::fclose(file); return -121; }
+  std::fclose(file);
+  const uint8_t* bytes = payload->bytes.data();
+  if (readU64(bytes + payload->bytes.size() - sizeof(uint64_t)) !=
+      fnv1a64(bytes, payload->bytes.size() - sizeof(uint64_t))) return -121;
+  const uint8_t* input = bytes + kLiveChannelwisePayloadHeaderBytes;
+  const uint8_t* weights = input + kLiveFullK;
+  const uint8_t* refs = weights + static_cast<size_t>(kLiveFullK) * kLiveFullM;
+  const uint8_t* originals = refs + kLiveFullM * sizeof(float);
+  const uint8_t* scales = originals + kLiveFullM * sizeof(float);
+  const uint8_t* offsets = scales + kLiveFullM * sizeof(float);
+  for (size_t i = 0; i < kLiveFullM; ++i) {
+    payload->reference[i] = readF32(refs + i * sizeof(float));
+    payload->original_reference[i] = readF32(originals + i * sizeof(float));
+    payload->weight_axis_scales[i] = readF32(scales + i * sizeof(float));
+    payload->weight_axis_offsets[i] = readI32(offsets + i * sizeof(int32_t));
+    if (!std::isfinite(payload->reference[i]) || !std::isfinite(payload->original_reference[i]) ||
+        !std::isfinite(payload->weight_axis_scales[i]) || payload->weight_axis_scales[i] <= 0 ||
+        payload->weight_axis_offsets[i] != -128) return -121;
+  }
+  payload->weight_axis = 1;
+  payload->spec = {input, weights, payload->reference.data(), kLiveFullK, kLiveFullM,
+      readF32(header.data() + 24), -128, 1.0f, 0, readF32(header.data() + 32), -128,
+      readF32(header.data() + 36)};
   return 0;
 }
 
@@ -474,7 +543,8 @@ static jdoubleArray runPersistentLiveFullProjection(JNIEnv* env, jstring native_
     } else {
       TfQnnSessionConfig config = {dir, stub, payload.spec.input_columns, payload.spec.output_columns,
           payload.spec.input_scale, payload.spec.input_offset, payload.spec.weight_scale,
-          payload.spec.weight_offset, payload.spec.output_scale, payload.spec.output_offset};
+          payload.spec.weight_offset, nullptr, nullptr, 0, 0, payload.spec.output_scale,
+          payload.spec.output_offset};
       TfQnnSessionTiming timing{};
       TfQnnSession* session = nullptr;
       int32_t status = tf_qnn_session_create(&config, &session, &timing);
@@ -621,16 +691,26 @@ Java_expo_modules_tensorfoldlocalruntime_QnnNative_create(
   const char* path = env->GetStringUTFChars(payload_path, nullptr);
   if (path == nullptr) return residentResult(env, {-121.0, 0.0, 0.0, 0.0, 0.0});
   auto graph = std::make_unique<ResidentGraph>();
-  int32_t status = loadPayload(path, true, true, &graph->payload);
-  if (status == -121) status = loadPayload(path, true, false, &graph->payload);
+  std::array<char, 8> magic{};
+  FILE* payload_file = std::fopen(path, "rb");
+  const bool is_channelwise = payload_file != nullptr &&
+      std::fread(magic.data(), 1, magic.size(), payload_file) == magic.size() &&
+      std::memcmp(magic.data(), kLiveChannelwisePayloadMagic, magic.size()) == 0;
+  if (payload_file != nullptr) std::fclose(payload_file);
+  int32_t status = is_channelwise ? loadChannelwisePayload(path, &graph->payload) :
+      loadPayload(path, true, true, &graph->payload);
+  if (!is_channelwise && status == -121) status = loadPayload(path, true, false, &graph->payload);
   env->ReleaseStringUTFChars(payload_path, path);
   if (status != 0) return residentResult(env, {static_cast<jdouble>(status), 0.0, 0.0, 0.0, 0.0});
   const char* dir = env->GetStringUTFChars(native_dir, nullptr);
   if (dir == nullptr) return residentResult(env, {-100.0, 0.0, 0.0, 0.0, graph->payload.spec.tolerance});
   TfQnnSessionConfig config = {dir, "libQnnHtpV79Stub.so", graph->payload.spec.input_columns,
       graph->payload.spec.output_columns, graph->payload.spec.input_scale, graph->payload.spec.input_offset,
-      graph->payload.spec.weight_scale, graph->payload.spec.weight_offset, graph->payload.spec.output_scale,
-      graph->payload.spec.output_offset};
+      graph->payload.spec.weight_scale, graph->payload.spec.weight_offset,
+      graph->payload.weight_axis_scales.empty() ? nullptr : graph->payload.weight_axis_scales.data(),
+      graph->payload.weight_axis_offsets.empty() ? nullptr : graph->payload.weight_axis_offsets.data(),
+      static_cast<uint32_t>(graph->payload.weight_axis_scales.size()), graph->payload.weight_axis,
+      graph->payload.spec.output_scale, graph->payload.spec.output_offset};
   TfQnnSessionTiming timing{};
   status = tf_qnn_session_create(&config, &graph->session, &timing);
   const double create_ms = timing.create_ms;

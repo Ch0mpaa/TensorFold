@@ -25,6 +25,10 @@ typedef struct TfQnnSessionConfig {
   int32_t input_offset;
   float weight_scale;
   int32_t weight_offset;
+  const float* weight_axis_scales;
+  const int32_t* weight_axis_offsets;
+  uint32_t weight_axis_count;
+  uint32_t weight_axis;
   float output_scale;
   int32_t output_offset;
 } TfQnnSessionConfig;
