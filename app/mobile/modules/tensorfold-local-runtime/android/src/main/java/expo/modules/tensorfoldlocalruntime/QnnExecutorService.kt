@@ -32,7 +32,9 @@ class QnnExecutorService : Service() {
         val values = worker.submit<DoubleArray> {
           QnnNative.create(
             applicationInfo.nativeLibraryDir,
-            filesDir.resolve("tensorfold/qnn/live-full-projection-v2.bin").absolutePath,
+            filesDir.resolve("tensorfold/qnn/live-full-projection-v3.bin").let {
+              if (it.isFile) it else filesDir.resolve("tensorfold/qnn/live-full-projection-v2.bin")
+            }.absolutePath,
           )
         }.get()
         lastStatus = values.getOrElse(0) { -114.0 }.toInt()
@@ -55,7 +57,11 @@ class QnnExecutorService : Service() {
       sameUid()
       if (repeats !in 1..100) return Bundle().apply { putInt("status", -115); putString("error", "Repeat count is outside the bounded QNN oracle range.") }
       return try {
-        result(worker.submit<DoubleArray> { QnnNative.execute(graphHandle, repeats) }.get(), arrayOf("statusValue", "firstExecuteMs", "warmMedianMs", "warmLastMs", "maxAbsoluteError", "tolerance"))
+        result(worker.submit<DoubleArray> { QnnNative.execute(graphHandle, repeats) }.get(), arrayOf(
+          "statusValue", "firstExecuteMs", "warmMedianMs", "warmLastMs", "qnnQuantizedMaxAbsoluteError",
+          "quantizedOriginalMaxAbsoluteError", "qnnOriginalMaxAbsoluteError",
+          "originalReferenceMaxMagnitude", "relativeQnnOriginalError", "tolerance",
+        ))
       } catch (_: Throwable) { Bundle().apply { putInt("status", -114); putString("error", "QNN graph handle is unavailable or stale.") } }
     }
 

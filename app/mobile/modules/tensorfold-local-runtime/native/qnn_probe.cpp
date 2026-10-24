@@ -67,6 +67,11 @@ constexpr uint32_t kLiveFullM = 6144;
 constexpr size_t kLiveFullPayloadHeaderBytes = 320;
 constexpr size_t kLiveFullPayloadBytes = kLiveFullPayloadHeaderBytes + kLiveFullK +
     static_cast<size_t>(kLiveFullK) * kLiveFullM + kLiveFullM * sizeof(float) + sizeof(uint64_t);
+constexpr char kLiveFidelityPayloadMagic[] = "TFQNNLF3";
+constexpr uint32_t kLiveFidelityPayloadVersion = 3;
+constexpr size_t kLiveFidelityPayloadHeaderBytes = 384;
+constexpr size_t kLiveFidelityPayloadBytes = kLiveFidelityPayloadHeaderBytes + kLiveFullK +
+    static_cast<size_t>(kLiveFullK) * kLiveFullM + 2 * kLiveFullM * sizeof(float) + sizeof(uint64_t);
 constexpr char kPinnedModelSha256[] = "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f";
 constexpr char kPinnedBlockSha256[] = "4ad47947dfa769a9d7eb2754732e855775bb3df70e66902bb2ee4429d27dc776";
 constexpr char kPinnedPayloadSha256[] = "556a06597ce4f7ddd01ed588305e92292cef5cf55cb00f71828a34e95b29795a";
@@ -114,36 +119,44 @@ bool isHexIdentity(const uint8_t* value) {
 struct LivePayload {
   std::vector<uint8_t> bytes;
   std::vector<float> reference;
+  std::vector<float> original_reference;
   ProjectionSpec spec{};
 };
 
-int32_t loadPayload(const char* path, bool full, LivePayload* payload) {
+int32_t loadPayload(const char* path, bool full, bool fidelity, LivePayload* payload) {
   FILE* file = std::fopen(path, "rb");
   if (file == nullptr) return errno == ENOENT ? -120 : -121;
-  const size_t header_bytes = full ? kLiveFullPayloadHeaderBytes : kLivePayloadHeaderBytes;
-  std::array<uint8_t, kLiveFullPayloadHeaderBytes> header{};
+  const size_t header_bytes = fidelity ? kLiveFidelityPayloadHeaderBytes :
+      (full ? kLiveFullPayloadHeaderBytes : kLivePayloadHeaderBytes);
+  std::array<uint8_t, kLiveFidelityPayloadHeaderBytes> header{};
   if (std::fread(header.data(), 1, header_bytes, file) != header_bytes || std::fseek(file, 0, SEEK_END) != 0) {
     std::fclose(file);
     return -121;
   }
   const long file_size = std::ftell(file);
-  const size_t expected_bytes = full ? kLiveFullPayloadBytes : kLivePayloadBytes;
-  const uint32_t expected_k = full ? kLiveFullK : 128;
-  const uint32_t expected_m = full ? kLiveFullM : 128;
+  const size_t expected_bytes = fidelity ? kLiveFidelityPayloadBytes :
+      (full ? kLiveFullPayloadBytes : kLivePayloadBytes);
+  const uint32_t expected_k = full || fidelity ? kLiveFullK : 128;
+  const uint32_t expected_m = full || fidelity ? kLiveFullM : 128;
+  const char* expected_magic = fidelity ? kLiveFidelityPayloadMagic :
+      (full ? kLiveFullPayloadMagic : kLivePayloadMagic);
+  const uint32_t expected_version = fidelity ? kLiveFidelityPayloadVersion :
+      (full ? kLiveFullPayloadVersion : kLivePayloadVersion);
+  const size_t counts_offset = fidelity ? 308 : 244;
   if (file_size < 0 || static_cast<uint64_t>(file_size) != expected_bytes || std::fseek(file, 0, SEEK_SET) != 0 ||
-      std::memcmp(header.data(), full ? kLiveFullPayloadMagic : kLivePayloadMagic, 8) != 0 ||
-      readU32(header.data() + 8) != (full ? kLiveFullPayloadVersion : kLivePayloadVersion) ||
+      std::memcmp(header.data(), expected_magic, 8) != 0 || readU32(header.data() + 8) != expected_version ||
       readU32(header.data() + 12) != header_bytes || readU32(header.data() + 16) != expected_k ||
-      readU32(header.data() + 20) != expected_m || readU32(header.data() + 244) != expected_k ||
-      readU32(header.data() + 248) != expected_k * expected_m ||
-      readU32(header.data() + 252) != expected_m * sizeof(float)) {
+      readU32(header.data() + 20) != expected_m || readU32(header.data() + counts_offset) != expected_k ||
+      readU32(header.data() + counts_offset + 4) != expected_k * expected_m ||
+      readU32(header.data() + counts_offset + 8) != expected_m * sizeof(float) ||
+      (fidelity && readU32(header.data() + counts_offset + 12) != expected_m * sizeof(float))) {
     std::fclose(file);
     return -121;
   }
   if (std::memcmp(header.data() + 52, kPinnedModelSha256, 64) != 0 ||
-      (full && std::memcmp(header.data() + 116, kPinnedFullTensorIdentity, 64) != 0) ||
-      (!full && (std::memcmp(header.data() + 116, kPinnedBlockSha256, 64) != 0 ||
-                 std::memcmp(header.data() + 180, kPinnedPayloadSha256, 64) != 0))) {
+      ((full || fidelity) && std::memcmp(header.data() + 116, kPinnedFullTensorIdentity, 64) != 0) ||
+      (!full && !fidelity && (std::memcmp(header.data() + 116, kPinnedBlockSha256, 64) != 0 ||
+                              std::memcmp(header.data() + 180, kPinnedPayloadSha256, 64) != 0))) {
     std::fclose(file);
     return -122;
   }
@@ -152,6 +165,7 @@ int32_t loadPayload(const char* path, bool full, LivePayload* payload) {
   const float output_scale = readF32(header.data() + 32);
   const float tolerance = readF32(header.data() + 36);
   if (!isHexIdentity(header.data() + 116) || !isHexIdentity(header.data() + 180) ||
+      (fidelity && !isHexIdentity(header.data() + 244)) ||
       !std::isfinite(input_scale) || !std::isfinite(weight_scale) || !std::isfinite(output_scale) ||
       !std::isfinite(tolerance) || input_scale <= 0 || weight_scale <= 0 || output_scale <= 0 ||
       tolerance != output_scale * 1.5f || readI32(header.data() + 40) != -128 ||
@@ -162,6 +176,7 @@ int32_t loadPayload(const char* path, bool full, LivePayload* payload) {
   try {
     payload->bytes.resize(expected_bytes);
     payload->reference.resize(expected_m);
+    payload->original_reference.resize(fidelity ? expected_m : 0);
   } catch (const std::bad_alloc&) {
     std::fclose(file);
     return -121;
@@ -179,6 +194,13 @@ int32_t loadPayload(const char* path, bool full, LivePayload* payload) {
   for (size_t index = 0; index < payload->reference.size(); ++index) {
     payload->reference[index] = readF32(reference_bytes + index * sizeof(float));
     if (!std::isfinite(payload->reference[index])) return -121;
+  }
+  if (fidelity) {
+    const uint8_t* original_bytes = reference_bytes + static_cast<size_t>(expected_m) * sizeof(float);
+    for (size_t index = 0; index < payload->original_reference.size(); ++index) {
+      payload->original_reference[index] = readF32(original_bytes + index * sizeof(float));
+      if (!std::isfinite(payload->original_reference[index])) return -121;
+    }
   }
   payload->spec = {input, weights, payload->reference.data(), expected_k, expected_m, input_scale, -128,
       weight_scale, -128, output_scale, -128, tolerance};
@@ -392,7 +414,7 @@ static jdoubleArray runLiveProjection(JNIEnv* env, jstring native_dir, jstring s
   const char* path = env->GetStringUTFChars(payload_path, nullptr);
   if (path == nullptr) return jniResult(env, native_result);
   LivePayload payload;
-  const int32_t payload_status = loadPayload(path, full, &payload);
+  const int32_t payload_status = loadPayload(path, full, false, &payload);
   env->ReleaseStringUTFChars(payload_path, path);
   if (payload_status != 0) {
     native_result.status = payload_status;
@@ -438,7 +460,7 @@ static jdoubleArray runPersistentLiveFullProjection(JNIEnv* env, jstring native_
   const char* path = env->GetStringUTFChars(payload_path, nullptr);
   if (path == nullptr) return nullptr;
   LivePayload payload;
-  const int32_t payload_status = loadPayload(path, true, &payload);
+  const int32_t payload_status = loadPayload(path, true, false, &payload);
   env->ReleaseStringUTFChars(payload_path, path);
   if (payload_status != 0) {
     values[0] = payload_status;
@@ -545,6 +567,34 @@ struct ResidentGraph {
   ~ResidentGraph() { tf_qnn_session_destroy(session); }
 };
 
+struct FidelityStats {
+  double quantized_original = std::numeric_limits<double>::quiet_NaN();
+  double qnn_original = std::numeric_limits<double>::quiet_NaN();
+  double original_magnitude = std::numeric_limits<double>::quiet_NaN();
+  double relative_qnn_original = std::numeric_limits<double>::quiet_NaN();
+};
+
+FidelityStats fidelityStats(const ResidentGraph& graph, const std::vector<uint8_t>& output) {
+  FidelityStats stats;
+  if (graph.payload.original_reference.size() != graph.payload.spec.output_columns ||
+      output.size() != graph.payload.spec.output_columns) return stats;
+  stats.quantized_original = 0.0;
+  stats.qnn_original = 0.0;
+  stats.original_magnitude = 0.0;
+  for (size_t index = 0; index < output.size(); ++index) {
+    const double original = graph.payload.original_reference[index];
+    const double quantized = graph.payload.reference[index];
+    const double qnn = graph.payload.spec.output_scale *
+        (static_cast<int32_t>(output[index]) + graph.payload.spec.output_offset);
+    stats.quantized_original = std::fmax(stats.quantized_original, std::fabs(quantized - original));
+    stats.qnn_original = std::fmax(stats.qnn_original, std::fabs(qnn - original));
+    stats.original_magnitude = std::fmax(stats.original_magnitude, std::fabs(original));
+  }
+  stats.relative_qnn_original = stats.original_magnitude > 0.0 ?
+      stats.qnn_original / stats.original_magnitude : std::numeric_limits<double>::quiet_NaN();
+  return stats;
+}
+
 std::mutex resident_graphs_mutex;
 std::unordered_map<jlong, std::unique_ptr<ResidentGraph>> resident_graphs;
 std::mt19937_64 resident_graph_rng(std::random_device{}());
@@ -571,7 +621,8 @@ Java_expo_modules_tensorfoldlocalruntime_QnnNative_create(
   const char* path = env->GetStringUTFChars(payload_path, nullptr);
   if (path == nullptr) return residentResult(env, {-121.0, 0.0, 0.0, 0.0, 0.0});
   auto graph = std::make_unique<ResidentGraph>();
-  int32_t status = loadPayload(path, true, &graph->payload);
+  int32_t status = loadPayload(path, true, true, &graph->payload);
+  if (status == -121) status = loadPayload(path, true, false, &graph->payload);
   env->ReleaseStringUTFChars(payload_path, path);
   if (status != 0) return residentResult(env, {static_cast<jdouble>(status), 0.0, 0.0, 0.0, 0.0});
   const char* dir = env->GetStringUTFChars(native_dir, nullptr);
@@ -612,10 +663,10 @@ Java_expo_modules_tensorfoldlocalruntime_QnnNative_create(
 extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_expo_modules_tensorfoldlocalruntime_QnnNative_execute(JNIEnv* env, jclass, jlong handle, jint repeats) {
   constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
-  if (repeats < 1 || repeats > 100) return residentResult(env, {-115.0, 0.0, 0.0, 0.0, kNaN, 0.0});
+  if (repeats < 1 || repeats > 100) return residentResult(env, {-115.0, 0.0, 0.0, 0.0, kNaN, kNaN, kNaN, kNaN, kNaN, 0.0});
   std::lock_guard<std::mutex> lock(resident_graphs_mutex);
   const auto found = resident_graphs.find(handle);
-  if (found == resident_graphs.end()) return residentResult(env, {-114.0, 0.0, 0.0, 0.0, kNaN, 0.0});
+  if (found == resident_graphs.end()) return residentResult(env, {-114.0, 0.0, 0.0, 0.0, kNaN, kNaN, kNaN, kNaN, kNaN, 0.0});
   ResidentGraph& graph = *found->second;
   std::vector<uint8_t> output(graph.payload.spec.output_columns);
   std::vector<double> warm;
@@ -637,7 +688,10 @@ Java_expo_modules_tensorfoldlocalruntime_QnnNative_execute(JNIEnv* env, jclass, 
   }
   if (status == 0) status = tf_qnn_session_parity(graph.session, output.data(), output.size(),
       graph.payload.spec.reference, graph.payload.spec.output_columns, graph.payload.spec.tolerance, &timing);
-  return residentResult(env, {static_cast<jdouble>(status), first, median, last, timing.max_abs_error, graph.payload.spec.tolerance});
+  const FidelityStats fidelity = fidelityStats(graph, output);
+  return residentResult(env, {static_cast<jdouble>(status), first, median, last, timing.max_abs_error,
+      fidelity.quantized_original, fidelity.qnn_original, fidelity.original_magnitude,
+      fidelity.relative_qnn_original, graph.payload.spec.tolerance});
 }
 
 extern "C" JNIEXPORT jint JNICALL

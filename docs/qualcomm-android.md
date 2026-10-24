@@ -1209,3 +1209,28 @@ without a drafter. Its first eight-token request reported `drafts: false`,
 and 16.18 server tokens/s after its cold prefill. Synthetic Llama, GPTQ, and
 unsupported-Qwen configs were refused with `UnsupportedArchitecture`,
 `UnsupportedQuantization`, and `UnsupportedQwenGeometry`, each with exit 65.
+
+### QNN layer-0 fidelity payload
+
+`tensorfold-qualcomm-exl3-qnn-projection prepare-fidelity MODEL APP_PRIVATE_PAYLOAD`
+writes the v3 app-private payload for the exact layer-0 2048x6144 projection. It
+binds the pinned model SHA-256, EXL3 source-tensor identity, quantized-reference
+identity, original-reference identity, counts, and whole-payload integrity before
+the app allocates or loads graph buffers. The deterministic activation is decoded
+as real values and dotted against FP64 EXL3-decoded weights independently of the
+subsequent symmetric-u8 weight quantization.
+
+The QNN service keeps the pre-existing QNN-vs-quantized tolerance as its only
+status gate. Its 100-repeat receipt additionally reports quantized-vs-original,
+QNN-vs-original, original-reference magnitude, and relative QNN-vs-original
+error. A v2 payload remains usable when v3 is absent, but cannot report the
+original-reference fields. This qualification is evidence for this one projection
+only; it does not enable a layer or model backend, and serving remains CPU-only.
+
+On stock Phone B, the v3 service receipt completed 100 QNN executions with
+`0.0093` QNN-vs-quantized maximum error. The fidelity comparison measured
+`0.0872` quantized-vs-original and `0.0881` QNN-vs-original maximum error over
+an original-reference maximum magnitude of `1.7047`, or `5.17%` relative.
+Therefore the current per-tensor symmetric-u8 recipe is **not** admitted for a
+complete layer or model backend. The next candidate must reduce original-domain
+error with per-output-channel scales or higher precision before layer parity.

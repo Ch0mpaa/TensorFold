@@ -52,8 +52,8 @@ internal object QnnExecutorClient {
         putLong("graphCount", health.getLong("graphCount"))
         putBoolean(
           "available",
-          healthyService && getInt("status") == 0 && getDouble("maxAbsoluteError").isFinite() &&
-            getDouble("maxAbsoluteError") <= getDouble("tolerance"),
+          healthyService && getInt("status") == 0 && getDouble("qnnQuantizedMaxAbsoluteError").isFinite() &&
+            getDouble("qnnQuantizedMaxAbsoluteError") <= getDouble("tolerance"),
         )
         putString(
           "reason",
@@ -63,7 +63,7 @@ internal object QnnExecutorClient {
             else -> getString("error") ?: QnnProjectionResult(
               getInt("status"),
               getDouble("firstExecuteMs"),
-              getDouble("maxAbsoluteError"),
+              getDouble("qnnQuantizedMaxAbsoluteError"),
               getDouble("tolerance"),
             ).reason()
           },

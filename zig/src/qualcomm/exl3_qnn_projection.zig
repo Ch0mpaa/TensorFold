@@ -194,6 +194,9 @@ fn writePreparedPayload(path: []const u8, model_sha: [64]u8, quantized: anytype,
     std.Io.Dir.cwd().rename(temporary, std.Io.Dir.cwd(), path, io) catch return error.Payload;
 }
 
+const fidelity_payload_magic = "TFQNNLF3";
+const fidelity_payload_version: u32 = 3;
+const fidelity_payload_header_bytes: u32 = 384;
 const full_payload_magic = "TFQNNLF2";
 const full_payload_version: u32 = 2;
 const full_payload_header_bytes: u32 = 320;
@@ -317,13 +320,116 @@ fn writeFullPreparedPayload(path: []const u8, model_sha: [64]u8, trellis: st.Ten
     std.Io.Dir.cwd().rename(temporary, std.Io.Dir.cwd(), path, io) catch return error.Payload;
 }
 
+fn writeFidelityPreparedPayload(path: []const u8, model_sha: [64]u8, trellis: st.Tensor, suh: st.Tensor, svh: st.Tensor, words: usize, allocator: std.mem.Allocator, io: std.Io) Failure!void {
+    const weight_count = source_k * source_m;
+    const input = allocator.alloc(u8, source_k) catch return error.Payload;
+    defer allocator.free(input);
+    const weights = allocator.alloc(u8, weight_count) catch return error.Payload;
+    defer allocator.free(weights);
+    const quantized_reference = allocator.alloc(f32, source_m) catch return error.Payload;
+    defer allocator.free(quantized_reference);
+    const original_reference = allocator.alloc(f32, source_m) catch return error.Payload;
+    defer allocator.free(original_reference);
+    const trellis_values = allocator.alloc(i16, trellis.numel()) catch return error.Payload;
+    defer allocator.free(trellis_values);
+    @memcpy(std.mem.sliceAsBytes(trellis_values), trellis.bytes);
+    const suh_values = allocator.alloc(f16, source_k) catch return error.Payload;
+    defer allocator.free(suh_values);
+    @memcpy(std.mem.sliceAsBytes(suh_values), suh.bytes);
+    const svh_values = allocator.alloc(f16, source_m) catch return error.Payload;
+    defer allocator.free(svh_values);
+    @memcpy(std.mem.sliceAsBytes(svh_values), svh.bytes);
+    const decoded = allocator.alloc(f64, weight_count) catch return error.Payload;
+    defer allocator.free(decoded);
+    const scratch = allocator.alloc(f64, 2 * weight_count) catch return error.Payload;
+    defer allocator.free(scratch);
+    exl3.dequantizeFast(.{ .halves = @intCast(words / 8) }, .mcg, trellis_values, trellis.dim(0), trellis.dim(1), suh_values, svh_values, decoded, scratch);
+    var max_weight: f64 = 0;
+    for (decoded) |value| {
+        if (!std.math.isFinite(value)) return error.Model;
+        max_weight = @max(max_weight, @abs(value));
+    }
+    if (max_weight == 0) return error.Model;
+    const input_scale: f64 = 1.0 / 127.0;
+    const weight_scale: f64 = max_weight / 127.0;
+    for (input, 0..) |*entry, index| entry.* = @intCast((index * 73 + 19) % 255 + 1);
+    for (decoded, 0..) |value, index| weights[index] = try symmetricQuantize(value, weight_scale);
+    var quantized_identity: std.ArrayList(u8) = .empty;
+    defer quantized_identity.deinit(allocator);
+    quantized_identity.ensureTotalCapacity(allocator, source_k + weight_count + source_m * 4 + 24) catch return error.Payload;
+    quantized_identity.appendSlice(allocator, input) catch return error.Payload;
+    quantized_identity.appendSlice(allocator, weights) catch return error.Payload;
+    var max_quantized_reference: f64 = 0;
+    for (0..source_m) |m| {
+        var quantized_dot: i32 = 0;
+        var original_dot: f64 = 0;
+        for (0..source_k) |k| {
+            const activation = @as(f64, @floatFromInt(@as(i32, input[k]) - 128)) * input_scale;
+            quantized_dot += (@as(i32, input[k]) - 128) * (@as(i32, weights[k * source_m + m]) - 128);
+            original_dot += activation * decoded[k * source_m + m];
+        }
+        const quantized_value = @as(f64, @floatFromInt(quantized_dot)) * input_scale * weight_scale;
+        if (!std.math.isFinite(original_dot) or !std.math.isFinite(quantized_value)) return error.Model;
+        quantized_reference[m] = @floatCast(quantized_value);
+        original_reference[m] = @floatCast(original_dot);
+        max_quantized_reference = @max(max_quantized_reference, @abs(quantized_value));
+        try appendInt(&quantized_identity, allocator, i32, quantized_dot);
+    }
+    if (max_quantized_reference == 0) return error.Model;
+    const output_scale: f64 = max_quantized_reference / 100.0;
+    for (quantized_reference) |value| if (@as(f64, value) / output_scale < -127 or @as(f64, value) / output_scale > 127) return error.Model;
+    for ([_]f64{ input_scale, weight_scale, output_scale }) |scale| try appendInt(&quantized_identity, allocator, u64, @bitCast(scale));
+    const quantized_identity_sha = sha256Hex(quantized_identity.items);
+    const original_identity_sha = sha256Hex(std.mem.sliceAsBytes(original_reference));
+    const output_scale_f32: f32 = @floatCast(output_scale);
+    var payload: std.ArrayList(u8) = .empty;
+    defer payload.deinit(allocator);
+    payload.ensureTotalCapacity(allocator, fidelity_payload_header_bytes + source_k + weight_count + 2 * source_m * @sizeOf(f32) + payload_integrity_bytes) catch return error.Payload;
+    payload.appendSlice(allocator, fidelity_payload_magic) catch return error.Payload;
+    try appendInt(&payload, allocator, u32, fidelity_payload_version);
+    try appendInt(&payload, allocator, u32, fidelity_payload_header_bytes);
+    try appendInt(&payload, allocator, u32, source_k);
+    try appendInt(&payload, allocator, u32, source_m);
+    try appendFloat(&payload, allocator, @floatCast(input_scale));
+    try appendFloat(&payload, allocator, @floatCast(weight_scale));
+    try appendFloat(&payload, allocator, output_scale_f32);
+    try appendFloat(&payload, allocator, output_scale_f32 * 1.5);
+    try appendInt(&payload, allocator, i32, -128);
+    try appendInt(&payload, allocator, i32, -128);
+    try appendInt(&payload, allocator, i32, -128);
+    payload.appendSlice(allocator, &model_sha) catch return error.Payload;
+    payload.appendSlice(allocator, full_tensor_identity) catch return error.Payload;
+    payload.appendSlice(allocator, &quantized_identity_sha) catch return error.Payload;
+    payload.appendSlice(allocator, &original_identity_sha) catch return error.Payload;
+    try appendInt(&payload, allocator, u32, source_k);
+    try appendInt(&payload, allocator, u32, weight_count);
+    try appendInt(&payload, allocator, u32, source_m * @sizeOf(f32));
+    try appendInt(&payload, allocator, u32, source_m * @sizeOf(f32));
+    while (payload.items.len < fidelity_payload_header_bytes) payload.append(allocator, 0) catch return error.Payload;
+    payload.appendSlice(allocator, input) catch return error.Payload;
+    payload.appendSlice(allocator, weights) catch return error.Payload;
+    for (quantized_reference) |value| try appendFloat(&payload, allocator, value);
+    for (original_reference) |value| try appendFloat(&payload, allocator, value);
+    try appendInt(&payload, allocator, u64, fnv1a64(payload.items));
+    const temporary = std.fmt.allocPrint(allocator, "{s}.tmp", .{path}) catch return error.Payload;
+    defer allocator.free(temporary);
+    defer std.Io.Dir.cwd().deleteFile(io, temporary) catch {};
+    if (std.fs.path.dirname(path)) |parent| std.Io.Dir.cwd().createDirPath(io, parent) catch return error.Payload;
+    var output = std.Io.Dir.cwd().createFile(io, temporary, .{ .truncate = true }) catch return error.Payload;
+    defer output.close(io);
+    output.writePositionalAll(io, payload.items, 0) catch return error.Payload;
+    output.sync(io) catch return error.Payload;
+    std.Io.Dir.cwd().rename(temporary, std.Io.Dir.cwd(), path, io) catch return error.Payload;
+}
+
 fn run(init: std.process.Init) Failure!void {
     const args = init.minimal.args.toSlice(init.arena.allocator()) catch return error.Usage;
     const preparing = args.len == 4 and std.mem.eql(u8, args[1], "prepare");
     const preparing_full = args.len == 4 and std.mem.eql(u8, args[1], "prepare-full");
-    if ((!(preparing or preparing_full) and args.len != 5) or ((preparing or preparing_full) and args.len != 4)) return error.Usage;
+    const preparing_fidelity = args.len == 4 and std.mem.eql(u8, args[1], "prepare-fidelity");
+    if ((!(preparing or preparing_full or preparing_fidelity) and args.len != 5) or ((preparing or preparing_full or preparing_fidelity) and args.len != 4)) return error.Usage;
     const allocator = init.gpa;
-    const model_path = if (preparing or preparing_full) args[2] else args[1];
+    const model_path = if (preparing or preparing_full or preparing_fidelity) args[2] else args[1];
     var file = st.File.open(allocator, init.io, model_path) catch return error.Model;
     defer file.close(init.io);
     const model_sha = sha256Hex(file.map.memory);
@@ -342,6 +448,14 @@ fn run(init: std.process.Init) Failure!void {
     const words = trellis.dim(2);
     const tensor_identity = projectionTensorIdentity(trellis, suh, svh, mcg);
     if (!std.mem.eql(u8, &tensor_identity, full_tensor_identity)) return error.Model;
+    if (preparing_fidelity) {
+        try writeFidelityPreparedPayload(args[3], model_sha, trellis, suh, svh, words, allocator, init.io);
+        std.debug.print(
+            "{{\"tensorfold\":\"qualcomm-exl3-qnn-projection\",\"mode\":\"prepare-fidelity\",\"model_sha256\":\"{s}\",\"tensor\":\"{s}\",\"source_shape\":[2048,6144],\"payload\":\"{s}\",\"passed\":true}}\n",
+            .{ model_sha[0..], projection_name, args[3] },
+        );
+        return;
+    }
     if (preparing_full) {
         try writeFullPreparedPayload(args[3], model_sha, trellis, suh, svh, words, allocator, init.io);
         std.debug.print(
@@ -404,7 +518,7 @@ fn run(init: std.process.Init) Failure!void {
 pub fn main(init: std.process.Init) !u8 {
     run(init) catch |failure| switch (failure) {
         error.Usage => {
-            std.debug.print("usage: tensorfold-qualcomm-exl3-qnn-projection MODEL_SAFETENSORS NATIVE_DIR STUB_NAME QNN_BRIDGE_SO\n       tensorfold-qualcomm-exl3-qnn-projection prepare MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-full MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n", .{});
+            std.debug.print("usage: tensorfold-qualcomm-exl3-qnn-projection MODEL_SAFETENSORS NATIVE_DIR STUB_NAME QNN_BRIDGE_SO\n       tensorfold-qualcomm-exl3-qnn-projection prepare MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-full MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-fidelity MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n", .{});
             return 64;
         },
         error.Model => return 4,
@@ -437,4 +551,10 @@ test "full prepared payload has fixed source dimensions and a distinct schema" {
     try std.testing.expectEqual(@as(usize, 12_582_912), source_k * source_m);
     try std.testing.expectEqualStrings("TFQNNLF2", full_payload_magic);
     try std.testing.expectEqual(@as(usize, 64), full_tensor_identity.len);
+}
+
+test "fidelity payload binds two references in a versioned schema" {
+    try std.testing.expectEqual(@as(u32, 3), fidelity_payload_version);
+    try std.testing.expectEqual(@as(u32, 384), fidelity_payload_header_bytes);
+    try std.testing.expectEqualStrings("TFQNNLF3", fidelity_payload_magic);
 }

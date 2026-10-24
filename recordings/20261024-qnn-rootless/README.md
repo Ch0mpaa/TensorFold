@@ -160,6 +160,25 @@ Every execution and final parity check passed. The graph was explicitly
 released; model serving remained CPU-selected. Release APK SHA-256:
 `f5621164702fb5ff3fac00673caf02136b4e2e273fe7b82a35e855d3d961f673`.
 
+### Original-precision fidelity receipt
+
+The v3 payload adds an independent FP64 EXL3-decoded projection reference.
+The same `:qnn` service completed 100 executions and reported:
+
+```text
+QNN-vs-quantized 0.0093
+quantized-vs-original 0.0872
+QNN-vs-original 0.0881
+original maximum magnitude 1.7047
+relative QNN-vs-original error 5.17%
+```
+
+This rejects the current per-tensor symmetric-u8 recipe for complete-layer or
+model serving. The QNN transport and persistence gates remain valid, but the
+next quantization recipe must reduce original-domain error. Release APK
+SHA-256:
+`4d29dbecdd103ebe013cb08d6271e836e69401a07ec854fd1a1545d6c3ed9187`.
+
 ## Samsung S20 Ultra — Snapdragon 865
 
 Device: `SM-G988U`, `SM8250`, stock Android 12/API 31.
