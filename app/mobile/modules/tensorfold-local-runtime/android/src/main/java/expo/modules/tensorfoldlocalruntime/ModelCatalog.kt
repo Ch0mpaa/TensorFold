@@ -42,8 +42,8 @@ internal object ModelCatalog {
       engineLibrary = "libtensorfold_engine_2b.so",
       minimumRamBytes = 8L shl 30,
       artifacts = listOf(
-        ModelArtifact("config.json", 3_301, "6d6873295d7f81c0a6c227015dc9640dfb0785679a28abf07135911f0bb7d3fe"),
-      ) + common(17_013, "ce3cbcd05aaa91d20c1605c5c46de4bacfe439c1c0efd8b27e6b5489de968f2c", 7_908, "306abaf09cf3a6c0d14128373a72925bda3d7de2616a5642804d9768c7d2f78c") + listOf(
+        ModelArtifact("config.json", 3_194, "484876471b166b0f4483005db9207f38307e345167213b2b5e1d4d22728583f9"),
+      ) + common(16_709, "49e2b6e395f959f077f1e992b338919c0d4a9732fc6e613995e06557f843500c", 7_755, "273d8e0e683b885071fb17e08d71e5f2a5ddfb5309756181681de4f5a1822d80") + listOf(
         ModelArtifact("model.safetensors", 3_438_956_902, "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f"),
       ),
     ),
