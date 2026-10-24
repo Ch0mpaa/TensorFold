@@ -31,6 +31,10 @@ typedef struct TfQnnSessionConfig {
   uint32_t weight_axis;
   float output_scale;
   int32_t output_offset;
+  // Zero selects the retained u8 path. FLOAT_16 requires two-byte elements and
+  // is used only by the separately versioned v5 candidate.
+  uint32_t data_type;
+  uint32_t element_bytes;
 } TfQnnSessionConfig;
 
 typedef struct TfQnnSessionTiming {

@@ -29,15 +29,21 @@ class QnnExecutorService : Service() {
     override fun createGraph(): Bundle {
       sameUid()
       return try {
-        val payload = filesDir.resolve("tensorfold/qnn/live-full-projection-v4.bin").let {
+        val payload = filesDir.resolve("tensorfold/qnn/live-full-projection-v5.bin").let {
           when {
             it.isFile -> it
+            filesDir.resolve("tensorfold/qnn/live-full-projection-v4.bin").isFile ->
+              filesDir.resolve("tensorfold/qnn/live-full-projection-v4.bin")
             filesDir.resolve("tensorfold/qnn/live-full-projection-v3.bin").isFile ->
               filesDir.resolve("tensorfold/qnn/live-full-projection-v3.bin")
             else -> filesDir.resolve("tensorfold/qnn/live-full-projection-v2.bin")
           }
         }
-        val recipe = if (payload.name.endsWith("-v4.bin")) "axis-u8-output-channel" else "symmetric-u8-per-tensor"
+        val recipe = when {
+          payload.name.endsWith("-v5.bin") -> "fp16-input-weight-output"
+          payload.name.endsWith("-v4.bin") -> "axis-u8-output-channel"
+          else -> "symmetric-u8-per-tensor"
+        }
         val values = worker.submit<DoubleArray> {
           QnnNative.create(applicationInfo.nativeLibraryDir, payload.absolutePath)
         }.get()
@@ -49,6 +55,11 @@ class QnnExecutorService : Service() {
           putDouble("finalizeMs", values.getOrElse(3) { 0.0 })
           putDouble("tolerance", values.getOrElse(4) { 0.0 })
           putString("recipe", recipe)
+          if (lastStatus == -121) {
+            putString("error", "Selected $recipe layer-0 projection payload is malformed or failed its integrity check.")
+          } else if (lastStatus == -122) {
+            putString("error", "Selected $recipe layer-0 projection payload does not match the pinned model identity.")
+          }
         }
       } catch (_: Throwable) {
         Bundle().apply {

@@ -538,15 +538,107 @@ fn writeChannelwisePreparedPayload(path: []const u8, model_sha: [64]u8, trellis:
     std.Io.Dir.cwd().rename(temporary, std.Io.Dir.cwd(), path, io) catch return error.Payload;
 }
 
+const fp16_payload_magic = "TFQNNHF5";
+const fp16_payload_version: u32 = 5;
+const fp16_payload_header_bytes: u32 = 512;
+const fp16_parity_tolerance: f32 = 0.001;
+
+fn writeFp16PreparedPayload(path: []const u8, model_sha: [64]u8, trellis: st.Tensor, suh: st.Tensor, svh: st.Tensor, words: usize, allocator: std.mem.Allocator, io: std.Io) Failure!void {
+    const weight_count = source_k * source_m;
+    const input = allocator.alloc(f16, source_k) catch return error.Payload;
+    defer allocator.free(input);
+    const weights = allocator.alloc(f16, weight_count) catch return error.Payload;
+    defer allocator.free(weights);
+    const qnn_reference = allocator.alloc(f32, source_m) catch return error.Payload;
+    defer allocator.free(qnn_reference);
+    const original_reference = allocator.alloc(f64, source_m) catch return error.Payload;
+    defer allocator.free(original_reference);
+    const trellis_values = allocator.alloc(i16, trellis.numel()) catch return error.Payload;
+    defer allocator.free(trellis_values);
+    @memcpy(std.mem.sliceAsBytes(trellis_values), trellis.bytes);
+    const suh_values = allocator.alloc(f16, source_k) catch return error.Payload;
+    defer allocator.free(suh_values);
+    @memcpy(std.mem.sliceAsBytes(suh_values), suh.bytes);
+    const svh_values = allocator.alloc(f16, source_m) catch return error.Payload;
+    defer allocator.free(svh_values);
+    @memcpy(std.mem.sliceAsBytes(svh_values), svh.bytes);
+    const decoded = allocator.alloc(f64, weight_count) catch return error.Payload;
+    defer allocator.free(decoded);
+    const scratch = allocator.alloc(f64, 2 * weight_count) catch return error.Payload;
+    defer allocator.free(scratch);
+    exl3.dequantizeFast(.{ .halves = @intCast(words / 8) }, .mcg, trellis_values, trellis.dim(0), trellis.dim(1), suh_values, svh_values, decoded, scratch);
+    for (input, 0..) |*value, index| value.* = @floatCast(@as(f64, @floatFromInt(@as(i32, @intCast((index * 73 + 19) % 255)) - 127)) / 127.0);
+    for (weights, decoded) |*value, source| {
+        if (!std.math.isFinite(source)) return error.Model;
+        value.* = @floatCast(source);
+    }
+    for (0..source_m) |m| {
+        var fp16_dot: f64 = 0;
+        var original_dot: f64 = 0;
+        for (0..source_k) |k| {
+            const index = k * source_m + m;
+            const activation: f64 = input[k];
+            fp16_dot += activation * @as(f64, weights[index]);
+            original_dot += activation * decoded[index];
+        }
+        if (!std.math.isFinite(fp16_dot) or !std.math.isFinite(original_dot)) return error.Model;
+        const rounded: f16 = @floatCast(fp16_dot);
+        qnn_reference[m] = @floatCast(rounded);
+        original_reference[m] = original_dot;
+    }
+    var fp16_identity: std.ArrayList(u8) = .empty;
+    defer fp16_identity.deinit(allocator);
+    fp16_identity.appendSlice(allocator, std.mem.sliceAsBytes(input)) catch return error.Payload;
+    fp16_identity.appendSlice(allocator, std.mem.sliceAsBytes(weights)) catch return error.Payload;
+    fp16_identity.appendSlice(allocator, std.mem.sliceAsBytes(qnn_reference)) catch return error.Payload;
+    const fp16_identity_sha = sha256Hex(fp16_identity.items);
+    const original_identity_sha = sha256Hex(std.mem.sliceAsBytes(original_reference));
+    var payload: std.ArrayList(u8) = .empty;
+    defer payload.deinit(allocator);
+    payload.appendSlice(allocator, fp16_payload_magic) catch return error.Payload;
+    try appendInt(&payload, allocator, u32, fp16_payload_version);
+    try appendInt(&payload, allocator, u32, fp16_payload_header_bytes);
+    try appendInt(&payload, allocator, u32, source_k);
+    try appendInt(&payload, allocator, u32, source_m);
+    try appendFloat(&payload, allocator, fp16_parity_tolerance);
+    try appendInt(&payload, allocator, i32, 0);
+    payload.appendSlice(allocator, &model_sha) catch return error.Payload;
+    payload.appendSlice(allocator, full_tensor_identity) catch return error.Payload;
+    payload.appendSlice(allocator, &fp16_identity_sha) catch return error.Payload;
+    payload.appendSlice(allocator, &original_identity_sha) catch return error.Payload;
+    try appendInt(&payload, allocator, u32, source_k);
+    try appendInt(&payload, allocator, u32, source_k * @sizeOf(f16));
+    try appendInt(&payload, allocator, u32, weight_count);
+    try appendInt(&payload, allocator, u32, weight_count * @sizeOf(f16));
+    try appendInt(&payload, allocator, u32, source_m * @sizeOf(f32));
+    try appendInt(&payload, allocator, u32, source_m * @sizeOf(f64));
+    while (payload.items.len < fp16_payload_header_bytes) payload.append(allocator, 0) catch return error.Payload;
+    payload.appendSlice(allocator, std.mem.sliceAsBytes(input)) catch return error.Payload;
+    payload.appendSlice(allocator, std.mem.sliceAsBytes(weights)) catch return error.Payload;
+    payload.appendSlice(allocator, std.mem.sliceAsBytes(qnn_reference)) catch return error.Payload;
+    payload.appendSlice(allocator, std.mem.sliceAsBytes(original_reference)) catch return error.Payload;
+    try appendInt(&payload, allocator, u64, fnv1a64(payload.items));
+    const temporary = std.fmt.allocPrint(allocator, "{s}.tmp", .{path}) catch return error.Payload;
+    defer allocator.free(temporary);
+    defer std.Io.Dir.cwd().deleteFile(io, temporary) catch {};
+    if (std.fs.path.dirname(path)) |parent| std.Io.Dir.cwd().createDirPath(io, parent) catch return error.Payload;
+    var output = std.Io.Dir.cwd().createFile(io, temporary, .{ .truncate = true }) catch return error.Payload;
+    defer output.close(io);
+    output.writePositionalAll(io, payload.items, 0) catch return error.Payload;
+    output.sync(io) catch return error.Payload;
+    std.Io.Dir.cwd().rename(temporary, std.Io.Dir.cwd(), path, io) catch return error.Payload;
+}
+
 fn run(init: std.process.Init) Failure!void {
     const args = init.minimal.args.toSlice(init.arena.allocator()) catch return error.Usage;
     const preparing = args.len == 4 and std.mem.eql(u8, args[1], "prepare");
     const preparing_full = args.len == 4 and std.mem.eql(u8, args[1], "prepare-full");
     const preparing_fidelity = args.len == 4 and std.mem.eql(u8, args[1], "prepare-fidelity");
     const preparing_channelwise = args.len == 4 and std.mem.eql(u8, args[1], "prepare-channelwise");
-    if ((!(preparing or preparing_full or preparing_fidelity or preparing_channelwise) and args.len != 5) or ((preparing or preparing_full or preparing_fidelity or preparing_channelwise) and args.len != 4)) return error.Usage;
+    const preparing_fp16 = args.len == 4 and std.mem.eql(u8, args[1], "prepare-fp16");
+    if ((!(preparing or preparing_full or preparing_fidelity or preparing_channelwise or preparing_fp16) and args.len != 5) or ((preparing or preparing_full or preparing_fidelity or preparing_channelwise or preparing_fp16) and args.len != 4)) return error.Usage;
     const allocator = init.gpa;
-    const model_path = if (preparing or preparing_full or preparing_fidelity or preparing_channelwise) args[2] else args[1];
+    const model_path = if (preparing or preparing_full or preparing_fidelity or preparing_channelwise or preparing_fp16) args[2] else args[1];
     var file = st.File.open(allocator, init.io, model_path) catch return error.Model;
     defer file.close(init.io);
     const model_sha = sha256Hex(file.map.memory);
@@ -565,6 +657,14 @@ fn run(init: std.process.Init) Failure!void {
     const words = trellis.dim(2);
     const tensor_identity = projectionTensorIdentity(trellis, suh, svh, mcg);
     if (!std.mem.eql(u8, &tensor_identity, full_tensor_identity)) return error.Model;
+    if (preparing_fp16) {
+        try writeFp16PreparedPayload(args[3], model_sha, trellis, suh, svh, words, allocator, init.io);
+        std.debug.print(
+            "{{\"tensorfold\":\"qualcomm-exl3-qnn-projection\",\"mode\":\"prepare-fp16\",\"recipe\":\"fp16-input-weight-output\",\"model_sha256\":\"{s}\",\"tensor\":\"{s}\",\"source_shape\":[2048,6144],\"payload\":\"{s}\",\"passed\":true}}\n",
+            .{ model_sha[0..], projection_name, args[3] },
+        );
+        return;
+    }
     if (preparing_channelwise) {
         try writeChannelwisePreparedPayload(args[3], model_sha, trellis, suh, svh, words, allocator, init.io);
         std.debug.print(
@@ -643,7 +743,7 @@ fn run(init: std.process.Init) Failure!void {
 pub fn main(init: std.process.Init) !u8 {
     run(init) catch |failure| switch (failure) {
         error.Usage => {
-            std.debug.print("usage: tensorfold-qualcomm-exl3-qnn-projection MODEL_SAFETENSORS NATIVE_DIR STUB_NAME QNN_BRIDGE_SO\n       tensorfold-qualcomm-exl3-qnn-projection prepare MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-full MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-fidelity MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-channelwise MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n", .{});
+            std.debug.print("usage: tensorfold-qualcomm-exl3-qnn-projection MODEL_SAFETENSORS NATIVE_DIR STUB_NAME QNN_BRIDGE_SO\n       tensorfold-qualcomm-exl3-qnn-projection prepare MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-full MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-fidelity MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-channelwise MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n       tensorfold-qualcomm-exl3-qnn-projection prepare-fp16 MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n", .{});
             return 64;
         },
         error.Model => return 4,
@@ -689,4 +789,10 @@ test "channelwise payload fixes output-axis scale schema" {
     try std.testing.expectEqual(@as(u32, 448), channelwise_payload_header_bytes);
     try std.testing.expectEqualStrings("TFQNNLC4", channelwise_payload_magic);
     try std.testing.expectEqual(@as(usize, 6144), source_m);
+}
+
+test "fp16 payload has a distinct schema" {
+    try std.testing.expectEqual(@as(u32, 5), fp16_payload_version);
+    try std.testing.expectEqual(@as(u32, 512), fp16_payload_header_bytes);
+    try std.testing.expectEqualStrings("TFQNNHF5", fp16_payload_magic);
 }

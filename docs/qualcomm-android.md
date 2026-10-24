@@ -268,6 +268,38 @@ The axis recipe is retained as the better weight-quantization candidate, but it
 is not a complete-layer or model admission. Exact retained-token parity remains
 mandatory before TensorFold can select QNN for serving.
 
+### FP16 v5 projection candidate
+
+`prepare-fp16` emits a separately versioned `TFQNNHF5` payload for the same
+exact pinned layer-0 `2048x6144` projection. QAIRT 2.50 headers declare
+`QNN_DATATYPE_FLOAT_16`, so the candidate uses FP16 input, weights, and output
+buffers rather than treating u8 bytes as a higher-precision format. The source
+EXL3 tensor is decoded once; the payload carries independently derived FP16
+reference outputs and FP64 original-reference outputs, exact element and byte
+counts, model/tensor/content identities, and an FNV trailer.
+
+```text
+tensorfold-qualcomm-exl3-qnn-projection prepare-fp16 MODEL_SAFETENSORS \
+  files/tensorfold/qnn/live-full-projection-v5.bin
+```
+
+The non-exported same-UID service prefers a present v5 payload. A present v5
+file that is malformed, stale, or rejected by QNN does not fall back to v4.
+On stock Phone B, QAIRT 2.50 and Hexagon v79 accepted the FP16 graph. Across
+five fresh `dev.tensorfold.mobile:qnn` service sessions of 100 executions each,
+the median first execution was `3.23 ms` and the median of each session's warm
+median was `2.21 ms`. Every session attested one resident graph and passed the
+payload's tightened `0.001` QNN-reference parity gate. Maximum
+QNN-vs-FP16-reference error was `0.0000`; maximum FP16-vs-original error and
+QNN-vs-original error were both `0.0007` over a `1.7046` original maximum
+magnitude (`0.04%` relative). Replacing v5 with a seven-byte corrupt file made
+the release UI report the selected FP16 payload's integrity failure; it did not
+run v4. Release APK SHA-256:
+`3af806d704de5970868493464feb6faac85c217f6f13f2cba4250dc457e33e9e`.
+This is the current layer-0 fidelity leader, but it is still projection evidence
+only. Complete layer coverage and retained-token parity remain mandatory; CPU
+remains the serving backend.
+
 ### Persistent live-full QNN gate
 
 The app also exposes `persistentFullProjection` as a separate measurement-only

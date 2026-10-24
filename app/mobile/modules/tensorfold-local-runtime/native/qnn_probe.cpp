@@ -77,6 +77,12 @@ constexpr uint32_t kLiveChannelwisePayloadVersion = 4;
 constexpr size_t kLiveChannelwisePayloadHeaderBytes = 448;
 constexpr size_t kLiveChannelwisePayloadBytes = kLiveChannelwisePayloadHeaderBytes + kLiveFullK +
     static_cast<size_t>(kLiveFullK) * kLiveFullM + 4 * kLiveFullM * sizeof(float) + sizeof(uint64_t);
+constexpr char kLiveFp16PayloadMagic[] = "TFQNNHF5";
+constexpr uint32_t kLiveFp16PayloadVersion = 5;
+constexpr size_t kLiveFp16PayloadHeaderBytes = 512;
+constexpr size_t kLiveFp16PayloadBytes = kLiveFp16PayloadHeaderBytes +
+    2 * kLiveFullK + 2 * static_cast<size_t>(kLiveFullK) * kLiveFullM +
+    kLiveFullM * sizeof(float) + kLiveFullM * sizeof(double) + sizeof(uint64_t);
 constexpr char kPinnedModelSha256[] = "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f";
 constexpr char kPinnedBlockSha256[] = "4ad47947dfa769a9d7eb2754732e855775bb3df70e66902bb2ee4429d27dc776";
 constexpr char kPinnedPayloadSha256[] = "556a06597ce4f7ddd01ed588305e92292cef5cf55cb00f71828a34e95b29795a";
@@ -124,10 +130,12 @@ bool isHexIdentity(const uint8_t* value) {
 struct LivePayload {
   std::vector<uint8_t> bytes;
   std::vector<float> reference;
-  std::vector<float> original_reference;
+  std::vector<double> original_reference;
   std::vector<float> weight_axis_scales;
   std::vector<int32_t> weight_axis_offsets;
   uint32_t weight_axis = 0;
+  uint32_t element_bytes = 1;
+  uint32_t data_type = 0;
   ProjectionSpec spec{};
 };
 
@@ -273,6 +281,59 @@ int32_t loadChannelwisePayload(const char* path, LivePayload* payload) {
   payload->spec = {input, weights, payload->reference.data(), kLiveFullK, kLiveFullM,
       readF32(header.data() + 24), -128, 1.0f, 0, readF32(header.data() + 32), -128,
       readF32(header.data() + 36)};
+  return 0;
+}
+
+int32_t loadFp16Payload(const char* path, LivePayload* payload) {
+  FILE* file = std::fopen(path, "rb");
+  if (file == nullptr) return errno == ENOENT ? -120 : -121;
+  std::array<uint8_t, kLiveFp16PayloadHeaderBytes> header{};
+  if (std::fread(header.data(), 1, header.size(), file) != header.size() ||
+      std::fseek(file, 0, SEEK_END) != 0) { std::fclose(file); return -121; }
+  const long file_size = std::ftell(file);
+  if (file_size < 0 || static_cast<uint64_t>(file_size) != kLiveFp16PayloadBytes ||
+      std::fseek(file, 0, SEEK_SET) != 0 ||
+      std::memcmp(header.data(), kLiveFp16PayloadMagic, 8) != 0 ||
+      readU32(header.data() + 8) != kLiveFp16PayloadVersion ||
+      readU32(header.data() + 12) != kLiveFp16PayloadHeaderBytes ||
+      readU32(header.data() + 16) != kLiveFullK || readU32(header.data() + 20) != kLiveFullM ||
+      !std::isfinite(readF32(header.data() + 24)) || readF32(header.data() + 24) <= 0 ||
+      readI32(header.data() + 28) != 0 ||
+      std::memcmp(header.data() + 32, kPinnedModelSha256, 64) != 0 ||
+      std::memcmp(header.data() + 96, kPinnedFullTensorIdentity, 64) != 0 ||
+      !isHexIdentity(header.data() + 160) || !isHexIdentity(header.data() + 224) ||
+      readU32(header.data() + 288) != kLiveFullK ||
+      readU32(header.data() + 292) != 2 * kLiveFullK ||
+      readU32(header.data() + 296) != static_cast<uint32_t>(kLiveFullK) * kLiveFullM ||
+      readU32(header.data() + 300) != 2 * static_cast<uint32_t>(kLiveFullK) * kLiveFullM ||
+      readU32(header.data() + 304) != kLiveFullM * sizeof(float) ||
+      readU32(header.data() + 308) != kLiveFullM * sizeof(double)) { std::fclose(file); return -121; }
+  try {
+    payload->bytes.resize(kLiveFp16PayloadBytes);
+    payload->reference.resize(kLiveFullM);
+    payload->original_reference.resize(kLiveFullM);
+  } catch (const std::bad_alloc&) { std::fclose(file); return -121; }
+  if (std::fread(payload->bytes.data(), 1, payload->bytes.size(), file) != payload->bytes.size() ||
+      std::fgetc(file) != EOF) { std::fclose(file); return -121; }
+  std::fclose(file);
+  const uint8_t* bytes = payload->bytes.data();
+  if (readU64(bytes + payload->bytes.size() - sizeof(uint64_t)) !=
+      fnv1a64(bytes, payload->bytes.size() - sizeof(uint64_t))) return -121;
+  const uint8_t* input = bytes + kLiveFp16PayloadHeaderBytes;
+  const uint8_t* weights = input + 2 * kLiveFullK;
+  const uint8_t* refs = weights + 2 * static_cast<size_t>(kLiveFullK) * kLiveFullM;
+  const uint8_t* originals = refs + kLiveFullM * sizeof(float);
+  for (size_t i = 0; i < kLiveFullM; ++i) {
+    payload->reference[i] = readF32(refs + i * sizeof(float));
+    double original;
+    std::memcpy(&original, originals + i * sizeof(double), sizeof(original));
+    payload->original_reference[i] = original;
+    if (!std::isfinite(payload->reference[i]) || !std::isfinite(original)) return -121;
+  }
+  payload->element_bytes = sizeof(uint16_t);
+  payload->data_type = QNN_DATATYPE_FLOAT_16;
+  payload->spec = {input, weights, payload->reference.data(), kLiveFullK, kLiveFullM,
+      1.0f, 0, 1.0f, 0, 1.0f, 0, readF32(header.data() + 24)};
   return 0;
 }
 
@@ -647,15 +708,22 @@ struct FidelityStats {
 FidelityStats fidelityStats(const ResidentGraph& graph, const std::vector<uint8_t>& output) {
   FidelityStats stats;
   if (graph.payload.original_reference.size() != graph.payload.spec.output_columns ||
-      output.size() != graph.payload.spec.output_columns) return stats;
+      output.size() != static_cast<size_t>(graph.payload.spec.output_columns) * graph.payload.element_bytes) return stats;
   stats.quantized_original = 0.0;
   stats.qnn_original = 0.0;
   stats.original_magnitude = 0.0;
-  for (size_t index = 0; index < output.size(); ++index) {
+  for (size_t index = 0; index < graph.payload.spec.output_columns; ++index) {
     const double original = graph.payload.original_reference[index];
     const double quantized = graph.payload.reference[index];
-    const double qnn = graph.payload.spec.output_scale *
-        (static_cast<int32_t>(output[index]) + graph.payload.spec.output_offset);
+    double qnn;
+    if (graph.payload.data_type == QNN_DATATYPE_FLOAT_16) {
+      _Float16 value;
+      std::memcpy(&value, output.data() + index * sizeof(value), sizeof(value));
+      qnn = static_cast<double>(value);
+    } else {
+      qnn = graph.payload.spec.output_scale *
+          (static_cast<int32_t>(output[index]) + graph.payload.spec.output_offset);
+    }
     stats.quantized_original = std::fmax(stats.quantized_original, std::fabs(quantized - original));
     stats.qnn_original = std::fmax(stats.qnn_original, std::fabs(qnn - original));
     stats.original_magnitude = std::fmax(stats.original_magnitude, std::fabs(original));
@@ -693,13 +761,20 @@ Java_expo_modules_tensorfoldlocalruntime_QnnNative_create(
   auto graph = std::make_unique<ResidentGraph>();
   std::array<char, 8> magic{};
   FILE* payload_file = std::fopen(path, "rb");
+  const bool expects_fp16 = std::strstr(path, "live-full-projection-v5.bin") != nullptr;
+  const bool is_fp16 = expects_fp16 || (payload_file != nullptr &&
+      std::fread(magic.data(), 1, magic.size(), payload_file) == magic.size() &&
+      std::memcmp(magic.data(), kLiveFp16PayloadMagic, magic.size()) == 0);
+  if (payload_file != nullptr) std::fclose(payload_file);
+  payload_file = is_fp16 ? nullptr : std::fopen(path, "rb");
   const bool is_channelwise = payload_file != nullptr &&
       std::fread(magic.data(), 1, magic.size(), payload_file) == magic.size() &&
       std::memcmp(magic.data(), kLiveChannelwisePayloadMagic, magic.size()) == 0;
   if (payload_file != nullptr) std::fclose(payload_file);
-  int32_t status = is_channelwise ? loadChannelwisePayload(path, &graph->payload) :
-      loadPayload(path, true, true, &graph->payload);
-  if (!is_channelwise && status == -121) status = loadPayload(path, true, false, &graph->payload);
+  int32_t status = is_fp16 ? loadFp16Payload(path, &graph->payload) :
+      (is_channelwise ? loadChannelwisePayload(path, &graph->payload) :
+       loadPayload(path, true, true, &graph->payload));
+  if (!is_fp16 && !is_channelwise && status == -121) status = loadPayload(path, true, false, &graph->payload);
   env->ReleaseStringUTFChars(payload_path, path);
   if (status != 0) return residentResult(env, {static_cast<jdouble>(status), 0.0, 0.0, 0.0, 0.0});
   const char* dir = env->GetStringUTFChars(native_dir, nullptr);
@@ -710,12 +785,14 @@ Java_expo_modules_tensorfoldlocalruntime_QnnNative_create(
       graph->payload.weight_axis_scales.empty() ? nullptr : graph->payload.weight_axis_scales.data(),
       graph->payload.weight_axis_offsets.empty() ? nullptr : graph->payload.weight_axis_offsets.data(),
       static_cast<uint32_t>(graph->payload.weight_axis_scales.size()), graph->payload.weight_axis,
-      graph->payload.spec.output_scale, graph->payload.spec.output_offset};
+      graph->payload.spec.output_scale, graph->payload.spec.output_offset, graph->payload.data_type,
+      graph->payload.element_bytes};
   TfQnnSessionTiming timing{};
   status = tf_qnn_session_create(&config, &graph->session, &timing);
   const double create_ms = timing.create_ms;
   if (status == 0) status = tf_qnn_session_set_weights(graph->session, graph->payload.spec.weights,
-      static_cast<uint64_t>(graph->payload.spec.input_columns) * graph->payload.spec.output_columns);
+      static_cast<uint64_t>(graph->payload.spec.input_columns) * graph->payload.spec.output_columns *
+          graph->payload.element_bytes);
   if (status == 0) status = tf_qnn_session_finalize(graph->session, &timing);
   const double finalize_ms = timing.finalize_ms;
   env->ReleaseStringUTFChars(native_dir, dir);
@@ -725,7 +802,8 @@ Java_expo_modules_tensorfoldlocalruntime_QnnNative_create(
   }
   try {
     graph->input.assign(
-        graph->payload.spec.input, graph->payload.spec.input + graph->payload.spec.input_columns);
+        graph->payload.spec.input, graph->payload.spec.input + static_cast<size_t>(graph->payload.spec.input_columns) *
+            graph->payload.element_bytes);
   } catch (const std::bad_alloc&) {
     return residentResult(env, {-108.0, 0.0, create_ms, finalize_ms, graph->payload.spec.tolerance});
   }
@@ -748,14 +826,16 @@ Java_expo_modules_tensorfoldlocalruntime_QnnNative_execute(JNIEnv* env, jclass, 
   const auto found = resident_graphs.find(handle);
   if (found == resident_graphs.end()) return residentResult(env, {-114.0, 0.0, 0.0, 0.0, kNaN, kNaN, kNaN, kNaN, kNaN, 0.0});
   ResidentGraph& graph = *found->second;
-  std::vector<uint8_t> output(graph.payload.spec.output_columns);
+  std::vector<uint8_t> output(static_cast<size_t>(graph.payload.spec.output_columns) *
+                              graph.payload.element_bytes);
   std::vector<double> warm;
   warm.reserve(repeats > 1 ? repeats - 1 : 0);
   TfQnnSessionTiming timing{};
   int32_t status = 0;
   double first = 0.0;
   for (int index = 0; index < repeats && status == 0; ++index) {
-    status = tf_qnn_session_execute(graph.session, graph.payload.spec.input, graph.payload.spec.input_columns,
+    status = tf_qnn_session_execute(graph.session, graph.payload.spec.input,
+                                    static_cast<uint64_t>(graph.payload.spec.input_columns) * graph.payload.element_bytes,
                                     output.data(), output.size(), &timing);
     if (index == 0) first = timing.execute_ms; else warm.push_back(timing.execute_ms);
   }

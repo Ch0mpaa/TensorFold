@@ -45,6 +45,21 @@ void setQuantizedU8(Qnn_Tensor_t* tensor, const char* name, Qnn_TensorType_t typ
   tensor->v1.clientBuf.dataSize = size;
 }
 
+void setFloat16(Qnn_Tensor_t* tensor, const char* name, Qnn_TensorType_t type,
+                uint32_t* dimensions, uint32_t rank, void* data, uint64_t size) {
+  *tensor = QNN_TENSOR_INIT;
+  tensor->v1.name = name;
+  tensor->v1.type = type;
+  tensor->v1.dataFormat = QNN_TENSOR_DATA_FORMAT_FLAT_BUFFER;
+  tensor->v1.dataType = QNN_DATATYPE_FLOAT_16;
+  tensor->v1.quantizeParams.encodingDefinition = QNN_DEFINITION_UNDEFINED;
+  tensor->v1.rank = rank;
+  tensor->v1.dimensions = dimensions;
+  tensor->v1.memType = QNN_TENSORMEMTYPE_RAW;
+  tensor->v1.clientBuf.data = data;
+  tensor->v1.clientBuf.dataSize = size;
+}
+
 void setAxisQuantizedU8(Qnn_Tensor_t* tensor, const char* name, Qnn_TensorType_t type,
                         uint32_t* dimensions, uint32_t rank, uint32_t axis,
                         Qnn_ScaleOffset_t* scale_offsets, uint32_t count,
@@ -111,15 +126,19 @@ extern "C" int32_t tf_qnn_session_create(const TfQnnSessionConfig* config,
                                           TfQnnSession** out, TfQnnSessionTiming* timing) {
   clearTiming(timing, TF_QNN_MATMUL_INVALID_ARGUMENT);
   const bool axis_quantized = config != nullptr && config->weight_axis_scales != nullptr;
+  const uint32_t element_bytes = config == nullptr || config->element_bytes == 0 ? 1 : config->element_bytes;
+  const bool fp16 = config != nullptr && config->data_type == QNN_DATATYPE_FLOAT_16;
   if (out == nullptr || config == nullptr || config->native_dir == nullptr || config->stub_name == nullptr ||
-      config->k == 0 || config->m == 0 || !std::isfinite(config->input_scale) ||
+      config->k == 0 || config->m == 0 || (config->data_type != 0 && !fp16) ||
+      (fp16 && (element_bytes != sizeof(uint16_t) || axis_quantized)) ||
+      (!fp16 && element_bytes != 1) || !std::isfinite(config->input_scale) ||
       !std::isfinite(config->weight_scale) || !std::isfinite(config->output_scale) ||
       config->input_scale <= 0 || config->weight_scale <= 0 || config->output_scale <= 0 ||
       (axis_quantized && (config->weight_axis_offsets == nullptr || config->weight_axis_count != config->m ||
                           config->weight_axis != 1)) ||
       (!axis_quantized && (config->weight_axis_offsets != nullptr || config->weight_axis_count != 0 ||
                            config->weight_axis != 0)) ||
-      static_cast<uint64_t>(config->k) * config->m > kMaximumWeightBytes) return TF_QNN_MATMUL_INVALID_ARGUMENT;
+      static_cast<uint64_t>(config->k) * config->m * element_bytes > kMaximumWeightBytes) return TF_QNN_MATMUL_INVALID_ARGUMENT;
   *out = nullptr;
   timespec start{}, end{}; clock_gettime(CLOCK_MONOTONIC, &start);
   TfQnnSession* session = new (std::nothrow) TfQnnSession();
@@ -175,7 +194,8 @@ extern "C" int32_t tf_qnn_session_set_weights(TfQnnSession* session, const uint8
   if (!lock.owns_lock()) return TF_QNN_SESSION_BUSY;
   if (session->state == TfQnnSession::State::kDestroyed) return TF_QNN_SESSION_STATE;
   if (session->state != TfQnnSession::State::kCreated) return TF_QNN_SESSION_STATE;
-  const uint64_t required = static_cast<uint64_t>(session->config.k) * session->config.m;
+  const uint64_t required = static_cast<uint64_t>(session->config.k) * session->config.m *
+      (session->config.element_bytes == 0 ? 1 : session->config.element_bytes);
   if (bytes != required || bytes > kMaximumWeightBytes) return TF_QNN_SESSION_SHAPE;
   try { session->weights.assign(weights, weights + bytes); }
   catch (const std::bad_alloc&) { return TF_QNN_MATMUL_TENSOR_FAILURE; }
@@ -193,16 +213,25 @@ extern "C" int32_t tf_qnn_session_finalize(TfQnnSession* session, TfQnnSessionTi
   session->input_dims[0] = 1; session->input_dims[1] = session->config.k;
   session->weight_dims[0] = session->config.k; session->weight_dims[1] = session->config.m;
   session->output_dims[0] = 1; session->output_dims[1] = session->config.m;
-  setQuantizedU8(&session->input, "persistent_projection_input", QNN_TENSOR_TYPE_APP_WRITE, session->input_dims, 2, session->config.input_scale, session->config.input_offset, nullptr, 0);
-  if (session->config.weight_axis_count == 0) {
-    setQuantizedU8(&session->weight, "persistent_projection_weights", QNN_TENSOR_TYPE_STATIC, session->weight_dims, 2, session->config.weight_scale, session->config.weight_offset, session->weights.data(), session->weights.size());
+  if (session->config.data_type == QNN_DATATYPE_FLOAT_16) {
+    setFloat16(&session->input, "persistent_projection_input", QNN_TENSOR_TYPE_APP_WRITE,
+               session->input_dims, 2, nullptr, 0);
+    setFloat16(&session->weight, "persistent_projection_weights", QNN_TENSOR_TYPE_STATIC,
+               session->weight_dims, 2, session->weights.data(), session->weights.size());
+    setFloat16(&session->output, "persistent_projection_output", QNN_TENSOR_TYPE_APP_READ,
+               session->output_dims, 2, nullptr, 0);
   } else {
-    setAxisQuantizedU8(&session->weight, "persistent_projection_weights", QNN_TENSOR_TYPE_STATIC,
-                       session->weight_dims, 2, session->config.weight_axis,
-                       session->weight_axis_scale_offsets.data(), session->config.weight_axis_count,
-                       session->weights.data(), session->weights.size());
+    setQuantizedU8(&session->input, "persistent_projection_input", QNN_TENSOR_TYPE_APP_WRITE, session->input_dims, 2, session->config.input_scale, session->config.input_offset, nullptr, 0);
+    if (session->config.weight_axis_count == 0) {
+      setQuantizedU8(&session->weight, "persistent_projection_weights", QNN_TENSOR_TYPE_STATIC, session->weight_dims, 2, session->config.weight_scale, session->config.weight_offset, session->weights.data(), session->weights.size());
+    } else {
+      setAxisQuantizedU8(&session->weight, "persistent_projection_weights", QNN_TENSOR_TYPE_STATIC,
+                         session->weight_dims, 2, session->config.weight_axis,
+                         session->weight_axis_scale_offsets.data(), session->config.weight_axis_count,
+                         session->weights.data(), session->weights.size());
+    }
+    setQuantizedU8(&session->output, "persistent_projection_output", QNN_TENSOR_TYPE_APP_READ, session->output_dims, 2, session->config.output_scale, session->config.output_offset, nullptr, 0);
   }
-  setQuantizedU8(&session->output, "persistent_projection_output", QNN_TENSOR_TYPE_APP_READ, session->output_dims, 2, session->config.output_scale, session->config.output_offset, nullptr, 0);
   const auto& qnn = session->provider->QNN_INTERFACE_VER_NAME;
   int32_t status = qnn.graphCreate(session->context, "tensorfold_persistent_projection", nullptr, &session->graph) == QNN_SUCCESS ? 0 : TF_QNN_MATMUL_GRAPH_FAILURE;
   if (status == 0 && (qnn.tensorCreateGraphTensor(session->graph, &session->input) != QNN_SUCCESS || qnn.tensorCreateGraphTensor(session->graph, &session->weight) != QNN_SUCCESS || qnn.tensorCreateGraphTensor(session->graph, &session->output) != QNN_SUCCESS)) status = TF_QNN_MATMUL_TENSOR_FAILURE;
@@ -224,7 +253,9 @@ extern "C" int32_t tf_qnn_session_execute(TfQnnSession* session, const uint8_t* 
   std::unique_lock<std::mutex> lock(session->mutex, std::try_to_lock);
   if (!lock.owns_lock()) { if (timing != nullptr) timing->status = TF_QNN_SESSION_BUSY; return TF_QNN_SESSION_BUSY; }
   if (session->state != TfQnnSession::State::kFinalized) return TF_QNN_SESSION_STATE;
-  if (input_bytes != session->config.k || output_bytes != session->config.m) return TF_QNN_SESSION_SHAPE;
+  const uint64_t element_bytes = session->config.element_bytes == 0 ? 1 : session->config.element_bytes;
+  if (input_bytes != static_cast<uint64_t>(session->config.k) * element_bytes ||
+      output_bytes != static_cast<uint64_t>(session->config.m) * element_bytes) return TF_QNN_SESSION_SHAPE;
   session->input.v1.clientBuf.data = const_cast<uint8_t*>(input); session->input.v1.clientBuf.dataSize = input_bytes;
   session->output.v1.clientBuf.data = output; session->output.v1.clientBuf.dataSize = output_bytes;
   timespec start{}, end{}; clock_gettime(CLOCK_MONOTONIC, &start);
@@ -240,10 +271,21 @@ extern "C" int32_t tf_qnn_session_parity(TfQnnSession* session, const uint8_t* o
   std::unique_lock<std::mutex> lock(session->mutex, std::try_to_lock);
   if (!lock.owns_lock()) { if (timing != nullptr) timing->status = TF_QNN_SESSION_BUSY; return TF_QNN_SESSION_BUSY; }
   if (session->state != TfQnnSession::State::kFinalized) return TF_QNN_SESSION_STATE;
-  if (output_bytes != session->config.m || reference_count != session->config.m) return TF_QNN_SESSION_SHAPE;
+  const uint64_t element_bytes = session->config.element_bytes == 0 ? 1 : session->config.element_bytes;
+  if (output_bytes != static_cast<uint64_t>(session->config.m) * element_bytes ||
+      reference_count != session->config.m) return TF_QNN_SESSION_SHAPE;
   double maximum = 0.0;
   for (uint32_t i = 0; i < session->config.m; ++i) {
-    const double actual = session->config.output_scale * (static_cast<int32_t>(output[i]) + session->config.output_offset);
+    double actual;
+    if (session->config.data_type == QNN_DATATYPE_FLOAT_16) {
+      uint16_t bits;
+      std::memcpy(&bits, output + i * sizeof(bits), sizeof(bits));
+      _Float16 value;
+      std::memcpy(&value, &bits, sizeof(value));
+      actual = static_cast<double>(value);
+    } else {
+      actual = session->config.output_scale * (static_cast<int32_t>(output[i]) + session->config.output_offset);
+    }
     maximum = std::fmax(maximum, std::fabs(actual - reference[i]));
   }
   const int32_t status = maximum <= tolerance ? 0 : TF_QNN_MATMUL_PARITY_FAILURE;
