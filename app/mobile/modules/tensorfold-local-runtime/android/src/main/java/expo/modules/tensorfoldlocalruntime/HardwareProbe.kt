@@ -57,6 +57,13 @@ internal object HardwareProbe {
           "tolerance" to QnnProjectionResult.checkpointTolerance,
           "reason" to "QNN applies only to Qualcomm devices.",
         ),
+        "liveCheckpointProjection" to linkedMapOf<String, Any?>(
+          "available" to false,
+          "elapsedMs" to 0.0,
+          "maxAbsoluteError" to Double.NaN,
+          "tolerance" to QnnProjectionResult.fullBlockTolerance,
+          "reason" to "QNN applies only to Qualcomm devices.",
+        ),
         "reason" to "QNN applies only to Qualcomm devices.",
       )
     val vulkan11 = vk >= ((1 shl 22) or (1 shl 12))
@@ -72,7 +79,7 @@ internal object HardwareProbe {
       else -> "compatible-unqualified"
     }
     val nativeDir = File(context.applicationInfo.nativeLibraryDir)
-    val requiredRuntime = listOf("libtensorfold_openai.so", "libtensorfold_engine_2b.so", "libtensorfold_engine_4b.so", "libtensorfold_engine_moe.so")
+    val requiredRuntime = listOf("libtensorfold_openai.so", "libtensorfold_engine_2b.so", "libtensorfold_engine_4b.so", "libtensorfold_engine_moe.so", "libtensorfold_qnn_live.so")
     val missingRuntime = requiredRuntime.filterNot { File(nativeDir, it).canExecute() }
     val storage = StatFs(context.filesDir.absolutePath)
     return linkedMapOf(

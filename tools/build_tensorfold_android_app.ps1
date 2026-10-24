@@ -83,6 +83,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "4B Android engine build failed." }
     & $Zig build qualcomm-exl3-forward-35b-a3b @ZigCommon
     if ($LASTEXITCODE -ne 0) { throw "35B-A3B Android engine build failed." }
+    & $Zig build qualcomm-exl3-qnn-projection @ZigCommon
+    if ($LASTEXITCODE -ne 0) { throw "Live-checkpoint QNN projection probe build failed." }
     & $Zig build qualcomm-openai -Dtarget=aarch64-linux-android -Doptimize=fast "-Dandroid-libc=$AndroidLibc" --prefix $Prefix
     if ($LASTEXITCODE -ne 0) { throw "Android control-plane build failed." }
 } finally { Pop-Location }
@@ -94,6 +96,7 @@ $Files = @{
     "$Prefix/bin/tensorfold-qualcomm-exl3-forward" = "libtensorfold_engine_2b.so"
     "$Prefix/bin/tensorfold-qualcomm-exl3-forward-4b" = "libtensorfold_engine_4b.so"
     "$Prefix/bin/tensorfold-qualcomm-exl3-forward-35b-a3b" = "libtensorfold_engine_moe.so"
+    "$Prefix/bin/tensorfold-qualcomm-exl3-qnn-projection" = "libtensorfold_qnn_live.so"
     "$VulkanBuild/bin/libggml-base.so" = "libggml-base.so"
     "$VulkanBuild/bin/libggml-cpu.so" = "libggml-cpu.so"
     "$VulkanBuild/bin/libggml-vulkan.so" = "libggml-vulkan.so"

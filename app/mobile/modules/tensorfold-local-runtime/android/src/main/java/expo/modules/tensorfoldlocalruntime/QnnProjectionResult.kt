@@ -23,6 +23,9 @@ internal data class QnnProjectionResult(
     status == -110 -> "QNN HTP graph finalization failed."
     status == -111 -> "QNN HTP graph execution failed."
     status == -112 -> "QNN HTP output exceeded the projection tolerance."
+    status == -120 -> "Live checkpoint payload is not prepared in this app's private storage."
+    status == -121 -> "Live checkpoint payload is malformed or failed its integrity check."
+    status == -122 -> "Live checkpoint payload is stale for the pinned model identity."
     else -> "QNN HTP projection failed with status $status."
   }
 

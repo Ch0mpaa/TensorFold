@@ -34,11 +34,18 @@ const BridgeResult = extern struct {
 
 const Execute = *const fn (*const BridgeRequest, *BridgeResult) callconv(.c) i32;
 
+const payload_magic = "TFQNNLP1";
+const payload_version: u32 = 1;
+const payload_header_bytes: u32 = 256;
+const payload_identity_offset = 180;
+const payload_integrity_bytes = 8;
+
 const Failure = error{
     Usage,
     Model,
     Bridge,
     Parity,
+    Payload,
 };
 
 fn require(file: *const st.File, suffix: []const u8, dtype: st.DType) Failure!st.Tensor {
@@ -61,6 +68,25 @@ fn sha256Hex(bytes: []const u8) [64]u8 {
     var digest: [32]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
     return std.fmt.bytesToHex(digest, .lower);
+}
+
+fn appendInt(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, comptime T: type, value: T) Failure!void {
+    var encoded: [@sizeOf(T)]u8 = undefined;
+    std.mem.writeInt(T, encoded[0..], value, .little);
+    bytes.appendSlice(allocator, &encoded) catch return error.Payload;
+}
+
+fn appendFloat(bytes: *std.ArrayList(u8), allocator: std.mem.Allocator, value: f32) Failure!void {
+    try appendInt(bytes, allocator, u32, @bitCast(value));
+}
+
+fn fnv1a64(bytes: []const u8) u64 {
+    var hash: u64 = 0xcbf29ce484222325;
+    for (bytes) |byte| {
+        hash ^= byte;
+        hash *%= 0x100000001b3;
+    }
+    return hash;
 }
 
 fn quantizeProjection(decoded: []const f64, allocator: std.mem.Allocator) Failure!struct {
@@ -129,11 +155,52 @@ fn quantizeProjection(decoded: []const f64, allocator: std.mem.Allocator) Failur
     return .{ .input = input, .weights = weights, .reference = reference, .input_scale = @floatCast(input_scale), .weight_scale = @floatCast(weight_scale), .output_scale = @floatCast(output_scale), .block_sha256 = sha256Hex(std.mem.sliceAsBytes(decoded)), .payload_sha256 = sha256Hex(payload.items) };
 }
 
+fn writePreparedPayload(path: []const u8, model_sha: [64]u8, quantized: anytype, allocator: std.mem.Allocator, io: std.Io) Failure!void {
+    var payload: std.ArrayList(u8) = .empty;
+    defer payload.deinit(allocator);
+    payload.ensureTotalCapacity(allocator, payload_header_bytes + block + block * block + block * @sizeOf(f32) + payload_integrity_bytes) catch return error.Payload;
+    payload.appendSlice(allocator, payload_magic) catch return error.Payload;
+    try appendInt(&payload, allocator, u32, payload_version);
+    try appendInt(&payload, allocator, u32, payload_header_bytes);
+    try appendInt(&payload, allocator, u32, block);
+    try appendInt(&payload, allocator, u32, block);
+    try appendFloat(&payload, allocator, quantized.input_scale);
+    try appendFloat(&payload, allocator, quantized.weight_scale);
+    try appendFloat(&payload, allocator, quantized.output_scale);
+    try appendFloat(&payload, allocator, quantized.output_scale * 1.5);
+    try appendInt(&payload, allocator, i32, -128);
+    try appendInt(&payload, allocator, i32, -128);
+    try appendInt(&payload, allocator, i32, -128);
+    payload.appendSlice(allocator, &model_sha) catch return error.Payload;
+    payload.appendSlice(allocator, &quantized.block_sha256) catch return error.Payload;
+    payload.appendSlice(allocator, &quantized.payload_sha256) catch return error.Payload;
+    try appendInt(&payload, allocator, u32, block);
+    try appendInt(&payload, allocator, u32, block * block);
+    try appendInt(&payload, allocator, u32, block * @sizeOf(f32));
+    std.debug.assert(payload.items.len == payload_header_bytes);
+    payload.appendSlice(allocator, quantized.input) catch return error.Payload;
+    payload.appendSlice(allocator, quantized.weights) catch return error.Payload;
+    for (quantized.reference) |value| try appendFloat(&payload, allocator, value);
+    try appendInt(&payload, allocator, u64, fnv1a64(payload.items));
+
+    if (std.fs.path.dirname(path)) |parent| std.Io.Dir.cwd().createDirPath(io, parent) catch return error.Payload;
+    const temporary = std.fmt.allocPrint(allocator, "{s}.tmp", .{path}) catch return error.Payload;
+    defer allocator.free(temporary);
+    defer std.Io.Dir.cwd().deleteFile(io, temporary) catch {};
+    var output = std.Io.Dir.cwd().createFile(io, temporary, .{ .truncate = true }) catch return error.Payload;
+    defer output.close(io);
+    output.writePositionalAll(io, payload.items, 0) catch return error.Payload;
+    output.sync(io) catch return error.Payload;
+    std.Io.Dir.cwd().rename(temporary, std.Io.Dir.cwd(), path, io) catch return error.Payload;
+}
+
 fn run(init: std.process.Init) Failure!void {
     const args = init.minimal.args.toSlice(init.arena.allocator()) catch return error.Usage;
-    if (args.len != 5) return error.Usage;
+    const preparing = args.len == 4 and std.mem.eql(u8, args[1], "prepare");
+    if ((!preparing and args.len != 5) or (preparing and args.len != 4)) return error.Usage;
     const allocator = init.gpa;
-    var file = st.File.open(allocator, init.io, args[1]) catch return error.Model;
+    const model_path = if (preparing) args[2] else args[1];
+    var file = st.File.open(allocator, init.io, model_path) catch return error.Model;
     defer file.close(init.io);
     const model_sha = sha256Hex(file.map.memory);
     if (!std.mem.eql(u8, &model_sha, model_sha256_hex)) return error.Model;
@@ -172,6 +239,14 @@ fn run(init: std.process.Init) Failure!void {
     defer allocator.free(quantized.input);
     defer allocator.free(quantized.weights);
     defer allocator.free(quantized.reference);
+    if (preparing) {
+        try writePreparedPayload(args[3], model_sha, quantized, allocator, init.io);
+        std.debug.print(
+            "{{\"tensorfold\":\"qualcomm-exl3-qnn-projection\",\"mode\":\"prepare\",\"model_sha256\":\"{s}\",\"tensor\":\"{s}\",\"block_sha256\":\"{s}\",\"payload_sha256\":\"{s}\",\"payload\":\"{s}\",\"passed\":true}}\n",
+            .{ model_sha[0..], projection_name, quantized.block_sha256[0..], quantized.payload_sha256[0..], args[3] },
+        );
+        return;
+    }
 
     var bridge = std.DynLib.open(args[4]) catch return error.Bridge;
     defer bridge.close();
@@ -195,12 +270,13 @@ fn run(init: std.process.Init) Failure!void {
 pub fn main(init: std.process.Init) !u8 {
     run(init) catch |failure| switch (failure) {
         error.Usage => {
-            std.debug.print("usage: tensorfold-qualcomm-exl3-qnn-projection MODEL_SAFETENSORS NATIVE_DIR STUB_NAME QNN_BRIDGE_SO\n", .{});
+            std.debug.print("usage: tensorfold-qualcomm-exl3-qnn-projection MODEL_SAFETENSORS NATIVE_DIR STUB_NAME QNN_BRIDGE_SO\n       tensorfold-qualcomm-exl3-qnn-projection prepare MODEL_SAFETENSORS APP_PRIVATE_PAYLOAD\n", .{});
             return 64;
         },
         error.Model => return 4,
         error.Bridge => return 5,
         error.Parity => return 6,
+        error.Payload => return 7,
     };
     return 0;
 }
@@ -213,4 +289,10 @@ test "generator-contract activation is stable" {
     try std.testing.expectEqualSlices(u8, &.{ 20, 93, 166, 239, 57 }, q.input[0..5]);
     try std.testing.expectEqual(@as(u8, 255), q.weights[0]);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0 / 127.0), q.input_scale, 1e-7);
+}
+
+test "prepared payload format is fixed and integrity is deterministic" {
+    try std.testing.expectEqual(@as(u32, 256), payload_header_bytes);
+    try std.testing.expectEqual(@as(usize, 180), payload_identity_offset);
+    try std.testing.expectEqual(@as(u64, 0xced1370968eccfa1), fnv1a64(payload_magic));
 }

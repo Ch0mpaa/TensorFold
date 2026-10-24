@@ -23,4 +23,15 @@ class QnnProjectionResultTest {
   @Test fun reportsTheFailingQnnStage() {
     assertEquals("QNN HTP graph execution failed.", QnnProjectionResult(-111, 0.0, Double.NaN).reason())
   }
+
+  @Test fun reportsLivePayloadFailuresWithoutTreatingThemAsQnnPasses() {
+    val missing = QnnProjectionResult(-120, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance)
+    val malformed = QnnProjectionResult(-121, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance)
+    val stale = QnnProjectionResult(-122, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance)
+
+    assertFalse(missing.passed)
+    assertEquals("Live checkpoint payload is not prepared in this app's private storage.", missing.reason())
+    assertEquals("Live checkpoint payload is malformed or failed its integrity check.", malformed.reason())
+    assertEquals("Live checkpoint payload is stale for the pinned model identity.", stale.reason())
+  }
 }

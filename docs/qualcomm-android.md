@@ -176,9 +176,27 @@ the runtime-decoded block hash was
 the quantized payload hash was
 `556a06597ce4f7ddd01ed588305e92292cef5cf55cb00f71828a34e95b29795a`,
 QNN executed in `1.933906 ms`, and maximum error was `0.001135342` against
-the declared `0.003202019` tolerance. This is live-checkpoint engineering
-evidence; the app-UID fixed projection gates above remain the distribution
-proof until the live bridge is invoked by the app-owned worker.
+the declared `0.003202019` tolerance.
+
+The first attempt to execute the same packaged probe as an app-UID child failed
+closed with bridge status `-100`: an `exec` child does not inherit Android's
+manifest-granted linker namespace for OEM `libcdsprpc.so`. TensorFold does not
+copy a device-specific OEM RPC library into the APK. Instead, the packaged
+probe's `prepare` mode validates and decodes the checkpoint without loading QNN,
+then atomically writes a bounded versioned payload under
+`files/tensorfold/qnn/live-checkpoint-v1.bin`. The payload carries the pinned
+model, block and quantization identities, dimensions, scales, offsets, all
+16,384 weights, input, independent reference and an FNV-1a integrity field.
+The ordinary app process validates the exact schema and pinned identities, then
+passes those buffers to the supported QNN bridge in its own linker namespace.
+On the stock Phone B release APK, the UI reported:
+
+```text
+Live app-owned checkpoint projection passed in process (1.85 ms, max error 0.0011).
+```
+
+The release APK SHA-256 was
+`f45d59a7f20bdc6709e5c3f9cd2529daf1a93285db9ded17db43aa947c54d4dd`.
 
 The first retained failure was graph creation because
 `libQnnHtpPrepare.so` was absent. Packaging that required graph-compiler

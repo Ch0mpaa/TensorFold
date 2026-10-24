@@ -8,6 +8,11 @@ internal object QnnProbe {
   @JvmStatic private external fun nativeProjection(nativeDir: String, stubName: String): DoubleArray
   @JvmStatic private external fun nativeCheckpointProjection(nativeDir: String, stubName: String): DoubleArray
   @JvmStatic private external fun nativeFullProjection(nativeDir: String, stubName: String): DoubleArray
+  @JvmStatic private external fun nativeLiveCheckpointProjection(
+    nativeDir: String,
+    stubName: String,
+    payloadPath: String,
+  ): DoubleArray
 
   @Synchronized
   fun inspect(context: Context, socModel: String): Map<String, Any?> {
@@ -20,9 +25,11 @@ internal object QnnProbe {
         unavailable("No packaged QNN projection matches this SoC.", QnnProjectionResult.syntheticTolerance),
         unavailable("No packaged checkpoint projection matches this SoC.", QnnProjectionResult.checkpointTolerance),
         unavailable("No packaged full-block projection matches this SoC.", QnnProjectionResult.fullBlockTolerance),
+        unavailable("No packaged live checkpoint projection matches this SoC.", QnnProjectionResult.fullBlockTolerance),
       ).also { cached = it }
     }
     val nativeDir = context.applicationInfo.nativeLibraryDir
+    val payloadPath = context.filesDir.resolve("tensorfold/qnn/live-checkpoint-v1.bin").absolutePath
     val probes = try {
       System.loadLibrary("tensorfold_qnn_probe")
       listOf(
@@ -35,15 +42,20 @@ internal object QnnProbe {
           nativeFullProjection(nativeDir, "libQnnHtpV79Stub.so"),
           QnnProjectionResult.fullBlockTolerance,
         ),
+        QnnProjectionResult.fromNative(
+          nativeLiveCheckpointProjection(nativeDir, "libQnnHtpV79Stub.so", payloadPath),
+          QnnProjectionResult.fullBlockTolerance,
+        ),
       )
     } catch (failure: Throwable) {
       listOf(
         QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.syntheticTolerance),
         QnnProjectionResult(-100, 0.0, Double.NaN),
         QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance),
+        QnnProjectionResult(-100, 0.0, Double.NaN, QnnProjectionResult.fullBlockTolerance),
       )
     }
-    return result(probes[0].passed, architecture, probes[0], probes[1], probes[2])
+    return result(probes[0].passed, architecture, probes[0], probes[1], probes[2], probes[3])
       .also { cached = it }
   }
 
@@ -69,6 +81,7 @@ internal object QnnProbe {
     projection: QnnProjectionResult,
     checkpoint: QnnProjectionResult,
     full: QnnProjectionResult,
+    live: QnnProjectionResult,
   ) = linkedMapOf<String, Any?>(
     "available" to available,
     "architecture" to architecture,
@@ -79,6 +92,7 @@ internal object QnnProbe {
     "reason" to projection.reason(),
     "checkpointProjection" to detail(checkpoint),
     "fullBlockProjection" to detail(full),
+    "liveCheckpointProjection" to detail(live),
   )
 
   private fun result(
@@ -87,6 +101,7 @@ internal object QnnProbe {
     projection: Map<String, Any?>,
     checkpoint: Map<String, Any?>,
     full: Map<String, Any?>,
+    live: Map<String, Any?>,
   ) = linkedMapOf<String, Any?>(
     "available" to available,
     "architecture" to architecture,
@@ -97,5 +112,6 @@ internal object QnnProbe {
     "reason" to projection["reason"],
     "checkpointProjection" to checkpoint,
     "fullBlockProjection" to full,
+    "liveCheckpointProjection" to live,
   )
 }
