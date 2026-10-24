@@ -4,6 +4,7 @@ internal data class QnnProjectionResult(
   val status: Int,
   val elapsedMs: Double,
   val maxAbsoluteError: Double,
+  val tolerance: Double = checkpointTolerance,
 ) {
   val passed: Boolean get() = status == 0 && maxAbsoluteError.isFinite() && maxAbsoluteError <= tolerance
 
@@ -26,10 +27,11 @@ internal data class QnnProjectionResult(
   }
 
   companion object {
-    const val tolerance = 0.5
+    const val syntheticTolerance = 0.5
+    const val checkpointTolerance = 0.0005
 
-    fun fromNative(values: DoubleArray): QnnProjectionResult =
-      if (values.size == 3) QnnProjectionResult(values[0].toInt(), values[1], values[2])
-      else QnnProjectionResult(-102, 0.0, Double.NaN)
+    fun fromNative(values: DoubleArray, tolerance: Double = checkpointTolerance): QnnProjectionResult =
+      if (values.size == 3) QnnProjectionResult(values[0].toInt(), values[1], values[2], tolerance)
+      else QnnProjectionResult(-102, 0.0, Double.NaN, tolerance)
   }
 }

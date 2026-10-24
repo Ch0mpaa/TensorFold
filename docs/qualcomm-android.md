@@ -122,16 +122,23 @@ headers/runtime, and declares the OEM-public `libcdsprpc.so` and
 `libadsprpc.so` in the manifest. The app-UID calculator completed the transport
 gate.
 
-The next gate now passes on the same stock Phone B app UID. It constructs a
+The next gates now pass on the same stock Phone B app UID. Each constructs a
 real QNN HTP v79 context and graph containing a quantized `MatMul`, executes
 fixed matrix/vector inputs, copies its output to the app, and compares every
-element with its embedded CPU oracle. The first retained failure was graph
-creation because `libQnnHtpPrepare.so` was absent. Packaging that required
-graph-compiler component produced an exact result (maximum absolute error
-`0.000`) in `2.19 ms`. This projection gate remains separate from model-backend
-selection: TensorFold model inference is still CPU-only until retained-token
-parity passes; neither library presence, calculator success, nor this small
-projection selects HTP.
+element with an independent CPU oracle. The synthetic
+transport-independent projection reports its own timing/error. A second
+projection derives its 4x3 quantized weight slice from the checked-in public
+EXL3 oracle fixture, carries the fixture and full model hashes, and dequantizes
+the QNN output before applying its `0.0005` tolerance. On the retained release
+run, the synthetic graph passed in `1.90 ms` with `0.000` maximum error and the
+checkpoint-derived graph passed in `1.79 ms` with `0.0001` maximum error.
+
+The first retained failure was graph creation because
+`libQnnHtpPrepare.so` was absent. Packaging that required graph-compiler
+component fixed it. These gates remain separate from model-backend selection:
+TensorFold model inference is still CPU-only until full checkpoint-derived
+projections and the autoregressive path pass retained-token parity. Neither
+library presence, calculator success, nor these small projections select HTP.
 
 
 The `qualcomm-probe` target implements the non-invasive portion of gate 1. It

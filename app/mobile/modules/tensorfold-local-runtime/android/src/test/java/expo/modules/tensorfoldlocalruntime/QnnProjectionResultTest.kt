@@ -17,7 +17,7 @@ class QnnProjectionResultTest {
   @Test fun failsClosedForMalformedOrOutOfToleranceResults() {
     assertFalse(QnnProjectionResult.fromNative(doubleArrayOf(0.0, 1.0)).passed)
     assertFalse(QnnProjectionResult(0, 1.0, Double.NaN).passed)
-    assertFalse(QnnProjectionResult(0, 1.0, QnnProjectionResult.tolerance + 0.01).passed)
+    assertFalse(QnnProjectionResult(0, 1.0, QnnProjectionResult.checkpointTolerance + 0.01).passed)
   }
 
   @Test fun reportsTheFailingQnnStage() {

@@ -7,15 +7,36 @@
 
 #include <QNN/QnnInterface.h>
 #include <QNN/QnnOpDef.h>
+#include "qnn_checkpoint_projection.h"
+
 
 namespace {
-constexpr uint8_t kInput[] = {1, 2, 3, 4};
-constexpr uint8_t kWeights[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 0, 2};
-constexpr uint8_t kExpected[] = {34, 36, 50};
-constexpr float kTolerance = 0.5f;
-static_assert(kExpected[0] == kInput[0] * kWeights[0] + kInput[1] * kWeights[3] + kInput[2] * kWeights[6] + kInput[3] * kWeights[9]);
-static_assert(kExpected[1] == kInput[0] * kWeights[1] + kInput[1] * kWeights[4] + kInput[2] * kWeights[7] + kInput[3] * kWeights[10]);
-static_assert(kExpected[2] == kInput[0] * kWeights[2] + kInput[1] * kWeights[5] + kInput[2] * kWeights[8] + kInput[3] * kWeights[11]);
+namespace checkpoint = tensorfold::qnn_checkpoint_projection;
+constexpr uint8_t kSyntheticInput[] = {1, 2, 3, 4};
+constexpr uint8_t kSyntheticWeights[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 0, 2};
+constexpr float kSyntheticReference[] = {34.0f, 36.0f, 50.0f};
+struct ProjectionSpec {
+  const uint8_t* input;
+  const uint8_t* weights;
+  const float* reference;
+  uint32_t input_columns;
+  uint32_t output_columns;
+  float input_scale;
+  int32_t input_offset;
+  float weight_scale;
+  int32_t weight_offset;
+  float output_scale;
+  int32_t output_offset;
+  float tolerance;
+};
+constexpr ProjectionSpec kSynthetic = {kSyntheticInput, kSyntheticWeights, kSyntheticReference, 4, 3, 1.0f, 0, 1.0f, 0, 1.0f, 0, 0.5f};
+constexpr ProjectionSpec kCheckpoint = {checkpoint::kInput, checkpoint::kWeights, checkpoint::kQuantizedReference, checkpoint::kInputColumns, checkpoint::kOutputColumns, checkpoint::kInputScale, checkpoint::kInputOffset, checkpoint::kWeightScale, checkpoint::kWeightOffset, checkpoint::kOutputScale, checkpoint::kOutputOffset, checkpoint::kParityTolerance};
+static_assert(-2900 == (78 - 128) * (133 - 128) + (103 - 128) * (119 - 128) +
+                          (153 - 128) * (133 - 128) + (178 - 128) * (68 - 128));
+static_assert(-3325 == (78 - 128) * (166 - 128) + (103 - 128) * (109 - 128) +
+                          (153 - 128) * (122 - 128) + (178 - 128) * (93 - 128));
+static_assert(-1775 == (78 - 128) * (157 - 128) + (103 - 128) * (113 - 128) +
+                          (153 - 128) * (128 - 128) + (178 - 128) * (114 - 128));
 
 constexpr jint kLoadFailure = -100;
 constexpr jint kProviderFailure = -101;
@@ -32,7 +53,8 @@ constexpr jint kExecuteFailure = -111;
 constexpr jint kParityFailure = -112;
 
 void setQuantizedU8(Qnn_Tensor_t* tensor, const char* name, Qnn_TensorType_t type,
-                    uint32_t* dimensions, uint32_t rank, void* data, uint64_t size) {
+                    uint32_t* dimensions, uint32_t rank, float scale, int32_t offset,
+                    void* data, uint64_t size) {
   *tensor = QNN_TENSOR_INIT;
   tensor->v1.name = name;
   tensor->v1.type = type;
@@ -40,8 +62,8 @@ void setQuantizedU8(Qnn_Tensor_t* tensor, const char* name, Qnn_TensorType_t typ
   tensor->v1.dataType = QNN_DATATYPE_UFIXED_POINT_8;
   tensor->v1.quantizeParams.encodingDefinition = QNN_DEFINITION_DEFINED;
   tensor->v1.quantizeParams.quantizationEncoding = QNN_QUANTIZATION_ENCODING_SCALE_OFFSET;
-  tensor->v1.quantizeParams.scaleOffsetEncoding.scale = 1.0f;
-  tensor->v1.quantizeParams.scaleOffsetEncoding.offset = 0;
+  tensor->v1.quantizeParams.scaleOffsetEncoding.scale = scale;
+  tensor->v1.quantizeParams.scaleOffsetEncoding.offset = offset;
   tensor->v1.rank = rank;
   tensor->v1.dimensions = dimensions;
   tensor->v1.memType = QNN_TENSORMEMTYPE_RAW;
@@ -61,9 +83,8 @@ jdoubleArray result(JNIEnv* env, jint status, double elapsed_ms, double max_abs_
 }
 }  // namespace
 
-extern "C" JNIEXPORT jdoubleArray JNICALL
-Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeProjection(
-    JNIEnv* env, jclass, jstring native_dir, jstring stub_name) {
+static jdoubleArray runProjection(
+    JNIEnv* env, jstring native_dir, jstring stub_name, const ProjectionSpec& spec) {
   if (native_dir == nullptr || stub_name == nullptr) return result(env, kLoadFailure, 0.0, NAN);
   const char* dir = env->GetStringUTFChars(native_dir, nullptr);
   const char* stub = env->GetStringUTFChars(stub_name, nullptr);
@@ -119,17 +140,20 @@ Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeProjection(
   if (outcome == 0 && qnn.contextCreate(backend, device, nullptr, &context) != QNN_SUCCESS) outcome = kContextFailure;
   if (outcome == 0 && qnn.profileCreate(backend, QNN_PROFILE_LEVEL_BASIC, &profile) != QNN_SUCCESS) outcome = kProfileFailure;
 
-  uint32_t input_dims[] = {1, 4};
-  uint32_t weight_dims[] = {4, 3};
-  uint32_t output_dims[] = {1, 3};
-  uint8_t output_data[sizeof(kExpected)] = {};
+  uint32_t input_dims[] = {1, spec.input_columns};
+  uint32_t weight_dims[] = {spec.input_columns, spec.output_columns};
+  uint32_t output_dims[] = {1, spec.output_columns};
+  uint8_t output_data[3] = {};
   Qnn_Tensor_t input;
   Qnn_Tensor_t weights;
   Qnn_Tensor_t output;
-  setQuantizedU8(&input, "projection_input", QNN_TENSOR_TYPE_APP_WRITE, input_dims, 2, nullptr, 0);
+  setQuantizedU8(&input, "projection_input", QNN_TENSOR_TYPE_APP_WRITE, input_dims, 2,
+                 spec.input_scale, spec.input_offset, nullptr, 0);
   setQuantizedU8(&weights, "projection_weights", QNN_TENSOR_TYPE_STATIC, weight_dims, 2,
-                 const_cast<uint8_t*>(kWeights), sizeof(kWeights));
-  setQuantizedU8(&output, "projection_output", QNN_TENSOR_TYPE_APP_READ, output_dims, 2, nullptr, 0);
+                 spec.weight_scale, spec.weight_offset,
+                 const_cast<uint8_t*>(spec.weights), spec.input_columns * spec.output_columns);
+  setQuantizedU8(&output, "projection_output", QNN_TENSOR_TYPE_APP_READ, output_dims, 2,
+                 spec.output_scale, spec.output_offset, nullptr, 0);
 
   if (outcome == 0 && qnn.graphCreate(context, "tensorfold_projection_probe", nullptr, &graph) != QNN_SUCCESS) outcome = kGraphFailure;
   if (outcome == 0 && (qnn.tensorCreateGraphTensor(graph, &input) != QNN_SUCCESS ||
@@ -148,8 +172,8 @@ Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeProjection(
   if (outcome == 0 && qnn.graphAddNode(graph, matmul) != QNN_SUCCESS) outcome = kNodeFailure;
   if (outcome == 0 && qnn.graphFinalize(graph, profile, nullptr) != QNN_SUCCESS) outcome = kFinalizeFailure;
 
-  input.v1.clientBuf.data = const_cast<uint8_t*>(kInput);
-  input.v1.clientBuf.dataSize = sizeof(kInput);
+  input.v1.clientBuf.data = const_cast<uint8_t*>(spec.input);
+  input.v1.clientBuf.dataSize = spec.input_columns;
   output.v1.clientBuf.data = output_data;
   output.v1.clientBuf.dataSize = sizeof(output_data);
   if (outcome == 0) {
@@ -161,11 +185,13 @@ Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeProjection(
   }
   if (outcome == 0) {
     max_error = 0.0;
-    for (size_t i = 0; i < sizeof(kExpected); ++i) {
-      const double error = std::fabs(static_cast<double>(output_data[i]) - kExpected[i]);
+    for (size_t i = 0; i < spec.output_columns; ++i) {
+      const double actual = spec.output_scale *
+          (static_cast<int32_t>(output_data[i]) + spec.output_offset);
+      const double error = std::fabs(actual - spec.reference[i]);
       if (error > max_error) max_error = error;
     }
-    if (max_error > kTolerance) outcome = kParityFailure;
+    if (max_error > spec.tolerance) outcome = kParityFailure;
   }
 
   if (profile != nullptr) qnn.profileFree(profile);
@@ -177,4 +203,16 @@ Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeProjection(
   env->ReleaseStringUTFChars(native_dir, dir);
   env->ReleaseStringUTFChars(stub_name, stub);
   return result(env, outcome, execution_ms, max_error);
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeProjection(
+    JNIEnv* env, jclass, jstring native_dir, jstring stub_name) {
+  return runProjection(env, native_dir, stub_name, kSynthetic);
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeCheckpointProjection(
+    JNIEnv* env, jclass, jstring native_dir, jstring stub_name) {
+  return runProjection(env, native_dir, stub_name, kCheckpoint);
 }
