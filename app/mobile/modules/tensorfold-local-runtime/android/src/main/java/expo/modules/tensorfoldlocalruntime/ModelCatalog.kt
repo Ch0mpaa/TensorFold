@@ -68,7 +68,7 @@ internal object ModelCatalog {
       profile = "qwen3.5-35b-a3b",
       engineLibrary = "libtensorfold_engine_moe.so",
       minimumRamBytes = 14L shl 30,
-      identitySha256 = "b3b6fe8c3f2e4ba7e078b6a297e680d5208c1c5e3c2cf613ed8bb5c1ccd6bfb0",
+      identitySha256 = "1539df4e836d11bceba0e54a57696eedc30f1b5df040b20fc3241a0fed1c7199",
       sharded = true,
       qualcommOnly = true,
       artifacts = listOf(
@@ -90,7 +90,7 @@ internal object ModelCatalog {
       profile = "qwen3.5-35b-a3b",
       engineLibrary = "libtensorfold_engine_moe.so",
       minimumRamBytes = 14L shl 30,
-      identitySha256 = "705887dfad81a2939e981d3c94415609869d590be346b15bb3de67101316301d",
+      identitySha256 = "af55d67bc3ccd363896a4b132d2c7c4335cc1e91e54cdc55e32796109fbeba5d",
       sharded = true,
       qualcommOnly = true,
       artifacts = listOf(
