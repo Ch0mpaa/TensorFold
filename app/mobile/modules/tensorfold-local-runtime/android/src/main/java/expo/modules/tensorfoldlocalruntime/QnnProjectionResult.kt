@@ -29,6 +29,7 @@ internal data class QnnProjectionResult(
   companion object {
     const val syntheticTolerance = 0.5
     const val checkpointTolerance = 0.0005
+    const val fullBlockTolerance = 0.00263044941
 
     fun fromNative(values: DoubleArray, tolerance: Double = checkpointTolerance): QnnProjectionResult =
       if (values.size == 3) QnnProjectionResult(values[0].toInt(), values[1], values[2], tolerance)

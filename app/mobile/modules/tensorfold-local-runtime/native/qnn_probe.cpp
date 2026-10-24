@@ -8,10 +8,12 @@
 #include <QNN/QnnInterface.h>
 #include <QNN/QnnOpDef.h>
 #include "qnn_checkpoint_projection.h"
+#include "qnn_full_projection.h"
 
 
 namespace {
 namespace checkpoint = tensorfold::qnn_checkpoint_projection;
+namespace full = tensorfold::qnn_full_projection;
 constexpr uint8_t kSyntheticInput[] = {1, 2, 3, 4};
 constexpr uint8_t kSyntheticWeights[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 0, 2};
 constexpr float kSyntheticReference[] = {34.0f, 36.0f, 50.0f};
@@ -31,6 +33,7 @@ struct ProjectionSpec {
 };
 constexpr ProjectionSpec kSynthetic = {kSyntheticInput, kSyntheticWeights, kSyntheticReference, 4, 3, 1.0f, 0, 1.0f, 0, 1.0f, 0, 0.5f};
 constexpr ProjectionSpec kCheckpoint = {checkpoint::kInput, checkpoint::kWeights, checkpoint::kQuantizedReference, checkpoint::kInputColumns, checkpoint::kOutputColumns, checkpoint::kInputScale, checkpoint::kInputOffset, checkpoint::kWeightScale, checkpoint::kWeightOffset, checkpoint::kOutputScale, checkpoint::kOutputOffset, checkpoint::kParityTolerance};
+constexpr ProjectionSpec kFull = {full::kInput, full::kWeights, full::kQuantizedReference, full::kInputColumns, full::kOutputColumns, full::kInputScale, full::kInputOffset, full::kWeightScale, full::kWeightOffset, full::kOutputScale, full::kOutputOffset, full::kParityTolerance};
 static_assert(-2900 == (78 - 128) * (133 - 128) + (103 - 128) * (119 - 128) +
                           (153 - 128) * (133 - 128) + (178 - 128) * (68 - 128));
 static_assert(-3325 == (78 - 128) * (166 - 128) + (103 - 128) * (109 - 128) +
@@ -143,7 +146,7 @@ static jdoubleArray runProjection(
   uint32_t input_dims[] = {1, spec.input_columns};
   uint32_t weight_dims[] = {spec.input_columns, spec.output_columns};
   uint32_t output_dims[] = {1, spec.output_columns};
-  uint8_t output_data[3] = {};
+  uint8_t output_data[128] = {};
   Qnn_Tensor_t input;
   Qnn_Tensor_t weights;
   Qnn_Tensor_t output;
@@ -175,7 +178,7 @@ static jdoubleArray runProjection(
   input.v1.clientBuf.data = const_cast<uint8_t*>(spec.input);
   input.v1.clientBuf.dataSize = spec.input_columns;
   output.v1.clientBuf.data = output_data;
-  output.v1.clientBuf.dataSize = sizeof(output_data);
+  output.v1.clientBuf.dataSize = spec.output_columns;
   if (outcome == 0) {
     timespec start{}, end{};
     clock_gettime(CLOCK_MONOTONIC, &start);
@@ -215,4 +218,10 @@ extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeCheckpointProjection(
     JNIEnv* env, jclass, jstring native_dir, jstring stub_name) {
   return runProjection(env, native_dir, stub_name, kCheckpoint);
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativeFullProjection(
+    JNIEnv* env, jclass, jstring native_dir, jstring stub_name) {
+  return runProjection(env, native_dir, stub_name, kFull);
 }

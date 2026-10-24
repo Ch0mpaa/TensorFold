@@ -55,6 +55,20 @@ QNN HTP v79 synthetic projection MatMul passed (1.90 ms, max error 0.000). Check
 
 Verified dual-projection APK SHA-256: `b68541a476dd263054d3d4e8c9c8c965c82b5d3debf6b2eb98129994ccf35441`.
 
+### Complete 128x128 EXL3 oracle block
+
+`tools/generate_qnn_full_projection.py` independently parses the checked-in
+fixture's complete FP64 oracle block, validates its SHA-256 and coordinates,
+quantizes all 16,384 weights, computes 128 integer-domain CPU dot products, and
+emits a content-addressed bounded native header. Regeneration and its two
+stdlib tests passed before the release build. From the stock app UID:
+
+```text
+QNN HTP v79 synthetic projection MatMul passed (1.91 ms, max error 0.000). Checkpoint slice passed (2.01 ms, max error 0.0001). Full 128x128 EXL3 block passed (1.96 ms, max error 0.0009). TensorFold model inference remains on CPU pending retained-token parity.
+```
+
+Verified full-block APK SHA-256: `88102fc211b7e4a801bbb95b7b75a32ecbcebcfa71751fa16e57987e74bf697e`.
+
 ## Samsung S20 Ultra — Snapdragon 865
 
 Device: `SM-G988U`, `SM8250`, stock Android 12/API 31.
@@ -73,4 +87,4 @@ The current APK packages only the v79 app-UID probe, so Samsung app-UID QNN rema
 
 ## Claim boundary
 
-The calculator runs prove rootless QNN DSP/HTP transport, and the v79 `MatMul` proves a real QNN graph can execute correctly from the ordinary Phone B app UID. Neither proves TensorFold model inference, retained-token parity, production performance, or full NPU-only execution. The model backend remains CPU until checkpoint-derived projections and the autoregressive path pass their frozen CPU oracles and backend attestation is included in each receipt.
+The calculator proves rootless QNN DSP/HTP transport; the synthetic, checkpoint slice and complete 128x128 block prove real QNN graphs can execute correctly from the ordinary Phone B app UID. They do not prove full TensorFold model inference, retained-token parity, production throughput, or full NPU-only execution. The selected model backend remains CPU until full model layers and the autoregressive path pass their frozen CPU oracles and backend attestation is included in each receipt.

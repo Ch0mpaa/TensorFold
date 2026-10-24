@@ -133,12 +133,23 @@ the QNN output before applying its `0.0005` tolerance. On the retained release
 run, the synthetic graph passed in `1.90 ms` with `0.000` maximum error and the
 checkpoint-derived graph passed in `1.79 ms` with `0.0001` maximum error.
 
+The separately reported full-block gate is a `[1,128] x [128,128]` u8
+projection derived reproducibly by
+`tools/generate_qnn_full_projection.py` from that same checked-in oracle. The
+stdlib-only tool validates the fixture SHA-256 and exact block coordinates,
+emits the bounded native header, and `--verify` rejects stale or altered output.
+The header records a content address over the fixed activation, all 16,384
+quantized weights, 128 independent integer CPU dots and the scales. Its
+per-tensor parameters reserve output headroom; parity tolerance is 1.5 output
+LSBs. On the retained app-UID run, this full block passed on QNN HTP v79 in
+`1.96 ms` with `0.0009` maximum absolute error.
+
 The first retained failure was graph creation because
 `libQnnHtpPrepare.so` was absent. Packaging that required graph-compiler
 component fixed it. These gates remain separate from model-backend selection:
 TensorFold model inference is still CPU-only until full checkpoint-derived
 projections and the autoregressive path pass retained-token parity. Neither
-library presence, calculator success, nor these small projections select HTP.
+library presence, calculator success, nor these projection gates select HTP.
 
 
 The `qualcomm-probe` target implements the non-invasive portion of gate 1. It
