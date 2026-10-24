@@ -96,6 +96,28 @@ Each row is three 64-token measurements after one excluded warm-up. These are
 diagnostic CPU figures, not community-v2 and not a comparison with the
 different-model HTP or llama.cpp runs.
 
+### Snapdragon 865 compatibility evidence
+
+A stock, unrooted Samsung Galaxy S20 Ultra 5G (`SM-G988U`) with Snapdragon
+865 (`SM8250`), 10.4 GiB RAM and Android 12/API 31 installed version 1.1.0/code
+2 after the source minimum SDK was lowered from 33 to 31. The installed APK
+hashed `833ffbdb355537cc9582d52b38186566cc8cd6cbaa8adb59d052a9183849ded8`.
+The app reported `qualcomm`, `compatible-unqualified`, CPU selected, Vulkan
+1.1.0 quarantined and ordinary-app HTP unavailable. It downloaded and verified
+the pinned 2B profile, built its app-private decoded cache, reached `ready`, and
+returned `LOCAL_OK` through private local chat at 2.6 tok/s.
+
+The same `tensorfold-android-quick-v1` workload produced:
+
+| Snapdragon 865 2B CPU quick workload | Median delivery | Median prefill |
+| --- | ---: | ---: |
+| Code | 2.61 tok/s | 1.97 s |
+| Chat | 2.63 tok/s | 1.83 s |
+
+Battery temperature moved from 24.3 C to 29.1 C. These are three measured
+64-token runs after one excluded warm-up, not community-v2, HTP qualification
+or a claim that the borderline 4B profile fits reliably on this 10.4 GiB device.
+
 ### 35B-A3B development status
 
 The Snapdragon-only 35B-A3B catalog has two admitted profiles, both
