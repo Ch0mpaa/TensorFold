@@ -8,8 +8,11 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
-#include <vector>
-#include <new>
+#include <unordered_map>
+#include <random>
+#include <algorithm>
+#include <memory>
+#include <mutex>
 
 
 #include <QNN/QnnInterface.h>
@@ -531,4 +534,129 @@ extern "C" JNIEXPORT jdoubleArray JNICALL
 Java_expo_modules_tensorfoldlocalruntime_QnnProbe_nativePersistentLiveFullProjection(
     JNIEnv* env, jclass, jstring native_dir, jstring stub_name, jstring payload_path) {
   return runPersistentLiveFullProjection(env, native_dir, stub_name, payload_path);
+}
+
+namespace {
+struct ResidentGraph {
+  TfQnnSession* session = nullptr;
+  LivePayload payload;
+  std::vector<uint8_t> input;
+
+  ~ResidentGraph() { tf_qnn_session_destroy(session); }
+};
+
+std::mutex resident_graphs_mutex;
+std::unordered_map<jlong, std::unique_ptr<ResidentGraph>> resident_graphs;
+std::mt19937_64 resident_graph_rng(std::random_device{}());
+
+jdoubleArray residentResult(JNIEnv* env, const std::initializer_list<jdouble>& values) {
+  jdoubleArray result = env->NewDoubleArray(static_cast<jsize>(values.size()));
+  if (result != nullptr) env->SetDoubleArrayRegion(result, 0, static_cast<jsize>(values.size()), values.begin());
+  return result;
+}
+
+jlong randomHandleLocked() {
+  jlong handle = 0;
+  do {
+    handle = static_cast<jlong>(resident_graph_rng() & ((1ULL << 53) - 1));
+  } while (handle == 0 || resident_graphs.count(handle) != 0);
+  return handle;
+}
+}  // namespace
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_expo_modules_tensorfoldlocalruntime_QnnNative_create(
+    JNIEnv* env, jclass, jstring native_dir, jstring payload_path) {
+  if (native_dir == nullptr || payload_path == nullptr) return residentResult(env, {-121.0, 0.0, 0.0, 0.0, 0.0});
+  const char* path = env->GetStringUTFChars(payload_path, nullptr);
+  if (path == nullptr) return residentResult(env, {-121.0, 0.0, 0.0, 0.0, 0.0});
+  auto graph = std::make_unique<ResidentGraph>();
+  int32_t status = loadPayload(path, true, &graph->payload);
+  env->ReleaseStringUTFChars(payload_path, path);
+  if (status != 0) return residentResult(env, {static_cast<jdouble>(status), 0.0, 0.0, 0.0, 0.0});
+  const char* dir = env->GetStringUTFChars(native_dir, nullptr);
+  if (dir == nullptr) return residentResult(env, {-100.0, 0.0, 0.0, 0.0, graph->payload.spec.tolerance});
+  TfQnnSessionConfig config = {dir, "libQnnHtpV79Stub.so", graph->payload.spec.input_columns,
+      graph->payload.spec.output_columns, graph->payload.spec.input_scale, graph->payload.spec.input_offset,
+      graph->payload.spec.weight_scale, graph->payload.spec.weight_offset, graph->payload.spec.output_scale,
+      graph->payload.spec.output_offset};
+  TfQnnSessionTiming timing{};
+  status = tf_qnn_session_create(&config, &graph->session, &timing);
+  const double create_ms = timing.create_ms;
+  if (status == 0) status = tf_qnn_session_set_weights(graph->session, graph->payload.spec.weights,
+      static_cast<uint64_t>(graph->payload.spec.input_columns) * graph->payload.spec.output_columns);
+  if (status == 0) status = tf_qnn_session_finalize(graph->session, &timing);
+  const double finalize_ms = timing.finalize_ms;
+  env->ReleaseStringUTFChars(native_dir, dir);
+  if (status != 0) {
+    return residentResult(env, {
+        static_cast<jdouble>(status), 0.0, create_ms, finalize_ms, graph->payload.spec.tolerance});
+  }
+  try {
+    graph->input.assign(
+        graph->payload.spec.input, graph->payload.spec.input + graph->payload.spec.input_columns);
+  } catch (const std::bad_alloc&) {
+    return residentResult(env, {-108.0, 0.0, create_ms, finalize_ms, graph->payload.spec.tolerance});
+  }
+  graph->payload.bytes.clear();
+  graph->payload.bytes.shrink_to_fit();
+  graph->payload.spec.input = graph->input.data();
+  const double tolerance = graph->payload.spec.tolerance;
+  std::lock_guard<std::mutex> lock(resident_graphs_mutex);
+  const jlong handle = randomHandleLocked();
+  resident_graphs.emplace(handle, std::move(graph));
+  return residentResult(
+      env, {0.0, static_cast<jdouble>(handle), create_ms, finalize_ms, tolerance});
+}
+
+extern "C" JNIEXPORT jdoubleArray JNICALL
+Java_expo_modules_tensorfoldlocalruntime_QnnNative_execute(JNIEnv* env, jclass, jlong handle, jint repeats) {
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+  if (repeats < 1 || repeats > 100) return residentResult(env, {-115.0, 0.0, 0.0, 0.0, kNaN, 0.0});
+  std::lock_guard<std::mutex> lock(resident_graphs_mutex);
+  const auto found = resident_graphs.find(handle);
+  if (found == resident_graphs.end()) return residentResult(env, {-114.0, 0.0, 0.0, 0.0, kNaN, 0.0});
+  ResidentGraph& graph = *found->second;
+  std::vector<uint8_t> output(graph.payload.spec.output_columns);
+  std::vector<double> warm;
+  warm.reserve(repeats > 1 ? repeats - 1 : 0);
+  TfQnnSessionTiming timing{};
+  int32_t status = 0;
+  double first = 0.0;
+  for (int index = 0; index < repeats && status == 0; ++index) {
+    status = tf_qnn_session_execute(graph.session, graph.payload.spec.input, graph.payload.spec.input_columns,
+                                    output.data(), output.size(), &timing);
+    if (index == 0) first = timing.execute_ms; else warm.push_back(timing.execute_ms);
+  }
+  double median = first;
+  double last = first;
+  if (status == 0 && !warm.empty()) {
+    last = warm.back();
+    std::sort(warm.begin(), warm.end());
+    median = warm[warm.size() / 2];
+  }
+  if (status == 0) status = tf_qnn_session_parity(graph.session, output.data(), output.size(),
+      graph.payload.spec.reference, graph.payload.spec.output_columns, graph.payload.spec.tolerance, &timing);
+  return residentResult(env, {static_cast<jdouble>(status), first, median, last, timing.max_abs_error, graph.payload.spec.tolerance});
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_expo_modules_tensorfoldlocalruntime_QnnNative_release(JNIEnv*, jclass, jlong handle) {
+  std::lock_guard<std::mutex> lock(resident_graphs_mutex);
+  return resident_graphs.erase(handle) == 1 ? 0 : -114;
+}
+
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_expo_modules_tensorfoldlocalruntime_QnnNative_health(JNIEnv* env, jclass) {
+  std::lock_guard<std::mutex> lock(resident_graphs_mutex);
+  const jlong count = static_cast<jlong>(resident_graphs.size());
+  jlongArray result = env->NewLongArray(1);
+  if (result != nullptr) env->SetLongArrayRegion(result, 0, 1, &count);
+  return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_expo_modules_tensorfoldlocalruntime_QnnNative_releaseAll(JNIEnv*, jclass) {
+  std::lock_guard<std::mutex> lock(resident_graphs_mutex);
+  resident_graphs.clear();
 }

@@ -3,7 +3,7 @@
     android:name="dev.tensorfold.mobile.permission.LOCAL_INFERENCE"
     android:label="@string/tensorfold_local_inference_permission"
     android:description="@string/tensorfold_local_inference_permission_description"
-    android:protectionLevel="dangerous" />
+    android:protectionLevel="signature" />
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="false" />
   <application android:networkSecurityConfig="@xml/tensorfold_network_security_config" android:extractNativeLibs="true">
@@ -14,5 +14,10 @@
       android:exported="true"
       android:grantUriPermissions="false"
       android:readPermission="dev.tensorfold.mobile.permission.LOCAL_INFERENCE" />
+    <service
+      android:name="expo.modules.tensorfoldlocalruntime.QnnExecutorService"
+      android:process=":qnn"
+      android:exported="false"
+      android:permission="dev.tensorfold.mobile.permission.LOCAL_INFERENCE" />
   </application>
 </manifest>

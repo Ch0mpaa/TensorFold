@@ -256,6 +256,23 @@ parity check. Session creation took `95.59 ms`, graph finalization `116.53 ms`,
 the first execution `2.67 ms`, and five warm executions had a `1.24 ms` median
 and `1.22 ms` last value. Final maximum error remained `0.0093`. This measures
 one persistent projection graph, not a complete layer or model.
+`serviceFullProjection` is the stock-phone lifecycle oracle. A non-exported,
+signature-protected same-UID Binder service runs in Android process `:qnn`, opens
+the fixed app-private v2 payload itself, retains one opaque native graph handle,
+executes it exactly 100 times, checks final content-bound parity, and explicitly
+releases it. The Binder API never carries projection weights. Binder death and
+stale handles fail closed as unavailable; no CPU candidate is substituted.
+`dumpsys activity services` shows the `:qnn` process while the oracle is active.
+It remains evidence only: TensorFold model inference stays on CPU.
+
+The final stock Phone B release receipt attested Android process
+`dev.tensorfold.mobile:qnn` (PID 4034) and one resident graph before execution.
+Service-side create took `84.71 ms`, finalize `152.30 ms`, and all 100 QNN
+executions succeeded; the first took `2.60 ms`, warm median `1.54 ms`, and
+final maximum error `0.0093`. The graph was explicitly released after the
+receipt. Release APK SHA-256:
+`f5621164702fb5ff3fac00673caf02136b4e2e273fe7b82a35e855d3d961f673`.
+
 
 
 The `qualcomm-probe` target implements the non-invasive portion of gate 1. It

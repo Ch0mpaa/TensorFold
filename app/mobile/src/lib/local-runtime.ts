@@ -5,6 +5,20 @@ export type LocalBackend = 'vulkan' | 'cpu' | 'unsupported'
 export type LocalEngineState = 'stopped' | 'starting' | 'ready' | 'unhealthy' | 'failed'
 export type TransferState = 'idle' | 'downloading' | 'verifying' | 'ready' | 'cancelled' | 'failed'
 
+export interface QnnProjection { available: boolean; elapsedMs: number; maxAbsoluteError: number; tolerance: number; reason: string | null }
+export interface QnnPersistentProjection {
+  available: boolean; createMs: number; finalizeMs: number; firstExecuteMs: number; warmMedianMs: number; warmLastMs: number
+  maxAbsoluteError: number; tolerance: number; reason: string | null
+}
+export interface QnnServiceProjection extends QnnPersistentProjection {
+  serviceProcess: string; backend: string; servicePid: number; graphCount: number; repeats: 100; status: number
+}
+export interface QnnCapability {
+  available: boolean; architecture: string | null; probe: string; elapsedMs: number; maxAbsoluteError: number; tolerance: number; reason: string | null
+  checkpointProjection: QnnProjection; fullBlockProjection: QnnProjection; liveCheckpointProjection: QnnProjection; liveFullProjection: QnnProjection
+  persistentFullProjection: QnnPersistentProjection; serviceFullProjection: QnnServiceProjection
+}
+
 export interface LocalCapabilities {
   platform: 'qualcomm' | 'pixel-tensor' | 'android-arm64'
   manufacturer: string
@@ -25,7 +39,7 @@ export interface LocalCapabilities {
   qualification: 'qualified-reference' | 'compatible-unqualified' | 'pixel-device-validation-required' | 'unsupported'
   runtimeInstalled: boolean
   missingRuntime: string[]
-  qnnHtp: { available: boolean; architecture: string | null; probe: string; elapsedMs: number; maxAbsoluteError: number; tolerance: number; reason: string | null; checkpointProjection: { available: boolean; elapsedMs: number; maxAbsoluteError: number; tolerance: number; reason: string | null }; fullBlockProjection: { available: boolean; elapsedMs: number; maxAbsoluteError: number; tolerance: number; reason: string | null }; liveCheckpointProjection: { available: boolean; elapsedMs: number; maxAbsoluteError: number; tolerance: number; reason: string | null }; liveFullProjection: { available: boolean; elapsedMs: number; maxAbsoluteError: number; tolerance: number; reason: string | null }; persistentFullProjection: { available: boolean; createMs: number; finalizeMs: number; firstExecuteMs: number; warmMedianMs: number; warmLastMs: number; maxAbsoluteError: number; tolerance: number; reason: string | null } }
+  qnnHtp: QnnCapability
   htpAvailableToApp: boolean
   htpReason: string
 }

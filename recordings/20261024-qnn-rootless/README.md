@@ -146,6 +146,20 @@ measurement, not a complete-layer or model speed claim.
 Final release APK SHA-256:
 `93313fa7b7f22dd8bb135ee88e70ed17fa01c2c89b7bb260c824e9dcd33f3d1a`.
 
+### `:qnn` Binder lifecycle receipt
+
+The non-exported same-UID service opened the app-private v2 payload itself;
+projection weights never crossed Binder. Before execution it attested process
+`dev.tensorfold.mobile:qnn` (PID 4034) and one resident graph.
+
+```text
+QNN service dev.tensorfold.mobile:qnn (pid 4034, 1 resident graph) created in 84.71 ms, finalized in 152.30 ms, and completed 100 successful executions (2.60 ms first, 1.54 ms warm median, max error 0.0093), then released it.
+```
+
+Every execution and final parity check passed. The graph was explicitly
+released; model serving remained CPU-selected. Release APK SHA-256:
+`f5621164702fb5ff3fac00673caf02136b4e2e273fe7b82a35e855d3d961f673`.
+
 ## Samsung S20 Ultra — Snapdragon 865
 
 Device: `SM-G988U`, `SM8250`, stock Android 12/API 31.

@@ -79,3 +79,23 @@ internal data class QnnPersistentProjectionResult(
     }
   }
 }
+
+internal data class QnnServiceProjectionResult(
+  val status: Int,
+  val firstExecuteMs: Double,
+  val warmMedianMs: Double,
+  val warmLastMs: Double,
+  val maxAbsoluteError: Double,
+  val tolerance: Double,
+) {
+  val passed: Boolean get() = status == 0 && maxAbsoluteError.isFinite() && tolerance.isFinite() && tolerance >= 0.0 && maxAbsoluteError <= tolerance
+  fun reason(): String? = if (passed) null else QnnProjectionResult(status, firstExecuteMs, maxAbsoluteError, tolerance).reason()
+
+  companion object {
+    fun fromNative(values: DoubleArray): QnnServiceProjectionResult = if (values.size == 6 && values[5].isFinite() && values[5] >= 0.0) {
+      QnnServiceProjectionResult(values[0].toInt(), values[1], values[2], values[3], values[4], values[5])
+    } else {
+      QnnServiceProjectionResult(-114, 0.0, 0.0, 0.0, Double.NaN, 0.0)
+    }
+  }
+}

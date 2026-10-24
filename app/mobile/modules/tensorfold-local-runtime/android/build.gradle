@@ -11,6 +11,9 @@ android {
     versionName '1.0.0'
     testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
   }
+  buildFeatures {
+    aidl true
+  }
   sourceSets {
     main.jniLibs.srcDir 'src/main/jniLibs'
   }
