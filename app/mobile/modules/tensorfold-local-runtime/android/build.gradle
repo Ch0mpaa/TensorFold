@@ -23,6 +23,14 @@ android {
 }
 dependencies {
   implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+  implementation 'com.google.ai.edge.litert:litert:2.3.0'
+  implementation 'com.google.ai.edge.litert:litert-npu-runtime-google-tensor:2.3.0'
   testImplementation 'junit:junit:4.13.2'
   testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+}
+
+// LiteRT 2.3.0's API jar carries Kotlin 2.4 metadata. This module reaches that
+// API only through TensorG5LiteRtRunner.java, so Kotlin needs no 2.4 symbols.
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+  compilerOptions.freeCompilerArgs.add('-Xskip-metadata-version-check')
 }

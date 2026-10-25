@@ -27,6 +27,31 @@ class ModelSecurityTest {
     assertTrue(HardwareProbe.classifyPlatform("MediaTek", "Dimensity", "Other", "mtk") == "android-arm64")
   }
 
+  @Test fun tensorG5ProbeRequiresNativeAttestation() {
+    val unattested = TensorG5ProjectionResult(
+      -4, true, false, 1.0, 1.0, 1.0, 0.0,
+    )
+    assertFalse(unattested.available)
+    assertEquals("LiteRT reports that this model was not fully accelerated outside CPU.", unattested.reason())
+  }
+
+  @Test fun tensorG5ProbeRejectsParityFailureAfterAttestation() {
+    val divergent = TensorG5ProjectionResult(
+      0, true, true, 1.0, 1.0, 1.0,
+      TensorG5ProjectionResult.parityTolerance + 0.001,
+    )
+    assertFalse(divergent.available)
+    assertTrue(divergent.reason()!!.contains("CPU oracle"))
+  }
+
+  @Test fun tensorG5ProbeReportsMissingPinnedModel() {
+    assertEquals(16_371_837L, TensorG5ProjectionResult.probeBytes)
+    assertEquals("c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0", TensorG5ProjectionResult.probeSha256)
+    val missing = TensorG5ProjectionResult.unavailable(-12, true)
+    assertFalse(missing.available)
+    assertTrue(missing.reason()!!.contains("required selfie_multiclass.tflite"))
+  }
+
   @Test fun chatOutputStopsAtModelControlTokens() {
     assertEquals("LOCAL_OK", ModelOutput.visibleText("LOCAL_OK<|im_end|>\\n<|endoftext|><|im_start|>user"))
     assertEquals("ordinary reply", ModelOutput.visibleText("ordinary reply  "))

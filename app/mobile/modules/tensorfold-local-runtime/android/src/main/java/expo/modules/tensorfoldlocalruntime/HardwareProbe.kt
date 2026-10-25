@@ -84,6 +84,7 @@ internal object HardwareProbe {
         ),
         "reason" to "QNN applies only to Qualcomm devices.",
       )
+    val tensorG5Tpu = TensorG5Probe.inspect(context)
     val vulkan11 = vk >= ((1 shl 22) or (1 shl 12))
     // The Vulkan backend starts and is fast on Adreno 830, but its retained
     // 4B output diverges from CPU/HTP. Keep the public runtime exact by
@@ -120,6 +121,7 @@ internal object HardwareProbe {
       "qualification" to qualification,
       "runtimeInstalled" to missingRuntime.isEmpty(),
       "qnnHtp" to qnn,
+      "tensorG5Tpu" to tensorG5Tpu,
       "htpAvailableToApp" to (qnn["available"] == true),
       "htpReason" to if (qnn["available"] == true)
         "QNN HTP projection MatMul passed from the ordinary app UID; TensorFold model inference remains on CPU pending retained-token parity."

@@ -14,7 +14,7 @@ The distributable APK and the privileged custom-kernel HTP prototype remain sepa
 - Vulkan is a quarantined candidate. It initialized on Adreno 830 and decoded quickly, but the same frozen 4B prompt produced different tokens beginning `213390,3319,...`.
 - The faster custom EXL3 HTP prototype remains a privileged developer path because an ordinary app UID cannot write directly to `/dev/fastrpc-cdsp`. The new QNN route must express and verify TensorFold projections through supported QNN graphs instead of relabelling the rooted custom kernel.
 - Snapdragon SM8750, Snapdragon SM8250 and Google Tensor G5 are qualified on their exact unprivileged CPU paths. Acceleration remains separately gated per backend and operation.
-- Google's dedicated Tensor TPU SDK remains a later adapter. The official SDK is currently distributed through its beta program and uses compiled LiteRT artifacts rather than TensorFold EXL3 checkpoints. The app makes no GPU or TPU claim from CPU results.
+- Google's Tensor TPU integration is limited to a separately gated LiteRT segmentation-model probe. It does not run TensorFold EXL3 checkpoints or LLM serving, and no CPU result is labelled as TPU execution.
 
 NNAPI is not a fallback: Android deprecated it in Android 15.
 
@@ -238,8 +238,33 @@ manager, and UI used on Snapdragon. The qualification recorded:
 7. App-owned stop and force-stop behavior.
 8. 16 KiB ELF load-segment compatibility.
 
-GPU and TPU acceleration remain separate correctness tasks. A TPU claim
-requires Google Tensor SDK access, a supported converted artifact, and
-separate output-quality and performance evidence. Vulkan results must never be
-labelled TPU results, and no accelerated backend may replace CPU until it
-passes the retained-token gate.
+GPU and TPU acceleration remain separate correctness tasks. The Tensor G5 build
+contains a fail-closed LiteRT 2.3.0 TPU probe for Google's official
+`selfie_multiclass.tflite` segmentation model only. It accepts the externally
+staged file only at
+`getExternalFilesDir(null)/tensorfold/tpu/selfie_multiclass.tflite`, with
+exactly 16,371,837 bytes and SHA-256
+`c6748b1253a99067ef71f7e26ca71096cd449baefa8f101900ea23016507e0e0`.
+It runs a separate CPU `CompiledModel` oracle and an `Accelerator.NPU`
+`CompiledModel`, excludes one NPU warm-up, measures five NPU executions, and
+requires output parity plus LiteRT's
+`LiteRtCompiledModelIsNonCpuFullyAccelerated` attestation. Any missing model,
+digest mismatch, compatibility failure, runtime/symbol/handle failure,
+non-acceleration attestation, or parity failure leaves the probe unavailable;
+there is no CPU fallback disguised as TPU execution. This is segmentation-model
+adapter/runtime evidence, not TensorFold EXL3 or LLM execution. CPU remains
+the selected serving backend.
+
+The first physical stock-device run retained the access failure instead of
+accepting LiteRT's CPU fallback. On the Pixel 10 Pro Fold, the Google compiler
+plugin selected all 175 operations, then
+`vendor.google.edgetpu_app_service` rejected `dev.tensorfold.mobile` because
+the package was not on the EdgeTPU allowlist or its signature did not match.
+LiteRT reported error 16, initialized the original flatbuffer with XNNPACK,
+and the native non-CPU-full-acceleration check rejected the result. No TPU
+timing or parity claim is made. Google's public setup page still requires
+sign-up for Tensor SDK Beta; the AOT compiler tutorial additionally requires
+the beta SDK artifact. Package/signature admission and that artifact are the
+external prerequisites before an AOT TensorFold operation can be qualified.
+The release qualification APK for this retained gate hashes
+`6e1d36c665fe6c230d6b47b56d95844363bbc691ff9f40790be9c425e09cab19`.

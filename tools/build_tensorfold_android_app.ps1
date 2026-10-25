@@ -124,6 +124,7 @@ foreach ($Entry in $QnnFiles.GetEnumerator()) {
 $Clang = Join-Path $AndroidNdk "toolchains/llvm/prebuilt/windows-x86_64/bin/clang++.exe"
 $QnnProbe = Join-Path $Mobile "modules/tensorfold-local-runtime/native/qnn_probe.cpp"
 $QnnSessionBridge = Join-Path $Mobile "modules/tensorfold-local-runtime/native/qnn_session_bridge.cpp"
+$TensorG5Probe = Join-Path $Mobile "modules/tensorfold-local-runtime/native/tensor_g5_probe.cpp"
 $QnnInclude = Join-Path $QairtSdk "include"
 $QnnLibrary = Join-Path $QairtSdk "lib/aarch64-android"
 if (-not (Test-Path "$QnnInclude/QNN/QnnInterface.h") -or -not (Test-Path "$QnnLibrary/libQnnHtp.so")) {
@@ -131,6 +132,8 @@ if (-not (Test-Path "$QnnInclude/QNN/QnnInterface.h") -or -not (Test-Path "$QnnL
 }
 & $Clang "--target=aarch64-linux-android31" -shared -fPIC -O2 -I$QnnInclude -L$QnnLibrary -Wl,-soname,libtensorfold_qnn_probe.so -Wl,-z,now $QnnProbe $QnnSessionBridge -lQnnHtp -ldl -llog -o (Join-Path $Runtime "libtensorfold_qnn_probe.so")
 if ($LASTEXITCODE -ne 0) { throw "TensorFold QNN app-UID probe build failed." }
+& $Clang "--target=aarch64-linux-android31" -shared -fPIC -O2 -Wl,-soname,libtensorfold_tensor_g5_probe.so -Wl,-z,now $TensorG5Probe -ldl -o (Join-Path $Runtime "libtensorfold_tensor_g5_probe.so")
+if ($LASTEXITCODE -ne 0) { throw "Tensor G5 LiteRT TPU probe build failed." }
 New-Item -ItemType Directory -Force "$Mobile/assets" | Out-Null
 Copy-Item -Force "$QairtSdk/NOTICE.txt" "$Mobile/assets/QAIRT_NOTICE.txt"
 

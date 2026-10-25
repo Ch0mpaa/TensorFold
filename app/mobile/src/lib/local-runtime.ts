@@ -25,6 +25,12 @@ export interface QnnCapability {
   persistentFullProjection: QnnPersistentProjection; serviceFullProjection: QnnServiceProjection
 }
 
+export interface TensorG5TpuCapability {
+  available: boolean; compatibility: boolean; fullyAccelerated: boolean
+  firstExecuteMs: number; warmMedianMs: number; warmLastMs: number
+  maxAbsoluteError: number; tolerance: number; reason: string | null
+}
+
 export interface LocalCapabilities {
   platform: 'qualcomm' | 'pixel-tensor' | 'android-arm64'
   manufacturer: string
@@ -46,6 +52,7 @@ export interface LocalCapabilities {
   runtimeInstalled: boolean
   missingRuntime: string[]
   qnnHtp: QnnCapability
+  tensorG5Tpu: TensorG5TpuCapability
   htpAvailableToApp: boolean
   htpReason: string
 }
