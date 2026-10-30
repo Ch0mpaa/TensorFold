@@ -41,6 +41,7 @@ const tp = @import("launches/tp.zig");
 const flashnext = @import("launches/flashnext.zig");
 const mamba = @import("launches/mamba.zig");
 const nemotron_moe = @import("launches/nemotron_moe.zig");
+const nvfp4 = @import("launches/nvfp4.zig");
 
 pub const ConvArgs = conv.ConvArgs;
 pub const PlanArgs = plan.PlanArgs;
@@ -144,6 +145,8 @@ pub const Launcher = struct {
         moe_foreign_items: Function,
         moe_zero_foreign: Function,
         token_prob: Function,
+        nvfp4_rows_f32: Function,
+        nvfp4_prompt_f32: Function,
     };
 
     /// Which kernels a run takes where two give the same bits; every one defaults on.
@@ -216,6 +219,8 @@ pub const Launcher = struct {
             .moe_foreign_items = try ops.function("tf_moe_foreign_items"),
             .moe_zero_foreign = try ops.function("tf_moe_zero_foreign"),
             .token_prob = try ops.function("tf_token_prob"),
+            .nvfp4_rows_f32 = try ops.function("tf_nvfp4_expert_rows_f32"),
+            .nvfp4_prompt_f32 = try ops.function("tf_nvfp4_expert_prompt_f32"),
         };
         const ns = "_ZN2tf4rocm";
         l.rms = .{
@@ -322,6 +327,8 @@ pub const Launcher = struct {
     pub const tf_moe_foreign_items = tp.tf_moe_foreign_items;
     pub const tf_moe_zero_foreign = tp.tf_moe_zero_foreign;
     pub const tf_token_prob = tp.tf_token_prob;
+    pub const nvfp4ExpertRows = nvfp4.expertRowsF32;
+    pub const nvfp4ExpertPrompt = nvfp4.expertPromptF32;
     pub const pagedCausal = attention.pagedCausal;
     pub const tf_gdn_gate = recurrence.tf_gdn_gate;
     pub const tf_gated_delta = recurrence.tf_gated_delta;

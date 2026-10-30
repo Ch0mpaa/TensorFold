@@ -49,8 +49,13 @@ pub const Config = struct {
         const doc = try shared.declared(a, bytes);
         const tower = try shared.textTower(doc);
         const table = try quant.detect(a, .{ .root = doc, .quantization = try shared.pickObject(doc, tower, "quantization") });
-        const width = try table.width("");
-        const spec = try shared.geometry(tower, width.bits, width.group);
+        const w: quant.mlx.Width = switch (table) {
+            .mlx => try table.width(""),
+            // NVFP4 has fixed geometry (4-bit e2m1 codes, group of 16); dense weights have no bit width to declare.
+            .nvfp4 => .{ .bits = 4, .group = 16 },
+            .dense => .{ .bits = 16, .group = 1 },
+        };
+        const spec = try shared.geometry(tower, w.bits, w.group);
         const gen = if (generation) |g| (try std.json.parseFromSliceLeaky(std.json.Value, a, g, .{})) else null;
         if (gen) |g| if (g != .object) return error.InvalidConfig;
         const ids = try a.create([shared.checks.max_eos]u32);

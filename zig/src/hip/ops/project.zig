@@ -4,6 +4,10 @@ const t = @import("types.zig");
 const quant = @import("core").quant;
 const launches = @import("../launches.zig");
 const affine_launch = @import("../launches/affine.zig");
+const launches_util = @import("../launches/util.zig");
+const C = launches_util.C;
+const CI = launches_util.CI;
+const F = launches_util.F;
 const registry = @import("core").registry;
 const Ops = @import("ops.zig").Ops;
 const Error = t.Error;
@@ -200,8 +204,63 @@ pub fn projectRouted(o: Ops, x: Tensor, proj: Projection, items: u64, count: usi
     switch (proj.handle) {
         .mlx => |h| return affineRouted(o, x, affineOf(proj, h), items, count, members, pairs, x_div, rows),
         .dense => return error.BadShape,
-        .nvfp4 => return error.UnsupportedQuantization,
+        .nvfp4 => return projectRoutedNvfp4(o, x, proj, items, count, members, pairs, x_div, rows, 0),
     }
+}
+
+/// NVFP4 routed-expert decode (software dequant, fp32 accumulate): out fp32 [pairs, N].
+/// `x` is bf16 input rows [token_count, k]; `limit` is the SwiGLU clamp (unused by the down epilogue).
+pub fn projectRoutedNvfp4(
+    o: Ops,
+    x: Tensor,
+    proj: Projection,
+    items: u64,
+    count: usize,
+    members: u64,
+    pairs: usize,
+    x_div: usize,
+    rows: usize,
+    limit: f32,
+) Error!u64 {
+    const h = switch (proj.handle) {
+        .nvfp4 => |m| m,
+        else => return error.BadShape,
+    };
+    if (x.kind != .bf16) return error.BadShape;
+    if (proj.k == 0 or proj.n == 0 or proj.k % 32 != 0 or proj.n % 32 != 0) return error.BadShape;
+    const n: usize = proj.n;
+    const kg: c_int = int(proj.k / 32);
+    const nb: c_int = int(proj.n / 32);
+    const out = try o.arena.take(pairs * n * @sizeOf(f32));
+    const x_ptr: C = @ptrFromInt(x.ptr);
+    const w_ptr: C = @ptrFromInt(h.weight);
+    const g_ptr: C = @ptrFromInt(h.global);
+    const items_ptr: CI = @ptrFromInt(items);
+    const members_ptr: CI = @ptrFromInt(members);
+    const out_ptr: F = @ptrFromInt(out);
+    const x_stride: c_int = int(proj.k);
+    const slots: c_int = int(x_div);
+    const item_count: c_int = int(count);
+    if (o.prefill) {
+        try o.l.nvfp4ExpertPrompt(
+            x_ptr, x_stride, slots,
+            w_ptr, g_ptr,
+            kg, nb,
+            items_ptr, null, members_ptr,
+            out_ptr, int(n), limit, -1,
+            item_count, int(rows), o.stream,
+        );
+    } else {
+        try o.l.nvfp4ExpertRows(
+            x_ptr, x_stride, slots,
+            w_ptr, g_ptr,
+            kg, nb,
+            items_ptr, null, members_ptr,
+            out_ptr, int(n), limit, -1,
+            item_count, o.stream,
+        );
+    }
+    return out;
 }
 
 /// gather_rows: `n` embedding rows of a table of any format with a row gather, by device ids, dequantized into `out`.

@@ -17,6 +17,8 @@ pub const Table = struct {
     gpa: std.mem.Allocator,
     files: []Shard,
     where: std.StringHashMapUnmanaged(Where) = .empty,
+    /// Owns alias strings registered beside the stored names (Qwen's `model.language_model.*` ↔ `language_model.model.*`).
+    aliases: std.heap.ArenaAllocator,
     /// A key prefix the table drops (`language_model.`), as `_Shards(strip=)`.
     strip: []const u8,
     quant: formats.Config,
@@ -33,11 +35,15 @@ pub const Table = struct {
             files[opened] = try Shard.open(gpa, io, p);
             opened += 1;
         }
-        var t: Table = .{ .gpa = gpa, .files = files, .strip = strip, .quant = quant };
-        errdefer t.where.deinit(gpa);
+        var t: Table = .{ .gpa = gpa, .files = files, .strip = strip, .quant = quant, .aliases = .init(gpa) };
+        errdefer {
+            t.where.deinit(gpa);
+            t.aliases.deinit();
+        }
         for (files, 0..) |*f, i| for (f.names.keys()) |key| {
             const short = if (strip.len > 0 and std.mem.startsWith(u8, key, strip)) key[strip.len..] else key;
             try t.where.put(gpa, short, .{ .file = i, .stored = key });
+            try addAliases(&t, short, i, key);
         };
         return t;
     }
@@ -46,6 +52,7 @@ pub const Table = struct {
         for (t.files) |*f| f.close(io);
         t.gpa.free(t.files);
         t.where.deinit(t.gpa);
+        t.aliases.deinit();
         t.* = undefined;
     }
 
@@ -82,8 +89,9 @@ pub const Table = struct {
     pub fn width(t: *const Table, key: []const u8) config.Error!formats.mlx.Width {
         const q = switch (t.quant) {
             .mlx => |m| m,
+            // NVFP4 has no per-tensor affine widths; the kernels read fixed 4-bit codes in groups of 16.
+            .nvfp4 => return .{ .bits = 4, .group = 16 },
             .dense => return error.UnsupportedQuantization,
-            .nvfp4 => return error.UnsupportedQuantization,
         };
         if (q.overrides.get(key)) |w| return w orelse error.UnsupportedQuantization;
         if (t.strip.len > 0) {
@@ -94,6 +102,23 @@ pub const Table = struct {
         return q.global;
     }
 };
+
+/// Register `short` under its mirrored Qwen prefix forms so a loader can look up by either spelling.
+/// MLX conversions store the text tower as `language_model.model.*` and the head as `language_model.lm_head.*`;
+/// ModelOpt (HF Transformers) checkpoints spell them `model.language_model.*` and `lm_head.*`.
+fn addAliases(t: *Table, short: []const u8, file: usize, stored: []const u8) !void {
+    const a = t.aliases.allocator();
+    const swaps = [_]struct { from: []const u8, to: []const u8 }{
+        .{ .from = "model.language_model.", .to = "language_model.model." },
+        .{ .from = "language_model.model.", .to = "model.language_model." },
+        .{ .from = "language_model.lm_head.", .to = "lm_head." },
+        .{ .from = "lm_head.", .to = "language_model.lm_head." },
+    };
+    for (swaps) |s| if (std.mem.startsWith(u8, short, s.from)) {
+        const alias = try std.fmt.allocPrint(a, "{s}{s}", .{ s.to, short[s.from.len..] });
+        try t.where.put(t.gpa, alias, .{ .file = file, .stored = stored });
+    };
+}
 
 /// The checkpoint's safetensors paths, sorted: the model's own files, and the `mtp*.safetensors` side files.
 pub const Files = struct {

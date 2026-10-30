@@ -15,15 +15,36 @@ pub const decoder: types.Decoder = .nvfp4;
 /// A ModelOpt NVFP4 checkpoint: the table carries no per-tensor width, only an optional default input scale.
 pub const Config = struct { input_scale: ?f32 = null };
 
-/// NVFP4 is declared by `quantization.quant_algo == "NVFP4"`, or by a `quantization_config` naming modelopt + NVFP4.
+/// NVFP4 is declared by `quantization.quant_algo == "NVFP4"`, by `quantization_config` naming modelopt + NVFP4,
+/// or by a modelopt MIXED_PRECISION config whose `config_groups` carry at least one NVFP4 group (4-bit float, 16).
 pub fn detect(a: Allocator, src: types.Sources) Allocator.Error!?Config {
     _ = a;
     if (src.quantization.get("quant_algo")) |v| {
         if (v == .string and std.ascii.eqlIgnoreCase(v.string, "NVFP4")) return .{};
     }
     if (src.root.get("quantization_config")) |qc| if (qc == .object) {
-        const method = qc.object.get("quant_method") orelse qc.object.get("quant_algo");
-        if (method) |m| if (m == .string and std.ascii.eqlIgnoreCase(m.string, "NVFP4")) return .{};
+        if (qc.object.get("quant_algo")) |algo| if (algo == .string) {
+            if (std.ascii.eqlIgnoreCase(algo.string, "NVFP4")) return .{};
+        };
+        if (qc.object.get("quant_method")) |m| if (m == .string) {
+            if (std.ascii.eqlIgnoreCase(m.string, "NVFP4")) return .{};
+        };
+        const method = qc.object.get("quant_method");
+        const is_modelopt = method != null and method.? == .string and std.ascii.eqlIgnoreCase(method.?.string, "modelopt");
+        if (is_modelopt) if (qc.object.get("config_groups")) |groups| if (groups == .object) {
+            var it = groups.object.iterator();
+            while (it.next()) |entry| {
+                if (entry.value_ptr.* != .object) continue;
+                const weights = entry.value_ptr.object.get("weights") orelse continue;
+                if (weights != .object) continue;
+                const nb = weights.object.get("num_bits") orelse continue;
+                const ty = weights.object.get("type") orelse continue;
+                const gs = weights.object.get("group_size") orelse continue;
+                if (nb == .integer and nb.integer == 4 and ty == .string and
+                    std.ascii.eqlIgnoreCase(ty.string, "float") and
+                    gs == .integer and gs.integer == 16) return .{};
+            }
+        };
     };
     return null;
 }
