@@ -1,8 +1,19 @@
 # NVFP4 Flash Next on HIP — port plan (gfx1151)
 
-Target: run `Chompa1422/Qwen3.8-Flash-Next-NVFP4-Abliterated` on an AMD
-Ryzen AI MAX+ 395 (Radeon 8060S, gfx1151) with the same TensorFold engine
-that serves it on a DGX Spark (GB10), and publish an honest A/B.
+Target: run NVIDIA's NVFP4 ModelOpt checkpoints on an AMD Ryzen AI MAX+ 395
+(Radeon 8060S, gfx1151) with the same TensorFold engine that serves them on a
+DGX Spark (GB10), and publish an honest A/B.
+
+**First target (fits in 64 GiB container today):**
+`nvidia/Qwen3.8-27B-NVFP4` — 22 GB on disk, ~14 GB loaded, family `qwen3_5`
+(already fully supported on HIP; main-check 42/42 passed in Phase 1). Only
+the NVFP4 format kernels are new work. Serves on CUDA since 1.1.1.
+
+**Stretch target (needs container upsize to ≥128 GiB):**
+`Chompa1422/Qwen3.8-Flash-Next-NVFP4-Abliterated` — 102 GB, family
+`qwen4_exp`. Same NVFP4 kernels + Flash Next-specific MoE/n-gram paths.
+DGX Spark reference serving at `http://192.168.60.228:8888` on recipe commit
+`e1f564e`.
 
 ## What already exists
 
