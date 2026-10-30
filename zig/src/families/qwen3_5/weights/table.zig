@@ -83,6 +83,7 @@ pub const Table = struct {
         const q = switch (t.quant) {
             .mlx => |m| m,
             .dense => return error.UnsupportedQuantization,
+            .nvfp4 => return error.UnsupportedQuantization,
         };
         if (q.overrides.get(key)) |w| return w orelse error.UnsupportedQuantization;
         if (t.strip.len > 0) {

@@ -7,6 +7,7 @@
 #include "rope.hpp"
 #include "norms.hpp"
 #include "moe.hpp"
+#include "nvfp4.hpp"
 #include "nemotron_moe.hpp"
 #include "draw.hpp"
 #include "tp.hpp"

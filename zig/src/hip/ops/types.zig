@@ -31,7 +31,7 @@ pub const Kind = enum(c_int) {
     }
 };
 
-pub const Error = runtime.Error || error{ OutOfDeviceMemory, BadShape };
+pub const Error = runtime.Error || error{ OutOfDeviceMemory, BadShape, UnsupportedQuantization };
 
 /// A device buffer of `kind` values.
 pub const Tensor = struct { ptr: u64, kind: Kind };

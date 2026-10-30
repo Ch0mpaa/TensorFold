@@ -36,6 +36,7 @@ pub fn project(o: Ops, x: Tensor, proj: Projection, m: usize, f32_out: bool) Err
             try denseRows(o, x, h.weight, out, m, proj.n, proj.k);
             return out;
         },
+        .nvfp4 => return error.UnsupportedQuantization,
     }
 }
 
@@ -46,6 +47,7 @@ pub fn projectGroup(o: Ops, x: Tensor, ps: []const Projection, m: usize, outs: [
     for (ps, ws[0..ps.len]) |pr, *w| switch (pr.handle) {
         .mlx => |h| w.* = affineOf(pr, h),
         .dense => return false,
+        .nvfp4 => return false,
     };
     return affineGroup(o, x, ws[0..ps.len], m, outs);
 }
@@ -55,6 +57,7 @@ pub fn projectRoutedAct(o: Ops, x: Tensor, proj: Projection, items: u64, count: 
     switch (proj.handle) {
         .mlx => |h| return affineRoutedAct(o, x, affineOf(proj, h), items, count, members, pairs, x_div, rows, limit),
         .dense => return null,
+        .nvfp4 => return null,
     }
 }
 
@@ -63,6 +66,7 @@ pub fn projectRelu2(o: Ops, x: Tensor, proj: Projection, m: usize, out: Tensor) 
     const h = switch (proj.handle) {
         .mlx => |h| h,
         .dense => return false,
+        .nvfp4 => return false,
     };
     const w = affineOf(proj, h);
     try w.check();
@@ -104,6 +108,7 @@ pub fn projectRoutedRelu2(
     const h = switch (proj.handle) {
         .mlx => |h| h,
         .dense => return false,
+        .nvfp4 => return false,
     };
     const w = affineOf(proj, h);
     try w.check();
@@ -142,10 +147,12 @@ pub fn projectRoutedPlainRelu2(
     const ha = switch (routed.handle) {
         .mlx => |h| h,
         .dense => return false,
+        .nvfp4 => return false,
     };
     const hb = switch (plain.handle) {
         .mlx => |h| h,
         .dense => return false,
+        .nvfp4 => return false,
     };
     const wa = affineOf(routed, ha);
     const wb = affineOf(plain, hb);
@@ -193,6 +200,7 @@ pub fn projectRouted(o: Ops, x: Tensor, proj: Projection, items: u64, count: usi
     switch (proj.handle) {
         .mlx => |h| return affineRouted(o, x, affineOf(proj, h), items, count, members, pairs, x_div, rows),
         .dense => return error.BadShape,
+        .nvfp4 => return error.UnsupportedQuantization,
     }
 }
 
@@ -201,6 +209,7 @@ pub fn embedRows(o: Ops, table: Projection, ids: u64, n: usize, out: Tensor) Err
     switch (table.handle) {
         .mlx => |h| return embedAffine(o, affineOf(table, h), ids, n, out),
         .dense => |h| try o.l.tf_embed_dense(f(h.weight), @ptrFromInt(ids), int(n), int(table.k), p(out.ptr), @backingInt(out.kind), o.stream),
+        .nvfp4 => return error.UnsupportedQuantization,
     }
 }
 

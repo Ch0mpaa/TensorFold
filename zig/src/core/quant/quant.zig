@@ -34,11 +34,12 @@ pub fn Module(comptime f: Format) type {
     return switch (f) {
         .mlx => mlx,
         .dense => dense,
+        .nvfp4 => nvfp4,
     };
 }
 
 /// The order a tensor is offered to the formats: the first that recognizes it reads it.
-const read_order = [_]Format{ .dense, .mlx };
+const read_order = [_]Format{ .dense, .nvfp4, .mlx };
 
 /// What a format module provides, checked at compile time.
 pub fn conforms(comptime M: type) void {
@@ -60,12 +61,14 @@ pub fn conforms(comptime M: type) void {
 pub const Config = union(Format) {
     mlx: mlx.Config,
     dense: dense.Config,
+    nvfp4: nvfp4.Config,
 
     /// The tensor's MLX width (the table's own, else the global one).
     pub fn width(c: Config, key: []const u8) error{UnsupportedQuantization}!mlx.Width {
         return switch (c) {
             .mlx => |q| q.width(key),
             .dense => error.UnsupportedQuantization,
+            .nvfp4 => error.UnsupportedQuantization,
         };
     }
 };
@@ -82,6 +85,7 @@ pub fn detect(a: Allocator, src: Sources) (Allocator.Error || error{UnsupportedQ
 pub const Host = union(Format) {
     mlx: mlx.Host,
     dense: dense.Host,
+    nvfp4: nvfp4.Host,
 
     /// Output rows N.
     pub fn rows(h: Host) usize {
@@ -145,6 +149,7 @@ pub fn sliceStack(a: Allocator, h: Host, r: Rank, part: usize) slice.Error!Host 
 pub const Device = union(Format) {
     mlx: mlx.Device,
     dense: dense.Device,
+    nvfp4: nvfp4.Device,
 };
 
 pub fn upload(u: Uploader, h: Host) !Device {
@@ -157,6 +162,7 @@ pub fn upload(u: Uploader, h: Host) !Device {
 pub const Handle = union(Format) {
     mlx: mlx.Matrix,
     dense: dense.Matrix,
+    nvfp4: nvfp4.Matrix,
 };
 
 /// One product (N, K): the format's handle and its shape. A stack is one expert's shape at the stack's addresses.
@@ -191,6 +197,7 @@ pub fn view(d: Device, stacked: bool) error{UnsupportedTables}!Projection {
 test "every format module provides the interface" {
     comptime conforms(mlx);
     comptime conforms(dense);
+    comptime conforms(nvfp4);
 }
 
 test "a projection knows its format and decoder" {
