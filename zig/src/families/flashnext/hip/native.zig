@@ -13,7 +13,7 @@ const worker = @import("worker.zig");
 
 pub const model_type = "qwen4_exp";
 /// The MLX affine checkpoints the plan admits; the HIP products read 2- to 8-bit codes in groups of 32 to 128.
-pub const formats: []const []const u8 = &.{ "mlx-q3g32", "mlx-q4g32", "mlx-q6g32", "modelopt-nvfp4" };
+pub const formats: []const []const u8 = &.{ "mlx-q3g32", "mlx-q4g32", "mlx-q6g32", "modelopt-nvfp4", "modelopt-fp8" };
 /// Positions a stream holds when neither --context nor the checkpoint's config names a window.
 pub const default_context: i64 = 32768;
 /// The engine cuts prompts itself.

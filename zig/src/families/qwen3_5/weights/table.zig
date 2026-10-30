@@ -91,6 +91,8 @@ pub const Table = struct {
             .mlx => |m| m,
             // NVFP4 has no per-tensor affine widths; the kernels read fixed 4-bit codes in groups of 16.
             .nvfp4 => return .{ .bits = 4, .group = 16 },
+            // Block-FP8 has no per-tensor affine widths; the kernels read fixed 8-bit codes in 128 x 128 blocks.
+            .fp8 => return .{ .bits = 8, .group = 128 },
             .dense => return error.UnsupportedQuantization,
         };
         if (q.overrides.get(key)) |w| return w orelse error.UnsupportedQuantization;

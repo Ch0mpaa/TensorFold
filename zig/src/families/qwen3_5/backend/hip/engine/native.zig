@@ -14,7 +14,7 @@ const worker = @import("worker.zig");
 const hip_lanes = @import("hip_lanes.zig");
 
 /// The MLX affine widths the family loads.
-const mlx_formats: []const []const u8 = &.{ "mlx-q2", "mlx-q3", "mlx-q4", "mlx-q5", "mlx-q6", "mlx-q8", "modelopt-nvfp4" };
+const mlx_formats: []const []const u8 = &.{ "mlx-q2", "mlx-q3", "mlx-q4", "mlx-q5", "mlx-q6", "mlx-q8", "modelopt-nvfp4", "modelopt-fp8" };
 
 /// The dense and the sparse checkpoints are two registry entries over one engine.
 pub fn Native(comptime type_name: []const u8) type {

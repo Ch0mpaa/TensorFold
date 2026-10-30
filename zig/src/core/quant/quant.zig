@@ -13,6 +13,7 @@ pub const experts = @import("experts.zig");
 /// FP8 and NVFP4 values and fp64 references; host only (no Format: their kernels' layouts are each backend's).
 pub const fp8 = @import("fp8.zig");
 pub const nvfp4 = @import("nvfp4.zig");
+pub const fp8_block = @import("fp8_block.zig");
 pub const widen = @import("widen.zig");
 
 const Allocator = std.mem.Allocator;
@@ -35,11 +36,12 @@ pub fn Module(comptime f: Format) type {
         .mlx => mlx,
         .dense => dense,
         .nvfp4 => nvfp4,
+        .fp8 => fp8_block,
     };
 }
 
 /// The order a tensor is offered to the formats: the first that recognizes it reads it.
-const read_order = [_]Format{ .dense, .nvfp4, .mlx };
+const read_order = [_]Format{ .dense, .nvfp4, .fp8, .mlx };
 
 /// What a format module provides, checked at compile time.
 pub fn conforms(comptime M: type) void {
@@ -62,6 +64,7 @@ pub const Config = union(Format) {
     mlx: mlx.Config,
     dense: dense.Config,
     nvfp4: nvfp4.Config,
+    fp8: fp8_block.Config,
 
     /// The tensor's MLX width (the table's own, else the global one).
     pub fn width(c: Config, key: []const u8) error{UnsupportedQuantization}!mlx.Width {
@@ -69,6 +72,7 @@ pub const Config = union(Format) {
             .mlx => |q| q.width(key),
             .dense => error.UnsupportedQuantization,
             .nvfp4 => error.UnsupportedQuantization,
+            .fp8 => error.UnsupportedQuantization,
         };
     }
 };
@@ -86,6 +90,7 @@ pub const Host = union(Format) {
     mlx: mlx.Host,
     dense: dense.Host,
     nvfp4: nvfp4.Host,
+    fp8: fp8_block.Host,
 
     /// Output rows N.
     pub fn rows(h: Host) usize {
@@ -150,6 +155,7 @@ pub const Device = union(Format) {
     mlx: mlx.Device,
     dense: dense.Device,
     nvfp4: nvfp4.Device,
+    fp8: fp8_block.Device,
 };
 
 pub fn upload(u: Uploader, h: Host) !Device {
@@ -163,6 +169,7 @@ pub const Handle = union(Format) {
     mlx: mlx.Matrix,
     dense: dense.Matrix,
     nvfp4: nvfp4.Matrix,
+    fp8: fp8_block.Matrix,
 };
 
 /// One product (N, K): the format's handle and its shape. A stack is one expert's shape at the stack's addresses.
@@ -198,6 +205,7 @@ test "every format module provides the interface" {
     comptime conforms(mlx);
     comptime conforms(dense);
     comptime conforms(nvfp4);
+    comptime conforms(fp8_block);
 }
 
 test "a projection knows its format and decoder" {
@@ -214,5 +222,6 @@ test {
     _ = experts;
     _ = fp8;
     _ = nvfp4;
+    _ = fp8_block;
     _ = widen;
 }

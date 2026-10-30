@@ -53,6 +53,8 @@ pub const Config = struct {
             .mlx => try table.width(""),
             // NVFP4 has fixed geometry (4-bit e2m1 codes, group of 16); dense weights have no bit width to declare.
             .nvfp4 => .{ .bits = 4, .group = 16 },
+            // Block-FP8 has no per-tensor affine widths; the kernels read fixed 8-bit codes in 128 x 128 blocks.
+            .fp8 => .{ .bits = 8, .group = 128 },
             .dense => .{ .bits = 16, .group = 1 },
         };
         const spec = try shared.geometry(tower, w.bits, w.group);

@@ -30,7 +30,9 @@ pub fn conv(a: std.mem.Allocator, t: *const Table, key: []const u8) Error!Tensor
     if (w.rank == 3 and w.shape[2] == 1) {
         w.rank = 2;
     } else if (w.rank == 3 and w.shape[1] == 1) {
-        return refuse(key, "still in the unsanitized (channels, 1, kernel) layout");
+        // (channels, 1, kernel) stores bytes identical to (channels, kernel); squeeze middle dim.
+        w.shape[1] = w.shape[2];
+        w.rank = 2;
     }
     if (w.rank != 2) return refuse(key, "conv weight must be (channels, kernel)");
     return w;

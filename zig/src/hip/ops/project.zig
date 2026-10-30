@@ -40,7 +40,8 @@ pub fn project(o: Ops, x: Tensor, proj: Projection, m: usize, f32_out: bool) Err
             try denseRows(o, x, h.weight, out, m, proj.n, proj.k);
             return out;
         },
-        .nvfp4 => return error.UnsupportedQuantization,
+        .nvfp4 => return projectNvfp4(o, x, proj, m, f32_out),
+        .fp8 => return projectFp8(o, x, proj, m, f32_out),
     }
 }
 
@@ -52,6 +53,7 @@ pub fn projectGroup(o: Ops, x: Tensor, ps: []const Projection, m: usize, outs: [
         .mlx => |h| w.* = affineOf(pr, h),
         .dense => return false,
         .nvfp4 => return false,
+        .fp8 => return false,
     };
     return affineGroup(o, x, ws[0..ps.len], m, outs);
 }
@@ -62,6 +64,7 @@ pub fn projectRoutedAct(o: Ops, x: Tensor, proj: Projection, items: u64, count: 
         .mlx => |h| return affineRoutedAct(o, x, affineOf(proj, h), items, count, members, pairs, x_div, rows, limit),
         .dense => return null,
         .nvfp4 => return null,
+        .fp8 => return null,
     }
 }
 
@@ -71,6 +74,7 @@ pub fn projectRelu2(o: Ops, x: Tensor, proj: Projection, m: usize, out: Tensor) 
         .mlx => |h| h,
         .dense => return false,
         .nvfp4 => return false,
+        .fp8 => return false,
     };
     const w = affineOf(proj, h);
     try w.check();
@@ -113,6 +117,7 @@ pub fn projectRoutedRelu2(
         .mlx => |h| h,
         .dense => return false,
         .nvfp4 => return false,
+        .fp8 => return false,
     };
     const w = affineOf(proj, h);
     try w.check();
@@ -152,11 +157,13 @@ pub fn projectRoutedPlainRelu2(
         .mlx => |h| h,
         .dense => return false,
         .nvfp4 => return false,
+        .fp8 => return false,
     };
     const hb = switch (plain.handle) {
         .mlx => |h| h,
         .dense => return false,
         .nvfp4 => return false,
+        .fp8 => return false,
     };
     const wa = affineOf(routed, ha);
     const wb = affineOf(plain, hb);
@@ -205,6 +212,7 @@ pub fn projectRouted(o: Ops, x: Tensor, proj: Projection, items: u64, count: usi
         .mlx => |h| return affineRouted(o, x, affineOf(proj, h), items, count, members, pairs, x_div, rows),
         .dense => return error.BadShape,
         .nvfp4 => return projectRoutedNvfp4(o, x, proj, items, count, members, pairs, x_div, rows, 0),
+        .fp8 => return projectRoutedFp8(o, x, proj, items, count, members, pairs, x_div, rows, 0),
     }
 }
 
@@ -229,12 +237,13 @@ pub fn projectRoutedNvfp4(
     if (x.kind != .bf16) return error.BadShape;
     if (proj.k == 0 or proj.n == 0 or proj.k % 32 != 0 or proj.n % 32 != 0) return error.BadShape;
     const n: usize = proj.n;
-    const kg: c_int = int(proj.k / 32);
-    const nb: c_int = int(proj.n / 32);
+    const K: c_int = int(proj.k);
+    const N: c_int = int(proj.n);
     const out = try o.arena.take(pairs * n * @sizeOf(f32));
     const x_ptr: C = @ptrFromInt(x.ptr);
-    const w_ptr: C = @ptrFromInt(h.weight);
-    const g_ptr: C = @ptrFromInt(h.global);
+    const codes_ptr: C = @ptrFromInt(h.weight);
+    const scales_ptr: C = @ptrFromInt(h.scale);
+    const globals_ptr: C = @ptrFromInt(h.global);
     const items_ptr: CI = @ptrFromInt(items);
     const members_ptr: CI = @ptrFromInt(members);
     const out_ptr: F = @ptrFromInt(out);
@@ -244,19 +253,134 @@ pub fn projectRoutedNvfp4(
     if (o.prefill) {
         try o.l.nvfp4ExpertPrompt(
             x_ptr, x_stride, slots,
-            w_ptr, g_ptr,
-            kg, nb,
+            codes_ptr, scales_ptr, globals_ptr,
+            K, N,
             items_ptr, null, members_ptr,
-            out_ptr, int(n), limit, -1,
+            out_ptr, limit, -1,
             item_count, int(rows), o.stream,
         );
     } else {
         try o.l.nvfp4ExpertRows(
             x_ptr, x_stride, slots,
-            w_ptr, g_ptr,
-            kg, nb,
+            codes_ptr, scales_ptr, globals_ptr,
+            K, N,
             items_ptr, null, members_ptr,
-            out_ptr, int(n), limit, -1,
+            out_ptr, limit, -1,
+            item_count, o.stream,
+        );
+    }
+    return out;
+}
+
+/// Non-routed NVFP4 projection: `[m, K]` bf16 x NVFP4 `[N, K]`.
+/// Reference kernel decodes to fp32; cast to `x.kind` when `f32_out` is false, matching `affine`.
+pub fn projectNvfp4(o: Ops, x: Tensor, proj: Projection, m: usize, f32_out: bool) Error!Tensor {
+    const h = switch (proj.handle) {
+        .nvfp4 => |nh| nh,
+        else => return error.BadShape,
+    };
+    if (x.kind != .bf16) return error.BadShape;
+    if (m == 0 or proj.k == 0 or proj.n == 0 or proj.n % 32 != 0 or proj.k % 32 != 0) return error.BadShape;
+    const n: usize = proj.n;
+    const K: c_int = int(proj.k);
+    const N: c_int = int(proj.n);
+    const out = try o.arena.take(m * n * @sizeOf(f32));
+    try o.l.nvfp4Rows(
+        @as(C, @ptrFromInt(x.ptr)),
+        int(proj.k),
+        @as(C, @ptrFromInt(h.weight)),
+        @as(C, @ptrFromInt(h.scale)),
+        @as(C, @ptrFromInt(h.global)),
+        K,
+        N,
+        @as(F, @ptrFromInt(out)),
+        int(m),
+        o.stream,
+    );
+    if (f32_out) return .{ .ptr = out, .kind = .f32 };
+    const narrow = try o.arena.take(m * n * x.kind.size());
+    try o.cast(.{ .ptr = out, .kind = .f32 }, .{ .ptr = narrow, .kind = x.kind }, m * n);
+    return .{ .ptr = narrow, .kind = x.kind };
+}
+
+/// Non-routed FP8 (NVIDIA ModelOpt block-scaled, weight-only) projection: `[m, K]` bf16 x FP8 `[N, K]`.
+/// Reference kernel decodes to fp32; cast to `x.kind` when `f32_out` is false, matching `affine`.
+pub fn projectFp8(o: Ops, x: Tensor, proj: Projection, m: usize, f32_out: bool) Error!Tensor {
+    const h = switch (proj.handle) {
+        .fp8 => |fh| fh,
+        else => return error.BadShape,
+    };
+    if (x.kind != .bf16) return error.BadShape;
+    if (m == 0 or proj.k == 0 or proj.n == 0 or proj.n % 32 != 0) return error.BadShape;
+    const n: usize = proj.n;
+    const K: c_int = int(proj.k);
+    const N: c_int = int(proj.n);
+    const out = try o.arena.take(m * n * @sizeOf(f32));
+    try o.l.fp8Rows(
+        @as(C, @ptrFromInt(x.ptr)),
+        int(proj.k),
+        @as(C, @ptrFromInt(h.weight)),
+        h.input_scale,
+        K,
+        N,
+        @as(F, @ptrFromInt(out)),
+        int(m),
+        o.stream,
+    );
+    if (f32_out) return .{ .ptr = out, .kind = .f32 };
+    const narrow = try o.arena.take(m * n * x.kind.size());
+    try o.cast(.{ .ptr = out, .kind = .f32 }, .{ .ptr = narrow, .kind = x.kind }, m * n);
+    return .{ .ptr = narrow, .kind = x.kind };
+}
+
+/// FP8 routed-expert decode (software e4m3 dequant, fp32 accumulate): out fp32 [pairs, N].
+/// Mirrors `projectRoutedNvfp4`. `limit` is the SwiGLU clamp (unused by the down epilogue).
+pub fn projectRoutedFp8(
+    o: Ops,
+    x: Tensor,
+    proj: Projection,
+    items: u64,
+    count: usize,
+    members: u64,
+    pairs: usize,
+    x_div: usize,
+    rows: usize,
+    limit: f32,
+) Error!u64 {
+    const h = switch (proj.handle) {
+        .fp8 => |fh| fh,
+        else => return error.BadShape,
+    };
+    if (x.kind != .bf16) return error.BadShape;
+    if (proj.k == 0 or proj.n == 0 or proj.n % 32 != 0) return error.BadShape;
+    const n: usize = proj.n;
+    const K: c_int = int(proj.k);
+    const N: c_int = int(proj.n);
+    const out = try o.arena.take(pairs * n * @sizeOf(f32));
+    const x_ptr: C = @ptrFromInt(x.ptr);
+    const w_ptr: C = @ptrFromInt(h.weight);
+    const items_ptr: CI = @ptrFromInt(items);
+    const members_ptr: CI = @ptrFromInt(members);
+    const out_ptr: F = @ptrFromInt(out);
+    const x_stride: c_int = int(proj.k);
+    const slots: c_int = int(x_div);
+    const item_count: c_int = int(count);
+    if (o.prefill) {
+        try o.l.fp8ExpertPrompt(
+            x_ptr, x_stride, slots,
+            w_ptr, h.input_scale,
+            K, N,
+            items_ptr, null, members_ptr,
+            out_ptr, limit, -1,
+            item_count, int(rows), o.stream,
+        );
+    } else {
+        try o.l.fp8ExpertRows(
+            x_ptr, x_stride, slots,
+            w_ptr, h.input_scale,
+            K, N,
+            items_ptr, null, members_ptr,
+            out_ptr, limit, -1,
             item_count, o.stream,
         );
     }
@@ -269,6 +393,7 @@ pub fn embedRows(o: Ops, table: Projection, ids: u64, n: usize, out: Tensor) Err
         .mlx => |h| return embedAffine(o, affineOf(table, h), ids, n, out),
         .dense => |h| try o.l.tf_embed_dense(f(h.weight), @ptrFromInt(ids), int(n), int(table.k), p(out.ptr), @backingInt(out.kind), o.stream),
         .nvfp4 => return error.UnsupportedQuantization,
+        .fp8 => return error.UnsupportedQuantization,
     }
 }
 
