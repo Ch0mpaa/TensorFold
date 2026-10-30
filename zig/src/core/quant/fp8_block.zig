@@ -108,7 +108,9 @@ pub fn read(a: Allocator, t: anytype, key: []const u8) !Host {
     if (scale.numel() != 1) return refuse(key, "fp8 block-scaled scales not yet supported on this backend");
     const w_scale = try readScalarF32(scale);
     const i_scale = try readOptionalScalarF32(t, key, ".input_scale", 1.0);
-    return .{ .weight = weight, .scale = scale, .input_scale = w_scale * i_scale };
+    const combined = w_scale * i_scale;
+    std.log.info("fp8.read: {s} w={d} ws={e} is={e}", .{ key, weight.bytes.len, w_scale, i_scale });
+    return .{ .weight = weight, .scale = scale, .input_scale = combined };
 }
 
 /// Output rows N of a projection (a stack's expert count is the leading dim).

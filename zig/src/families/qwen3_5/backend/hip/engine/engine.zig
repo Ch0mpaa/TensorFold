@@ -145,24 +145,32 @@ pub const Engine = struct {
         const rows = e.o.batch_rows;
         const prompt_rows = @min(e.o.prompt_rows, capacity);
         const count = if (pool_pages > 0) pool_pages else default_streams * pages.pagesFor(capacity) + pages.pagesFor(rows);
+        std.log.info("size: start rows={d} prompt_rows={d} capacity={d} pool_pages={d}", .{ rows, prompt_rows, capacity, count });
         const arenas = try e.arenaBytes(rows, prompt_rows, capacity);
+        std.log.info("size: arenas rounds={d} prompts={d}", .{ arenas[0], arenas[1] });
         e.o.capacity = capacity;
         e.o.prompt_rows = prompt_rows;
         const before = hip.usage(false).device;
         e.rounds = try hip.Arena.init(&e.driver, arenas[0]);
         errdefer e.rounds.deinit();
+        std.log.info("size: rounds arena allocated {d} bytes", .{arenas[0]});
         e.prompts = try hip.Arena.init(&e.driver, arenas[1]);
         errdefer e.prompts.deinit();
+        std.log.info("size: prompts arena allocated {d} bytes", .{arenas[1]});
         e.ids = try hip.HostBuffer.alloc(&e.driver, prompt_rows * 4);
         errdefer e.ids.free();
         e.ids_dev = try hip.DeviceBuffer.alloc(&e.driver, prompt_rows * 4);
         errdefer e.ids_dev.free();
+        std.log.info("size: ids host+device {d} bytes each", .{prompt_rows * 4});
         e.drawer = try draw.Drawer.init(e.gpa, &e.driver, e.dtype, e.bridge.model.head.n * e.o.world, rows);
         errdefer e.drawer.deinit();
+        std.log.info("size: drawer init done", .{});
         e.pool = try pages.Pool.init(e.gpa, &e.driver, &e.bridge.model, count, e.o.rank == 0);
         errdefer e.pool.deinit();
+        std.log.info("size: pool init done ({d} pages)", .{count});
         e.round = try lane_round.State.init(e);
         errdefer e.round.deinit(e);
+        std.log.info("size: round state init done", .{});
         const held = hip.usage(false).device - before;
         const planned = e.sizedBytes(arenas, rows, prompt_rows, count);
         if (held != planned) {
@@ -170,6 +178,7 @@ pub const Engine = struct {
             return error.SizeMismatch;
         }
         e.sized = true;
+        std.log.info("size: COMPLETE held={d} planned={d}", .{ held, planned });
     }
 
     /// The rounds and prompts arenas: the forwards counted at their largest shapes for `rows` and `prompt_rows`.

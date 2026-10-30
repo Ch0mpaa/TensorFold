@@ -110,6 +110,7 @@ pub fn read(a: Allocator, t: anytype, key: []const u8) !Host {
     if (weight.dtype != .u8 or scale.dtype != .f8_e4m3) return refuse(key, "nvfp4 expects u8 codes and e4m3 scales");
     if (weight.rank < 2 or weight.rank != scale.rank) return refuse(key, "nvfp4 weight and scale ranks differ");
     const global = try readGlobal(a, t, key, stackCount(weight));
+    std.log.info("nvfp4.read: {s} w={d} s={d} g={d} stack={d}", .{ key, weight.bytes.len, scale.bytes.len, global.len, stackCount(weight) });
     return .{ .weight = weight, .scale = scale, .global = global };
 }
 

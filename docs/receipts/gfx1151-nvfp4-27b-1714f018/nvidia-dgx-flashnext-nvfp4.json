@@ -1,0 +1,219 @@
+{
+  "base": "http://192.168.60.228:8888/v1",
+  "model": "qwen-flash-uncensored",
+  "tag": "nvidia-dgx-flashnext-nvfp4",
+  "summary": {
+    "prose-short": {
+      "n": 2,
+      "prompt_tokens": 30.0,
+      "completion_tokens": 54.0,
+      "ttft_ms_p50": 218.99999998277053,
+      "ttft_ms_p90": 218.99999998277053,
+      "decode_tok_s_p50": 38.40682788004145,
+      "decode_tok_s_p90": 38.40682788004145
+    },
+    "prose-med": {
+      "n": 2,
+      "prompt_tokens": 37.0,
+      "completion_tokens": 256.0,
+      "ttft_ms_p50": 226.49999998975545,
+      "ttft_ms_p90": 233.29999998677522,
+      "decode_tok_s_p50": 41.13799043800124,
+      "decode_tok_s_p90": 41.92289259232379
+    },
+    "code-short": {
+      "n": 2,
+      "prompt_tokens": 45.0,
+      "completion_tokens": 128.0,
+      "ttft_ms_p50": 234.49999999138527,
+      "ttft_ms_p90": 234.89999998710118,
+      "decode_tok_s_p50": 63.257602400562924,
+      "decode_tok_s_p90": 63.445171273681254
+    },
+    "code-med": {
+      "n": 2,
+      "prompt_tokens": 48.0,
+      "completion_tokens": 384.0,
+      "ttft_ms_p50": 218.50000000267755,
+      "ttft_ms_p90": 230.8999999979278,
+      "decode_tok_s_p50": 57.15415843502541,
+      "decode_tok_s_p90": 57.47399715469043
+    },
+    "reason": {
+      "n": 2,
+      "prompt_tokens": 55.0,
+      "completion_tokens": 128.0,
+      "ttft_ms_p50": 265.4999999940628,
+      "ttft_ms_p90": 315.4999999824213,
+      "decode_tok_s_p50": 49.657413676305936,
+      "decode_tok_s_p90": 50.37382080782688
+    },
+    "prefill-long": {
+      "n": 2,
+      "prompt_tokens": 2441.0,
+      "completion_tokens": 21.0,
+      "ttft_ms_p50": 1031.0000000026776,
+      "ttft_ms_p90": 1043.7999999936437,
+      "decode_tok_s_p50": 26.105438497872207,
+      "decode_tok_s_p90": 26.300134123892622
+    }
+  },
+  "runs": [
+    {
+      "ttft_ms": 218.99999998277053,
+      "total_ms": 1625.0,
+      "decode_ms": 1406.0000000172295,
+      "prompt_tokens": 30,
+      "completion_tokens": 54,
+      "decode_tok_s": 38.40682788004145,
+      "chars": 344,
+      "sample_head": "Unlike RNNs, which process data sequentially and suffer from vanishing gradient ",
+      "name": "prose-short",
+      "rep": 0,
+      "max_tokens_asked": 64
+    },
+    {
+      "ttft_ms": 218.99999998277053,
+      "total_ms": 1625.0,
+      "decode_ms": 1406.0000000172295,
+      "prompt_tokens": 30,
+      "completion_tokens": 54,
+      "decode_tok_s": 38.40682788004145,
+      "chars": 344,
+      "sample_head": "Unlike RNNs, which process data sequentially and suffer from vanishing gradient ",
+      "name": "prose-short",
+      "rep": 1,
+      "max_tokens_asked": 64
+    },
+    {
+      "ttft_ms": 234.99999998603016,
+      "total_ms": 6609.99999998603,
+      "decode_ms": 6375.0,
+      "prompt_tokens": 37,
+      "completion_tokens": 256,
+      "decode_tok_s": 40.15686274509804,
+      "chars": 1531,
+      "sample_head": "In standard transformer inference, the Key-Value (KV) cache stores intermediate ",
+      "name": "prose-med",
+      "rep": 0,
+      "max_tokens_asked": 256
+    },
+    {
+      "ttft_ms": 217.99999999348074,
+      "total_ms": 6296.0000000020955,
+      "decode_ms": 6078.000000008615,
+      "prompt_tokens": 37,
+      "completion_tokens": 256,
+      "decode_tok_s": 42.11911813090443,
+      "chars": 1531,
+      "sample_head": "In standard transformer inference, the Key-Value (KV) cache stores intermediate ",
+      "name": "prose-med",
+      "rep": 1,
+      "max_tokens_asked": 256
+    },
+    {
+      "ttft_ms": 234.99999998603016,
+      "total_ms": 2266.0000000032596,
+      "decode_ms": 2031.0000000172295,
+      "prompt_tokens": 45,
+      "completion_tokens": 128,
+      "decode_tok_s": 63.02314130916501,
+      "chars": 481,
+      "sample_head": "```python\ndef longest_run(xs: list[int]) -> int:\n    \"\"\"\n    Returns the length ",
+      "name": "code-short",
+      "rep": 0,
+      "max_tokens_asked": 128
+    },
+    {
+      "ttft_ms": 233.99999999674037,
+      "total_ms": 2250.0,
+      "decode_ms": 2016.0000000032596,
+      "prompt_tokens": 45,
+      "completion_tokens": 128,
+      "decode_tok_s": 63.492063491960835,
+      "chars": 481,
+      "sample_head": "```python\ndef longest_run(xs: list[int]) -> int:\n    \"\"\"\n    Returns the length ",
+      "name": "code-short",
+      "rep": 1,
+      "max_tokens_asked": 128
+    },
+    {
+      "ttft_ms": 233.99999999674037,
+      "total_ms": 7000.0,
+      "decode_ms": 6766.00000000326,
+      "prompt_tokens": 48,
+      "completion_tokens": 384,
+      "decode_tok_s": 56.75436003544413,
+      "chars": 1289,
+      "sample_head": "```zig\nconst std = @import(\"std\");\n\npub fn meanOfColumn(allocator: std.mem.Alloc",
+      "name": "code-med",
+      "rep": 0,
+      "max_tokens_asked": 384
+    },
+    {
+      "ttft_ms": 203.00000000861473,
+      "total_ms": 6875.0,
+      "decode_ms": 6671.999999991385,
+      "prompt_tokens": 48,
+      "completion_tokens": 384,
+      "decode_tok_s": 57.55395683460669,
+      "chars": 1289,
+      "sample_head": "```zig\nconst std = @import(\"std\");\n\npub fn meanOfColumn(allocator: std.mem.Alloc",
+      "name": "code-med",
+      "rep": 1,
+      "max_tokens_asked": 384
+    },
+    {
+      "ttft_ms": 203.00000000861473,
+      "total_ms": 2828.0000000086147,
+      "decode_ms": 2625.0,
+      "prompt_tokens": 55,
+      "completion_tokens": 128,
+      "decode_tok_s": 48.76190476190476,
+      "chars": 476,
+      "sample_head": "To determine when the two trains meet, we can use the concept of **relative spee",
+      "name": "reason",
+      "rep": 0,
+      "max_tokens_asked": 128
+    },
+    {
+      "ttft_ms": 327.9999999795109,
+      "total_ms": 2859.99999998603,
+      "decode_ms": 2532.0000000065193,
+      "prompt_tokens": 55,
+      "completion_tokens": 128,
+      "decode_tok_s": 50.55292259070712,
+      "chars": 476,
+      "sample_head": "To determine when the two trains meet, we can use the concept of **relative spee",
+      "name": "reason",
+      "rep": 1,
+      "max_tokens_asked": 128
+    },
+    {
+      "ttft_ms": 1015.0000000139698,
+      "total_ms": 1812.000000005355,
+      "decode_ms": 796.9999999913853,
+      "prompt_tokens": 2441,
+      "completion_tokens": 21,
+      "decode_tok_s": 26.348808030397727,
+      "chars": 139,
+      "sample_head": "The provided text consists entirely of repeated placeholder content and contains",
+      "name": "prefill-long",
+      "rep": 0,
+      "max_tokens_asked": 32
+    },
+    {
+      "ttft_ms": 1046.9999999913853,
+      "total_ms": 1858.9999999967404,
+      "decode_ms": 812.0000000053551,
+      "prompt_tokens": 2441,
+      "completion_tokens": 21,
+      "decode_tok_s": 25.862068965346683,
+      "chars": 139,
+      "sample_head": "The provided text consists entirely of repeated placeholder content and contains",
+      "name": "prefill-long",
+      "rep": 1,
+      "max_tokens_asked": 32
+    }
+  ]
+}
