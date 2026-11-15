@@ -1,0 +1,45 @@
+{
+  "stage": "6b-gate2-baseline",
+  "endpoint": "http://100.90.145.67:8020",
+  "server_model_id": "GLM-5.3-Flash",
+  "model_requested": "GLM-5.3-Flash",
+  "prompt": "The answer to life, the universe, and everything is",
+  "max_tokens": 16,
+  "seed": 42,
+  "greedy": {
+    "temperature": 0.0,
+    "top_p": 1.0
+  },
+  "run_1": {
+    "wall_s": 0.5112,
+    "text": "**42**\n\nThis is, of course, the famous answer from Douglas Adams's",
+    "usage": {
+      "prompt_tokens": 24,
+      "completion_tokens": 16,
+      "total_tokens": 40,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    }
+  },
+  "run_2": {
+    "wall_s": 0.4934,
+    "text": "**42**\n\nThis is, of course, the famous answer from Douglas Adams's",
+    "usage": {
+      "prompt_tokens": 24,
+      "completion_tokens": 16,
+      "total_tokens": 40,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      },
+      "completion_tokens_details": {
+        "reasoning_tokens": 0
+      }
+    }
+  },
+  "deterministic_match": true,
+  "note": "Baseline captured against the live TensorFold binary on the GB10 DGX Spark. Hardware: NVIDIA GB10, sm_121, CUDA 13.4 driver. This is the existing CUDA implementation serving; see docs/tfold-stage6b-conformance.md \u00a7 Gate 2 for the full context."
+}

@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://screwedup.tech/schemas/tfold-v0.2.json",
+  "title": "tfold v0.2 header",
+  "description": "JSON header carried inside a .tfold v0.2 model file. Adds OPTIONAL quant.overrides and quant.groups vs v0.1; everything else identical. v0.1 files remain valid v0.1 but not v0.2 (different magic). v0.2 files are rejected by v0.1 readers with TFOLD_VERSION_UNSUPPORTED.",
+  "type": "object",
+  "required": ["tfold", "model", "tokenizer", "quant", "tensors"],
+  "additionalProperties": false,
+
+  "properties": {
+    "tfold": { "$ref": "#/$defs/tfold" },
+    "model": { "$ref": "#/$defs/model" },
+    "tokenizer": { "$ref": "#/$defs/tokenizer" },
+    "quant": { "$ref": "#/$defs/quant" },
+    "tensors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1048575,
+      "items": { "$ref": "#/$defs/tensor" }
+    }
+  },
+
+  "$defs": {
+
+    "sha256_hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+
+    "tfold": {
+      "type": "object",
+      "required": ["version", "writer"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string", "pattern": "^0\\.2$" },
+        "writer":  { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+
+    "model": {
+      "type": "object",
+      "required": ["name", "arch", "parameters", "vocab_size", "context_length", "source_sha256", "source_url"],
+      "additionalProperties": false,
+      "properties": {
+        "name":           { "type": "string", "minLength": 1, "maxLength": 128 },
+        "arch":           { "type": "string", "enum": ["qwen3", "qwen3_moe", "llama", "glm", "gemma3"] },
+        "parameters":     { "type": "integer", "minimum": 1 },
+        "vocab_size":     { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "context_length": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "source_sha256":  { "$ref": "#/$defs/sha256_hex" },
+        "source_url":     { "type": "string", "minLength": 1, "maxLength": 512 },
+        "tensor_count":   { "type": "integer", "minimum": 1, "description": "Optional; must equal tensors.length when present." }
+      }
+    },
+
+    "tokenizer": {
+      "type": "object",
+      "required": ["type", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "type":   { "type": "string", "enum": ["tiktoken", "sentencepiece", "bpe", "unigram"] },
+        "sha256": { "$ref": "#/$defs/sha256_hex" }
+      }
+    },
+
+    "quant": {
+      "type": "object",
+      "required": ["scheme", "bits_per_weight", "block_size"],
+      "additionalProperties": false,
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "enum": ["fp16", "bf16", "fp32", "exl3", "exl3_mcg", "exl3_mul1", "exl3_3inst", "gguf_q4_0", "gguf_q4_k_m", "gguf_q8_0"]
+        },
+        "bits_per_weight": { "type": "number", "minimum": 0.1, "maximum": 32 },
+        "block_size":      { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "codebook_sha256": { "$ref": "#/$defs/sha256_hex" },
+        "codebook_offset": { "type": "integer", "minimum": 0 },
+        "codebook_nbytes": { "type": "integer", "minimum": 0 },
+
+        "overrides": {
+          "type": "array",
+          "maxItems": 65535,
+          "items": {
+            "type": "object",
+            "required": ["tensor_name"],
+            "additionalProperties": false,
+            "properties": {
+              "tensor_name":     { "type": "string", "minLength": 1, "maxLength": 256 },
+              "scheme":          { "type": "string", "enum": ["fp16", "bf16", "fp32", "exl3", "exl3_mcg", "exl3_mul1", "exl3_3inst", "gguf_q4_0", "gguf_q4_k_m", "gguf_q8_0"] },
+              "bits_per_weight": { "type": "number", "minimum": 0.1, "maximum": 32 },
+              "block_size":      { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+            }
+          }
+        },
+
+        "groups": {
+          "type": "array",
+          "maxItems": 65535,
+          "items": {
+            "type": "object",
+            "required": ["name", "trellis", "suh", "svh", "K", "N"],
+            "additionalProperties": false,
+            "properties": {
+              "name":    { "type": "string", "minLength": 1, "maxLength": 256 },
+              "trellis": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "suh":     { "type": "string", "minLength": 1, "maxLength": 256 },
+              "svh":     { "type": "string", "minLength": 1, "maxLength": 256 },
+              "bias":    { "type": ["string", "null"] },
+              "K":       { "type": "integer", "minimum": 1 },
+              "N":       { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
+
+    "tensor": {
+      "type": "object",
+      "required": ["name", "dtype", "shape", "offset", "nbytes", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(?:__codebook__|(?!__)[a-zA-Z0-9._]+)$"
+        },
+        "dtype": {
+          "type": "string",
+          "enum": ["fp16", "bf16", "fp32", "u8", "i8", "u16", "i16", "u32", "i32", "exl3_tile", "exl3_mcg_tile", "exl3_mul1_tile", "exl3_3inst_tile"]
+        },
+        "shape": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 8,
+          "items": { "type": "integer", "minimum": 1, "maximum": 4294967295 }
+        },
+        "offset": { "type": "integer", "minimum": 0 },
+        "nbytes": { "type": "integer", "minimum": 1 },
+        "sha256": { "$ref": "#/$defs/sha256_hex" }
+      }
+    }
+  }
+}

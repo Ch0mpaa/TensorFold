@@ -20,11 +20,15 @@ JSON schema live in docs/tfold-format-v0.md and schemas/tfold-v0.json.
 
 from ._errors import SpecError, TfoldError
 from ._io import read, write
+from ._v02 import read_v02, write_v02, resolve_tensor_scheme
 from ._version import WRITER_ID, SPEC_VERSION_STR, SPEC_VERSION_U32
 
 __all__ = [
     "read",
     "write",
+    "read_v02",
+    "write_v02",
+    "resolve_tensor_scheme",
     "SpecError",
     "TfoldError",
     "WRITER_ID",

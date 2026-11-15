@@ -60,4 +60,15 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tfold native loader + EXL3 conversion tests");
     test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_exl3.step);
+
+    // Stage 6b Gate 3 — v0.2 tests
+    const v02_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("v02_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const run_v02 = b.addRunArtifact(v02_tests);
+    test_step.dependOn(&run_v02.step);
 }
