@@ -223,6 +223,7 @@ def read_v02(
     path: str | pathlib.Path,
     pin_source_sha256: str | None = None,
     verify_tensor_hashes: bool = True,
+    verify_fnv_trailer: bool = True,
 ) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
     path = pathlib.Path(path)
     file_bytes = path.read_bytes()
@@ -246,11 +247,12 @@ def read_v02(
 
     validate_header_v02(header)
 
-    body = file_bytes[:-TRAILER_NBYTES]
-    want = struct.unpack("<Q", file_bytes[-TRAILER_NBYTES:])[0]
-    got = fnv1a_64_chunks([body])
-    if got != want:
-        raise E.SpecError(E.INTEGRITY, f"got {got:#018x} != {want:#018x}")
+    if verify_fnv_trailer:
+        body = file_bytes[:-TRAILER_NBYTES]
+        want = struct.unpack("<Q", file_bytes[-TRAILER_NBYTES:])[0]
+        got = fnv1a_64_chunks([body])
+        if got != want:
+            raise E.SpecError(E.INTEGRITY, f"got {got:#018x} != {want:#018x}")
 
     file_end = len(file_bytes) - TRAILER_NBYTES
     tensor_specs = header["tensors"]

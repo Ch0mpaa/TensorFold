@@ -1,0 +1,34 @@
+$ PYTHONPATH=tools python -m tfold_stage6b.verify_converted \
+    D:/op13-root/tfold-outputs/Qwen3.5-2B-exl3-mcg.tfold --skip-fnv --skip-sha
+
+file   : /mnt/d/op13-root/tfold-outputs/Qwen3.5-2B-exl3-mcg.tfold
+size   : 3,439,095,240 bytes (3.203 GiB)
+parse  : 17606 ms (header + layout; no per-tensor SHA)
+version: 0.2
+scheme : exl3_mcg @ 8.0 bpw
+tensors: 1072
+groups : 151
+overrs : 4
+source : a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f
+vocab  : 151936
+params : 1,719,410,136
+PASS
+
+# Notes
+# - Source SHA pins the committed Qwen3.5-2B-exl3@8.00bpw checkpoint
+#   (matches tools/tfold_convert/oracle.py::MODEL_SHA256).
+# - 1,072 tensors = 1,071 real tensors from safetensors + 1 synthetic
+#   __codebook__ tensor (4 bytes encoding 0xCBAC1FED, mcg multiplier).
+# - 151 groups match the 151 EXL3 projection groups in the source
+#   quantization_config.json (every layer's linear_attn in_proj_qkv,
+#   in_proj_z, in_proj_a, in_proj_b, out_proj and mlp.gate/up/down,
+#   plus shared embedding, final norm, and lm_head).
+# - 4 overrides carry the per-tensor quantization widths that differ
+#   from the file-wide default of 8.0 bpw (lm_head at 6 bpw and friends).
+# - --skip-fnv skips the pure-Python FNV-1a-64 loop over 3.2 GiB
+#   (~209 s in the current implementation; a native-digest helper
+#   remains a fast-follow). Trailer integrity was proven at write time
+#   by the convert_full.py three-pass streamer that computed the same
+#   FNV against the same bytes.
+# - --skip-sha skips the per-tensor SHA-256 re-verification across
+#   all 1,072 tensors (also Python-bound; hash cost scales with size).

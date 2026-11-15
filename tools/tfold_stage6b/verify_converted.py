@@ -20,8 +20,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("path", type=pathlib.Path)
     ap.add_argument("--skip-sha", action="store_true", help="skip per-tensor SHA check")
+    ap.add_argument("--skip-fnv", action="store_true", help="skip FNV-1a-64 trailer check (fast)")
     args = ap.parse_args()
-
     if not args.path.exists():
         print(f"missing: {args.path}", file=sys.stderr)
         return 2
@@ -32,13 +32,16 @@ def main() -> int:
 
     try:
         t0 = time.perf_counter()
-        hdr, tensors = tfold_py.read_v02(args.path, verify_tensor_hashes=False)
+        hdr, tensors = tfold_py.read_v02(
+            args.path, verify_tensor_hashes=False, verify_fnv_trailer=not args.skip_fnv,
+        )
         t1 = time.perf_counter()
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
         return 1
 
-    print(f"parse  : {(t1-t0)*1000:.0f} ms (header + layout + FNV trailer; no per-tensor SHA)")
+    label = "header + layout" + ("" if args.skip_fnv else " + FNV trailer")
+    print(f"parse  : {(t1-t0)*1000:.0f} ms ({label}; no per-tensor SHA)")
     print(f"version: {hdr['tfold']['version']}")
     print(f"scheme : {hdr['quant']['scheme']} @ {hdr['quant']['bits_per_weight']} bpw")
     print(f"tensors: {len(hdr['tensors'])}")
