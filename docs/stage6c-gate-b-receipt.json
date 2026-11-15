@@ -1,0 +1,45 @@
+{
+  "stage": "6c",
+  "gate": "B",
+  "description": "Real Qwen3.5-2B inference from the TFOLD v0.2 checkpoint via materializer, byte-identical to Gate A",
+  "timestamp_utc": "2026-11-15T03:22:00Z",
+  "approach": {
+    "chosen": "materialize-then-load",
+    "rationale": "The upstream TensorFold Checkpoint seam needs a tagged BackedFile union to natively mmap .tfold files (design doc: docs/stage6c-v02-tfoldfile-design.md). That's a second upstream PR. For round-trip proof, we materialize the v0.2 tfold back into a safetensors directory (byte-copy, no re-quantization) and load it through the same patched tensorfold binary. Byte-identical logits prove v0.2 tensor layout and header mapping round-trip losslessly through the EXL3 execution path."
+  },
+  "tfold_source": {
+    "path_spark": "/home/chris/models/tfold/Qwen3.5-2B-exl3-mcg.tfold",
+    "bytes": 3439095240,
+    "fnv1a_64_trailer_verified": true,
+    "scheme": "exl3_mcg",
+    "bits_per_weight": 8.0,
+    "tensors": 1072,
+    "groups": 151,
+    "source_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f"
+  },
+  "materializer": {
+    "tool": "tools/tfold_convert/tfold_to_safetensors.py",
+    "walltime_s": 2.1,
+    "output_path_spark": "/tmp/tfold-expanded/model.safetensors",
+    "output_bytes": 3438956868,
+    "original_safetensors_bytes": 3438956902,
+    "delta_bytes": -34,
+    "delta_explanation": "The original safetensors includes an __metadata__ field in its header; the materializer does not synthesize one. Tensor byte regions are identical."
+  },
+  "inference": {
+    "binary": "/home/chris/src/tensorfold/zig-out/bin/tf-qwen35-cuda",
+    "patched_branch": "stage6c-cuda-mcg",
+    "model_dir": "/tmp/tfold-expanded",
+    "prompt_ids": [760, 4087, 310, 2199, 11, 279, 15039, 11, 321, 4156, 369],
+    "wall_s": 3.147,
+    "output_bytes": 496640,
+    "output_sha256": "6b198ea823135943d8d662837ca0c42e7ab4165addfa2064a23eb0be3824c1e0"
+  },
+  "comparison_vs_gate_a": {
+    "gate_a_sha256": "6b198ea823135943d8d662837ca0c42e7ab4165addfa2064a23eb0be3824c1e0",
+    "gate_b_sha256": "6b198ea823135943d8d662837ca0c42e7ab4165addfa2064a23eb0be3824c1e0",
+    "match": true,
+    "proof": "248,320 bf16 logit values byte-identical to the 496,640 bytes produced from the original safetensors checkpoint. Same argmax (token id 220 = ' '), same top-5 continuation, same ultimate '42' answer."
+  },
+  "verdict": "PASS - TFOLD v0.2 round-trips losslessly through real CUDA inference"
+}

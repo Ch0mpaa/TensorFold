@@ -1,0 +1,73 @@
+{
+  "stage": "6c",
+  "gate": "A",
+  "description": "Real Qwen3.5-2B-exl3-8.00bpw (mcg codebook) inference on CUDA via patched TensorFold",
+  "timestamp_utc": "2026-11-15T03:14:00Z",
+  "host": {
+    "name": "GB10 DGX Spark",
+    "arch": "aarch64",
+    "cuda": "13.4 driver, nvcc 13.0",
+    "zig": "0.17.0 (aarch64-linux)"
+  },
+  "upstream_patch": {
+    "branch": "stage6c-cuda-mcg",
+    "fork_commit": "ee6a7f1580eb2313e6d13c16cfeca150bcb32c20",
+    "pr_url": "https://github.com/ashhart/TensorFold/pull/3412",
+    "files_changed": [
+      "zig/src/families/qwen3_5/cuda_exl3_admit.zig",
+      "zig/src/families/qwen3_5/cuda_exl3_weights.zig",
+      "zig/src/families/qwen3_5/cuda_exl3_loader_test.zig"
+    ],
+    "additional_f16_embed_patch": "Not yet pushed: embedTokens/embedTensor/bf16OrF32/f32vec widening helpers in cuda_exl3_weights.zig for ExLlamaV3's f16 embed + f32 linear_attn norm/A_log. Will fold into PR #3412 as a second commit."
+  },
+  "model": {
+    "name": "turboderp/Qwen3.5-2B-exl3-8.00bpw",
+    "codebook": "mcg",
+    "bits_per_weight": 8.0,
+    "safetensors_bytes": 3438956902,
+    "mcg_magic": "0xCBAC1FED",
+    "spark_path": "/home/chris/models/Qwen3.5-2B-exl3-8.00bpw",
+    "tfold_source_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f"
+  },
+  "prompt": {
+    "text": "The answer to life, the universe, and everything is",
+    "ids": [760, 4087, 310, 2199, 11, 279, 15039, 11, 321, 4156, 369],
+    "n_tokens": 11
+  },
+  "single_forward": {
+    "description": "11-token prefill, write final-token logits (248320 bf16)",
+    "run_1": {
+      "wall_s": 3.911,
+      "bytes": 496640,
+      "sha256": "6b198ea823135943d8d662837ca0c42e7ab4165addfa2064a23eb0be3824c1e0"
+    },
+    "run_2": {
+      "wall_s": 3.822,
+      "bytes": 496640,
+      "sha256": "6b198ea823135943d8d662837ca0c42e7ab4165addfa2064a23eb0be3824c1e0"
+    },
+    "deterministic_match": true,
+    "top_5_next_token_logits": [
+      {"id": 220, "logit": 18.75, "text": " "},
+      {"id": 25,  "logit": 15.94, "text": ":"},
+      {"id": 2972,"logit": 15.88, "text": " **"},
+      {"id": 264, "logit": 15.63, "text": " a"},
+      {"id": 279, "logit": 15.50, "text": " the"}
+    ]
+  },
+  "autoregressive_greedy_16_tokens": {
+    "description": "16 sequential tf-qwen35-cuda prompt calls, each with previous argmax appended",
+    "continuation_ids": [220, 19, 17, 13, 198, 32, 13, 2912, 198, 33, 13, 3439, 271, 248068, 198, 90700],
+    "continuation_text": " 42.\nA. True\nB. False\n\n<think>\nThinking",
+    "full_decoded_text": "The answer to life, the universe, and everything is 42.\nA. True\nB. False\n\n<think>\nThinking",
+    "total_wall_s": 61.22,
+    "mean_per_step_s": 3.826,
+    "notes": "Includes full-prefill every step; a real serve binary would cache KV and run ~10x faster. Argmax at step 1,2 is '4','2' (' 42'), the expected Hitchhiker's Guide answer; step 13 is <think> token (248068), the model's reasoning prefix."
+  },
+  "patched_binary": {
+    "path": "/home/chris/src/tensorfold/zig-out/bin/tf-qwen35-cuda",
+    "nvcc": "/usr/local/cuda-13.0/bin/nvcc",
+    "build_flags": "-Dnvcc=/usr/local/cuda-13.0/bin/nvcc"
+  },
+  "verdict": "PASS - real tokens generated, deterministic, model emits expected 42 continuation"
+}
