@@ -1,0 +1,198 @@
+{
+  "agreement": {
+    "batched_per_slot": {
+      "match": 1000,
+      "total": 1000,
+      "pct": 1.0
+    },
+    "batched_highest_risk": {
+      "match": 100,
+      "total": 100,
+      "pct": 1.0
+    },
+    "single_pred": {
+      "match": 1000,
+      "total": 1000,
+      "pct": 1.0
+    },
+    "total_disagreements": 0
+  },
+  "per_condition": {
+    "zero_batched": {
+      "dev": {
+        "correct": 42,
+        "total": 150,
+        "acc": 0.28,
+        "wilson_ci": [
+          0.21432932072113417,
+          0.35665798050298214
+        ]
+      },
+      "heldout": {
+        "correct": 11,
+        "total": 350,
+        "acc": 0.03142857142857143,
+        "wilson_ci": [
+          0.017637994640640673,
+          0.05539355393928888
+        ]
+      },
+      "per_snippet_dev": {
+        "CWE-89": 0.4,
+        "CWE-79": 0.1,
+        "CWE-22": 0.34
+      },
+      "per_snippet_heldout": {
+        "CWE-347": 0.02,
+        "CWE-434": 0.0,
+        "CWE-311": 0.0,
+        "CWE-352": 0.1,
+        "CWE-346": 0.0,
+        "CWE-327": 0.1,
+        "CWE-78": 0.0
+      },
+      "dev_snip_mean": 0.28,
+      "dev_snip_bootstrap_ci": [
+        0.10000000000000002,
+        0.4000000000000001
+      ],
+      "heldout_snip_mean": 0.03142857142857143,
+      "heldout_snip_bootstrap_ci": [
+        0.002857142857142857,
+        0.07142857142857142
+      ]
+    },
+    "few_batched": {
+      "dev": {
+        "correct": 88,
+        "total": 150,
+        "acc": 0.5866666666666667,
+        "wilson_ci": [
+          0.5066570942317348,
+          0.6623479083163406
+        ]
+      },
+      "heldout": {
+        "correct": 9,
+        "total": 350,
+        "acc": 0.025714285714285714,
+        "wilson_ci": [
+          0.013586037837257259,
+          0.04814101743267143
+        ]
+      },
+      "per_snippet_dev": {
+        "CWE-89": 1.0,
+        "CWE-79": 0.16,
+        "CWE-22": 0.6
+      },
+      "per_snippet_heldout": {
+        "CWE-347": 0.02,
+        "CWE-434": 0.0,
+        "CWE-311": 0.0,
+        "CWE-352": 0.04,
+        "CWE-346": 0.0,
+        "CWE-327": 0.08,
+        "CWE-78": 0.04
+      },
+      "dev_snip_mean": 0.5866666666666667,
+      "dev_snip_bootstrap_ci": [
+        0.16,
+        1.0
+      ],
+      "heldout_snip_mean": 0.025714285714285714,
+      "heldout_snip_bootstrap_ci": [
+        0.008571428571428572,
+        0.045714285714285714
+      ]
+    },
+    "zero_single": {
+      "dev": {
+        "correct": 56,
+        "total": 150,
+        "acc": 0.37333333333333335,
+        "wilson_ci": [
+          0.2999970542949877,
+          0.45299563428859446
+        ]
+      },
+      "heldout": {
+        "correct": 16,
+        "total": 350,
+        "acc": 0.045714285714285714,
+        "wilson_ci": [
+          0.028331607355509512,
+          0.07296117449942219
+        ]
+      },
+      "per_snippet_dev": {
+        "CWE-89": 0.8,
+        "CWE-79": 0.16,
+        "CWE-22": 0.16
+      },
+      "per_snippet_heldout": {
+        "CWE-347": 0.0,
+        "CWE-434": 0.0,
+        "CWE-311": 0.02,
+        "CWE-352": 0.12,
+        "CWE-346": 0.0,
+        "CWE-327": 0.06,
+        "CWE-78": 0.12
+      },
+      "dev_snip_mean": 0.37333333333333335,
+      "dev_snip_bootstrap_ci": [
+        0.16,
+        0.8000000000000002
+      ],
+      "heldout_snip_mean": 0.045714285714285714,
+      "heldout_snip_bootstrap_ci": [
+        0.011428571428571429,
+        0.08571428571428572
+      ]
+    },
+    "few_single": {
+      "dev": {
+        "correct": 58,
+        "total": 150,
+        "acc": 0.38666666666666666,
+        "wilson_ci": [
+          0.3124898876515768,
+          0.4665035705547861
+        ]
+      },
+      "heldout": {
+        "correct": 73,
+        "total": 350,
+        "acc": 0.20857142857142857,
+        "wilson_ci": [
+          0.16928377735444075,
+          0.2541870638355154
+        ]
+      },
+      "per_snippet_dev": {
+        "CWE-89": 0.94,
+        "CWE-79": 0.2,
+        "CWE-22": 0.02
+      },
+      "per_snippet_heldout": {
+        "CWE-347": 0.0,
+        "CWE-434": 0.0,
+        "CWE-311": 0.0,
+        "CWE-352": 0.72,
+        "CWE-346": 0.0,
+        "CWE-327": 0.56,
+        "CWE-78": 0.18
+      },
+      "dev_snip_mean": 0.38666666666666666,
+      "dev_snip_bootstrap_ci": [
+        0.02,
+        0.94
+      ],
+      "heldout_snip_mean": 0.20857142857142857,
+      "heldout_snip_bootstrap_ci": [
+        0.025714285714285714,
+        0.44
+      ]
+    }
+  }
+}

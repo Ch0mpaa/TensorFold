@@ -1,7 +1,7 @@
 {
-  "version": "v2",
+  "version": "v2.1",
   "name": "2B Chop Shop Dyno baseline",
-  "verdict": "VALIDATED: diagnosed v1's EOS bug, built a resumable trial runner, and completed one independently scored CWE benchmark with Wilson 95% CIs. The model was NOT 'mode collapsed'; it was running past EOS.",
+  "verdict": "GENERALIZATION AUDIT PASSED. v2's 26.2% headline was dev-inflated. Corrected held-out accuracy on the same 1,100 trials: only few_single beats random chance on held-out (20.9%, binomial p < 10^-6 vs 4% baseline). The other three conditions are statistically at chance.",
   "hardware": {
     "host": "spark",
     "ip": "100.90.145.67",
@@ -22,146 +22,89 @@
     "model_kind": "INSTRUCT (Qwen3 ChatML, eos <|im_end|>, with <think></think> thinking tokens)",
     "codebook": "mcg"
   },
-  "diagnosis_of_v1_claim": {
-    "v1_claim": "Model mode-collapses to CWE-22 after slot 3 in batched prompt",
-    "v2_diagnosis": "Not mode collapse. Three independently-tested causes stacked:",
-    "causes": [
-      {
-        "cause": "stop_conditions not passed to Job",
-        "evidence": "v1 raw outputs contained <|im_end|><|endoftext|><|im_start|>user... Model emitted EOS but generation continued; stop_reason was always null",
-        "fix": "pass stop_conditions=[tok.single_id('<|im_end|>'), tok.single_id('<|endoftext|>')] to each Job"
-      },
-      {
-        "cause": "Qwen3 thinking-mode tokens ate generation budget",
-        "evidence": "outputs contained <think></think> blocks before the answer, consuming tokens from max_new_tokens=16 budget in v0 and crowding real answers in v1",
-        "fix": "use max_new_tokens=300 and verify stop condition fires on <|im_end|>"
-      },
-      {
-        "cause": "Shared KV cache was NOT the problem",
-        "evidence": "ran FRESH Generator+Cache per trial; output was BYTE-IDENTICAL to shared. This disproves the state-carryover hypothesis.",
-        "ruled_out": true
-      }
-    ],
-    "corrected_wording": "Not 'mode collapse'; call it 'EOS-not-honored plus base-model weakness on specific categories'."
+  "corrections_vs_v2": {
+    "v2_claim_26_2_pct_as_held_out": "WRONG. 26.2% was ALL 10 snippets x 50 seeds = 500 trials, NOT a held-out metric. v2 tuned prompts against DEV_SNIPPETS = {CWE-89 SQLi, CWE-79 XSS, CWE-22 path} and then averaged dev + held-out together.",
+    "corrected_dev_vs_heldout_split": {
+      "dev_snippets": ["CWE-89", "CWE-79", "CWE-22"],
+      "heldout_snippets": ["CWE-347", "CWE-434", "CWE-311", "CWE-352", "CWE-346", "CWE-327", "CWE-78"]
+    },
+    "scope_statement": "The DEV and HELDOUT splits must be reported separately. Overall combined numbers remain for completeness only; the HELDOUT numbers are the real generalization signal."
   },
-  "dyno_v2_runner": {
-    "path": "docs/dyno/dyno_v2_runner.py",
-    "features": [
-      "JSONL incremental receipts flushed per trial (crash-safe)",
-      "Resume via (condition, seed) tuple membership in existing JSONL",
-      "Per-trial 30-second timeout + max_new_tokens=300 budget",
-      "Status enum: completed / timeout / truncation / failure",
-      "Full retention: prompt_text, output_text, seed, condition, truths",
-      "Explicit stop_conditions=[im_end, endoftext] in every Job",
-      "4 conditions: zero_batched, zero_single, few_batched, few_single"
-    ],
-    "prompt_tuning_split": {
-      "dev_snippets_used_during_prompt_design": [
-        "CWE-89 SQL injection",
-        "CWE-79 XSS",
-        "CWE-22 path traversal"
-      ],
-      "heldout_snippets_only_scored": [
-        "CWE-347 JWT alg=none",
-        "CWE-434 upload any",
-        "CWE-311 password cleartext email",
-        "CWE-352 shared CSRF token",
-        "CWE-346 trust X-Forwarded-For",
-        "CWE-327 MD5 password hash",
-        "CWE-78 OS command injection"
-      ],
-      "honesty_note": "Prompts were drafted against the dev subset; the held-out subset was never used to tune phrasing."
-    }
+  "g2_independent_scorer_agreement": {
+    "scorer_a_path": "docs/dyno/dyno_v2_runner.py (uses regex)",
+    "scorer_b_path": "docs/dyno/scorers/scorer_v2b.py (no regex; str.find + line-split + manual digit scan)",
+    "unit_tests_v2b": "20/20 pass (independent set vs scorer_a's 15)",
+    "cross_check_on_1100_trials": {
+      "batched_per_slot_agreement": "1000/1000 = 100.00%",
+      "batched_highest_risk_agreement": "100/100 = 100.00%",
+      "single_pred_agreement": "1000/1000 = 100.00%",
+      "total_disagreements": 0
+    },
+    "verdict": "Both scorers extract the SAME CWE identifiers from all 2,100 scoring decisions. The 100% agreement validates that prior v2 metrics were not scorer artifacts. Rescoring did not change the numbers; it only revealed the dev/held-out confound."
   },
-  "cwe_benchmark_v2": {
-    "temperature": 0.7,
-    "trials_per_condition": 50,
-    "seeds": "4000..4049 (new seed range; non-overlap with v1's 1000s)",
-    "sampler": "DefaultSampler (exllamav3)",
-    "all_trials_completed": true,
-    "timeouts": 0,
-    "truncations_batched_only": 30,
-    "overall_accuracy_95pct_CI": {
-      "zero_batched":  {"correct": 53,  "total": 500, "acc": 0.106, "ci_lo": 0.082, "ci_hi": 0.136},
-      "few_batched":   {"correct": 97,  "total": 500, "acc": 0.194, "ci_lo": 0.162, "ci_hi": 0.231},
-      "zero_single":   {"correct": 72,  "total": 500, "acc": 0.144, "ci_lo": 0.116, "ci_hi": 0.177},
-      "few_single":    {"correct": 131, "total": 500, "acc": 0.262, "ci_lo": 0.225, "ci_hi": 0.302}
-    },
-    "highest_risk_accuracy_batched_only": {
-      "zero_batched":  {"correct": 1, "total": 50, "acc": 0.02, "ci_lo": 0.004, "ci_hi": 0.105},
-      "few_batched":   {"correct": 0, "total": 50, "acc": 0.00, "ci_lo": 0.000, "ci_hi": 0.071}
-    },
-    "per_truth_accuracy": {
-      "CWE-22_path":      {"zero_batched": 0.34, "few_batched": 0.60, "zero_single": 0.16, "few_single": 0.02},
-      "CWE-78_os_cmd":    {"zero_batched": 0.00, "few_batched": 0.04, "zero_single": 0.12, "few_single": 0.18},
-      "CWE-79_XSS":       {"zero_batched": 0.10, "few_batched": 0.16, "zero_single": 0.16, "few_single": 0.20},
-      "CWE-89_SQLi":      {"zero_batched": 0.40, "few_batched": 1.00, "zero_single": 0.80, "few_single": 0.94},
-      "CWE-311_cleartext":{"zero_batched": 0.00, "few_batched": 0.00, "zero_single": 0.02, "few_single": 0.00},
-      "CWE-327_MD5":      {"zero_batched": 0.10, "few_batched": 0.08, "zero_single": 0.06, "few_single": 0.56},
-      "CWE-346_XFF":      {"zero_batched": 0.00, "few_batched": 0.00, "zero_single": 0.00, "few_single": 0.00},
-      "CWE-347_JWT_alg":  {"zero_batched": 0.02, "few_batched": 0.02, "zero_single": 0.00, "few_single": 0.00},
-      "CWE-352_CSRF":     {"zero_batched": 0.10, "few_batched": 0.04, "zero_single": 0.12, "few_single": 0.72},
-      "CWE-434_upload":   {"zero_batched": 0.00, "few_batched": 0.00, "zero_single": 0.00, "few_single": 0.00}
-    },
-    "failure_categories": {
-      "zero_batched":  {"wrong_cwe": 20, "truncation": 30},
-      "few_batched":   {"wrong_cwe": 48, "repetition_narrow": 1, "truncation": 1},
-      "zero_single":   {"completed_all": 500},
-      "few_single":    {"completed_all": 500}
-    },
-    "honest_interpretation": {
-      "winner": "few_single at 26.2% (95% CI 22.5-30.2)",
-      "random_baseline": "4% (1/25 CWE Top-25)",
-      "beats_random_in_all_conditions": true,
-      "surgical_wins_from_few_shot_single": [
-        "CWE-89 SQL: 80% -> 94%",
-        "CWE-352 CSRF: 12% -> 72%",
-        "CWE-327 MD5: 6% -> 56%"
-      ],
-      "surgical_loss_from_few_shot_single": [
-        "CWE-22 path: 16% -> 2% (few-shot's eval() example may have distracted the model from path traversal)"
-      ],
-      "persistent_zeros_in_every_condition": [
-        "CWE-346 XFF trust",
-        "CWE-434 file upload",
-        "CWE-347 JWT alg=none (except 1/50 in batched)"
-      ],
-      "verdict": "Qwen3.5-2B HAS zero-shot CWE knowledge, concentrated in a few categories (SQL injection, path traversal, XSS). Few-shot prompting shifts the knowledge distribution dramatically. There is NO single prompt that lifts the 0% categories; those require either SFT or a multi-stage retrieval pipeline. Neither is in scope for this milestone."
-    },
-    "raw_jsonl_receipts": [
-      "docs/dyno/offsec/v2/zero_batched.jsonl",
-      "docs/dyno/offsec/v2/few_batched.jsonl",
-      "docs/dyno/offsec/v2/zero_single.jsonl",
-      "docs/dyno/offsec/v2/few_single.jsonl"
-    ]
+  "g1_dev_vs_heldout_table_wilson": {
+    "note": "Wilson 95% CIs at the TRIAL level. For few_single we have 50 trials per snippet (so 150 dev + 350 held-out) at the trial level.",
+    "zero_batched":  {"dev": {"correct": 42, "total": 150, "acc": 0.280, "ci": [0.214, 0.357]},
+                      "heldout": {"correct": 11, "total": 350, "acc": 0.031, "ci": [0.018, 0.055]}},
+    "few_batched":   {"dev": {"correct": 88, "total": 150, "acc": 0.587, "ci": [0.507, 0.662]},
+                      "heldout": {"correct":  9, "total": 350, "acc": 0.026, "ci": [0.014, 0.048]}},
+    "zero_single":   {"dev": {"correct": 56, "total": 150, "acc": 0.373, "ci": [0.300, 0.453]},
+                      "heldout": {"correct": 16, "total": 350, "acc": 0.046, "ci": [0.028, 0.073]}},
+    "few_single":    {"dev": {"correct": 58, "total": 150, "acc": 0.387, "ci": [0.312, 0.467]},
+                      "heldout": {"correct": 73, "total": 350, "acc": 0.209, "ci": [0.169, 0.254]}}
   },
-  "performance_baseline_clarification_g4": {
-    "step_bin_file_contents": {
-      "what_is_in_the_bytes": "cache.logits[]u16 = bf16 logits over vocab (248320 entries per step). Each step writes 2*248320 = 496,640 bytes (for 8 steps = 3,973,120). Observed 1,489,920 bytes is 2 u16 per vocab * 8 steps / 2.66 -- the actual engine's rowLogits returns a SUBSET of readout rows on the kept-last path. Still raw logit bytes from the engine.",
-      "byte_equality_is_logit_equality": true,
-      "source": "zig/tests/qwen35_cuda_main.zig step handler appends std.mem.sliceAsBytes(cache.logits); cache.logits is []u16 bf16 logits per core/qwen3_5/cuda_cache.zig:139"
+  "g3_item_level_uncertainty_bootstrap": {
+    "note": "Bootstrap 95% CIs computed OVER THE SNIPPETS (not the trials). This is the honest item-level CI; our sample is only 3 dev + 7 held-out distinct examples. The trial-level Wilson CI above is TIGHT because it treats 50 responses to one snippet as 50 independent events, which they are not.",
+    "zero_batched":  {"dev_snip_mean": 0.280, "dev_snip_boot_ci": [0.100, 0.400], "heldout_snip_mean": 0.031, "heldout_snip_boot_ci": [0.003, 0.071]},
+    "few_batched":   {"dev_snip_mean": 0.587, "dev_snip_boot_ci": [0.160, 1.000], "heldout_snip_mean": 0.026, "heldout_snip_boot_ci": [0.009, 0.046]},
+    "zero_single":   {"dev_snip_mean": 0.373, "dev_snip_boot_ci": [0.160, 0.800], "heldout_snip_mean": 0.046, "heldout_snip_boot_ci": [0.011, 0.086]},
+    "few_single":    {"dev_snip_mean": 0.387, "dev_snip_boot_ci": [0.020, 0.940], "heldout_snip_mean": 0.209, "heldout_snip_boot_ci": [0.026, 0.440]},
+    "explicit_warning": "With only 7 held-out examples the bootstrap CI for few_single stretches 2.6 - 44.0 percent. A single additional held-out example in the right category could swing the mean up or down by many points. These numbers are reproducible but have LOW statistical resolution."
+  },
+  "g3_random_chance_check_heldout": {
+    "chance_baseline_cwe_top25": "4% (1/25)",
+    "zero_batched":  {"k": 11, "n": 350, "acc": 0.031, "binomial_p_vs_4pct": 0.830136, "beats_chance": false},
+    "few_batched":   {"k":  9, "n": 350, "acc": 0.026, "binomial_p_vs_4pct": 0.933225, "beats_chance": false},
+    "zero_single":   {"k": 16, "n": 350, "acc": 0.046, "binomial_p_vs_4pct": 0.341212, "beats_chance": false},
+    "few_single":    {"k": 73, "n": 350, "acc": 0.209, "binomial_p_vs_4pct": 1.0e-6, "beats_chance": true},
+    "finding": "ONLY few_single beats random on held-out. The other three conditions cannot be distinguished from a 25-class uniform prior. This is a fundamental correction to v2's reported ordering."
+  },
+  "g3_paired_mcnemar_heldout": {
+    "note": "Within-subject McNemar test on matched (seed, snippet) pairs. chi-squared with continuity correction; df=1.",
+    "zero_batched_vs_few_batched":  {"n11": 2, "n10": 9, "n01": 7,  "n00": 332, "chi2":  0.06, "p": 0.8026},
+    "zero_batched_vs_zero_single":  {"n11": 1, "n10":10, "n01":15,  "n00": 324, "chi2":  0.64, "p": 0.4237},
+    "zero_batched_vs_few_single":   {"n11": 5, "n10": 6, "n01":68,  "n00": 271, "chi2": 50.28, "p": 1.3e-12},
+    "few_batched_vs_zero_single":   {"n11": 0, "n10": 9, "n01":16,  "n00": 325, "chi2":  1.44, "p": 0.2301},
+    "few_batched_vs_few_single":    {"n11": 5, "n10": 4, "n01":68,  "n00": 273, "chi2": 55.12, "p": 1.1e-13},
+    "zero_single_vs_few_single":    {"n11":11, "n10": 5, "n01":62,  "n00": 272, "chi2": 46.81, "p": 7.8e-12},
+    "summary": "few_single beats every other condition significantly (p < 10^-11). zero_batched / few_batched / zero_single are pairwise indistinguishable on held-out."
+  },
+  "g4_zero_category_probes_dev_only": {
+    "methodology": "Three alternative prompt styles (minimal / textbook / wiki) over three new dev paraphrases per CWE across 4 lowest categories (346, 434, 311, 347). 50 seeds each. 1,800 total model calls. HELD-OUT snippets never touched.",
+    "receipts": "docs/dyno/offsec/v2_1/g4_probe.jsonl",
+    "results_percent_correct": {
+      "CWE-346": {"minimal": 0.0,  "textbook": 100.0, "wiki": 0.0},
+      "CWE-434": {"minimal": 0.0,  "textbook":  94.0, "wiki": 0.0},
+      "CWE-311": {"minimal": 0.0,  "textbook":  90.0, "wiki": 0.0},
+      "CWE-347": {"minimal": 2.0,  "textbook":  22.0, "wiki": 2.0}
     },
-    "v1_claim_review": "Stage 7H journal said 'identical MD5 proves kernels, tokens and logit bytes are byte-identical.' G4 audit CONFIRMS this: the bytes ARE bf16 logits. No correction needed. The preserved measurement stands.",
-    "preserved_measurements": {
-      "exl3_safetensors": {"warm_median_tps": 109.5, "warm_mean_tps": 108.1, "vram_mb": 2208},
-      "tfold_v0_2":      {"warm_median_tps": 110.8, "warm_mean_tps": 107.5, "vram_mb": 2208},
-      "md5_identity":    "c6a03e566512fa102ab5b5d25eb64782 (both formats)"
-    },
-    "no_new_optimization_work": "Per brief: performance optimization NOT expanded in v2."
+    "interpretation": "0% on these categories in v2 is a PROMPT KNOWLEDGE failure, not a model capability failure. With CWE definitions present in the prompt, the 2B model correctly identifies CWE-346, CWE-434, and CWE-311 in 90-100% of dev trials. CWE-347 (JWT signature verification) is harder (22%); the model recognizes 'JWT' but still often picks CWE-20 or CWE-287 instead of CWE-347. The 'wiki' style (showing unrelated example classifications) gave 0% — the model only copies categories it sees explicitly named.",
+    "implication_for_heldout": "This finding is DEV-ONLY and does NOT change the v2.1 held-out numbers. It only tells us WHERE to look next if we ever extend the benchmark: a textbook-preamble prompt would almost certainly lift held-out accuracy substantially, but we cannot verify that without new held-out snippets."
+  },
+  "performance_baseline_preserved": {
+    "exl3_safetensors": {"warm_median_tps": 109.5, "warm_mean_tps": 108.1, "vram_mb": 2208},
+    "tfold_v0_2":      {"warm_median_tps": 110.8, "warm_mean_tps": 107.5, "vram_mb": 2208},
+    "md5_identity":    "c6a03e566512fa102ab5b5d25eb64782 (both formats)",
+    "status": "preserved, not revisited"
   },
   "scope_guards_honored": [
-    "Did NOT start fine-tuning (brief forbade; evidence doesn't justify yet)",
-    "Did NOT expand model ladder beyond 2B",
-    "Did NOT add new scenarios yet",
-    "Did NOT re-tune prompts against held-out set",
-    "Report CIs always; do not declare class graduated",
-    "Interrupted / killed runs NEVER marked complete (JSONL receipts record exact status)"
+    "Did NOT rerun the 1100 trials (reused existing JSONL)",
+    "Did NOT touch the 7 held-out snippets during probe design",
+    "Did NOT start fine-tuning / DPO / QLoRA / RAG",
+    "Did NOT add new model sizes",
+    "Did NOT expand performance benchmarks",
+    "Reported trial-level AND item-level uncertainty separately",
+    "Explicitly stated only 10 distinct examples; only 7 are held-out"
   ],
-  "remaining_gaps_for_graduation": [
-    "9 other OffSec scenarios still need fixtures + rubrics",
-    "Highest-risk accuracy is near zero across conditions; needs alternative framing",
-    "0% categories (CWE-346, 434, 347) require either SFT or RAG; neither is in scope",
-    "Independent SECOND scorer implementation (only one regex scorer this round)",
-    "Confidence intervals above are POINT CIs; cross-condition difference tests not run"
-  ]
+  "graduation_status": "NOT GRADUATED. Only ONE of four conditions beats random on held-out, and its item-level bootstrap CI on only 7 snippets is 2.6-44.0 percent. We cannot claim generalized capability from this sample."
 }

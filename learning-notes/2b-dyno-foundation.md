@@ -554,3 +554,185 @@ and "correctly picks it as highest-risk"? Write it as a conditional
 probability inequality, then propose ONE prompt change that would
 let the two probabilities agree with each other. Hint: a selection
 task is not the same as a classification task.
+
+## 13. Stage 7J — Dyno v2.1 "generalization audit"
+
+> v2 declared `few_single` the winner at **26.2 % (CI 22.5-30.2)**.
+> v2.1 audits that number. Short version: the 26.2 was dev-inflated,
+> real held-out accuracy is 20.9 %, and three of the four conditions
+> are statistically at chance (p > 0.3 against the 4 % Top-25
+> baseline). The operator was right to ask.
+
+### What v2 got right vs what v2.1 corrects
+
+| Claim | v2 said | v2.1 says |
+|---|---|---|
+| Headline accuracy | 26.2 % (CI 22.5-30.2) | **held-out 20.9 %** (CI 16.9-25.4 Wilson, but 2.6-44.0 BOOTSTRAP over 7 items) |
+| Scorer reliability | one regex scorer, unit-tested | TWO scorers, **100 % agreement** on 2,100 extractions |
+| Three other conditions | "beats chance" implied | NONE beats chance on held-out (binomial p > 0.3) |
+| Winner significance | implied by CI non-overlap | McNemar p < 10^-11 on paired (seed, snippet) data |
+
+### G1 — Dev vs held-out split
+
+DEV snippets (used while picking prompts):
+`CWE-89` SQL injection · `CWE-79` XSS · `CWE-22` path traversal
+
+HELD-OUT snippets (scored once, prompts never saw them):
+`CWE-347` JWT alg=none · `CWE-434` upload · `CWE-311` cleartext · `CWE-352` CSRF · `CWE-346` XFF trust · `CWE-327` MD5 · `CWE-78` OS cmd injection
+
+Trial-level Wilson 95 % CIs (hides item-level uncertainty — see G3):
+
+| Condition | DEV k/n (acc) | HELD-OUT k/n (acc) |
+|---|---|---|
+| zero_batched | 42/150 (**28.0 %**) | 11/350 (**3.1 %**) |
+| few_batched  | 88/150 (**58.7 %**) |  9/350 (**2.6 %**) |
+| zero_single  | 56/150 (**37.3 %**) | 16/350 (**4.6 %**) |
+| few_single   | 58/150 (**38.7 %**) | 73/350 (**20.9 %**) |
+
+The dev-vs-held-out gap for `few_batched` is **56 percentage points**
+(58.7 → 2.6). That's the shape of textbook prompt overfitting. The
+few-shot preamble taught the model to recognize the three dev
+categories; it generalized nowhere else when the questions were
+batched.
+
+### G2 — Independent scorer
+
+`docs/dyno/scorers/scorer_v2b.py` is a pure str-find + manual digit
+scan with no regex. Its 20-case unit-test battery was designed
+independently of scorer_v2's 15 regex-focused cases. Running both
+scorers over all 1,100 trials:
+
+```
+batched per-slot agreement:     1000/1000 = 100.00 %
+batched highest-risk agreement:  100/100 = 100.00 %
+single pred agreement:          1000/1000 = 100.00 %
+total disagreements:            0
+```
+
+The regex scorer and the no-regex scorer extract the same identifier
+from every trial. v2's metrics are not scorer artifacts; they're
+accurate counts over a confounded split. The fix was never
+"different scorer" — it was "report the split".
+
+### G3 — Statistical correctness
+
+**Random-chance check on held-out** (vs 4 % CWE-25 uniform prior,
+binomial one-sided):
+
+| Condition | Held-out acc | Binomial p vs 4 % chance | Beats chance? |
+|---|---|---|---|
+| zero_batched |  3.1 % | 0.83 | **NO** |
+| few_batched  |  2.6 % | 0.93 | **NO** |
+| zero_single  |  4.6 % | 0.34 | **NO** |
+| few_single   | 20.9 % | **< 10^-6** | YES |
+
+Three of the four conditions cannot be distinguished from a model
+that picks uniformly from the 25 top CWEs. Only `few_single` beats
+that bar.
+
+**Paired McNemar on matched (seed, snippet) pairs, held-out:**
+
+```
+zero_batched vs few_batched : chi2=0.06   p=0.80     NO DIFFERENCE
+zero_batched vs zero_single : chi2=0.64   p=0.42     NO DIFFERENCE
+zero_batched vs few_single  : chi2=50.28  p=1.3e-12  significant
+few_batched  vs zero_single : chi2=1.44   p=0.23     NO DIFFERENCE
+few_batched  vs few_single  : chi2=55.12  p=1.1e-13  significant
+zero_single  vs few_single  : chi2=46.81  p=7.8e-12  significant
+```
+
+Only `few_single` is significantly better than the rest. The three
+non-winners are pairwise indistinguishable.
+
+**Item-level bootstrap** (n=10,000 resamples of the 7 held-out
+snippet accuracies):
+
+| Condition | Held-out snippet-mean | Bootstrap 95 % CI |
+|---|---|---|
+| zero_batched |  3.1 % | 0.3 – 7.1 |
+| few_batched  |  2.6 % | 0.9 – 4.6 |
+| zero_single  |  4.6 % | 1.1 – 8.6 |
+| few_single   | 20.9 % | **2.6 – 44.0** |
+
+The trial-level Wilson CI said few_single was 16.9-25.4; the
+snippet-level bootstrap says 2.6-44.0. **The difference matters
+and we must report both.** The Wilson CI treats 50 responses to the
+same snippet as 50 independent events, which they are not. A single
+snippet whose answer shifts up or down swings the mean dramatically.
+
+### G4 — Zero-category probes (dev-only)
+
+We tried three alternative prompt strategies on the four lowest
+categories using NEW dev-only paraphrases — the seven held-out
+snippets stayed untouched. Prompts:
+
+1. **Minimal**: bare "classify this" instruction.
+2. **Textbook preamble**: four CWE definitions pasted in before the
+   question.
+3. **Wiki examples**: five "known vulnerability → CWE" pairs.
+
+Results on **1,800 dev-only trials**:
+
+| True CWE | minimal | textbook | wiki |
+|---|---|---|---|
+| CWE-346 (XFF trust) |  0 % | **100 %** |  0 % |
+| CWE-434 (upload)    |  0 % | **94 %**  |  0 % |
+| CWE-311 (cleartext) |  0 % | **90 %**  |  0 % |
+| CWE-347 (JWT sig)   |  2 % |   22 %    |  2 % |
+
+This is the big correction on v2's story. In v2 I wrote "model
+lacks knowledge of these CWEs" because zero-shot said so. The
+textbook condition — which just pastes the four CWE definitions
+into the prompt before the question — shows the 2B model has the
+knowledge. It just doesn't retrieve the correct CWE identifier
+without being told what the candidate set is.
+
+Three readings matter:
+1. 0 % on CWE-346/434/311 in v2 was a **prompt failure**, not a
+   model failure. SFT or RAG is a legitimate next step but not
+   the ONLY next step; a longer system prompt would also work.
+2. CWE-347 still only reaches 22 % even WITH the definition. The
+   model recognizes "JWT" but often picks CWE-20 or CWE-287. This
+   is the one true capability gap, and it's specifically around
+   cryptographic verification reasoning.
+3. The "wiki" style (giving five unrelated CWE examples) gave
+   0 % everywhere — a model given a list of 5 examples will not
+   pick the 6th CWE unless that CWE is in the list. This is
+   measurable prompt recency / copying bias.
+
+None of these dev-probe numbers change the held-out verdict
+above. v2.1 held-out `few_single` stays at 20.9 %. We did NOT run
+textbook-style prompts on held-out (that would require generating
+new held-out snippets — out of scope today).
+
+### Hands-on exercise
+
+Recompute both the Wilson CI and the snippet-level bootstrap CI for
+`few_single` held-out, from scratch, using the checked-in JSONL:
+
+```bash
+python3 docs/dyno/scorers/analyze_v2_1.py
+python3 docs/dyno/scorers/paired_mcnemar.py
+```
+
+Change the `heldout_snippets` list in `scorer_v2b.py` to any 7 of
+the 10 (not the current held-out set). Observe how much the
+snippet-level bootstrap CI shifts. That shift is how fragile a
+7-snippet benchmark really is.
+
+### Comprehension questions
+
+**Q6** (v2.1). The Wilson 95 % CI for `few_single` on held-out is
+16.9 – 25.4 (width ≈ 8 pp). The bootstrap 95 % CI over snippets is
+2.6 – 44.0 (width ≈ 41 pp). Both are "95 % confidence intervals".
+Why is the second one 5× wider, and which one is what you report to
+a stakeholder who asks "will this work on a new vulnerability we
+haven't tested?" Hint: write down what each CI is sampling over.
+
+**Q7** (v2.1). We ran McNemar on paired trials and McNemar on
+bootstrap items; one gave p < 10^-11, the other gave CI width 41 pp.
+An outside reviewer argues we are "p-hacking" by reporting the
+significant result. Describe in 2-3 sentences the one honest way to
+report BOTH results in the same table, and why NOT doing so would
+inflate the claim of the few_single win. Hint: this is why
+pre-registration exists.
