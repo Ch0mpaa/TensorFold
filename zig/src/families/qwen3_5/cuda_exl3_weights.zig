@@ -116,6 +116,7 @@ fn norm1(s: *Sink, ck: *core.Checkpoint, comptime fmt: []const u8, args: anytype
 fn f32vec(s: *Sink, ck: *core.Checkpoint, comptime fmt: []const u8, args: anytype, n: usize) !u64 {
     var buf: [200]u8 = undefined;
     const t = try ck.get(try name(&buf, fmt, args));
+    if (t.is(.f32, &.{n})) return s.put(t.bytes);
     if (!t.is(.bf16, &.{n})) return error.UnexpectedTensor;
     const words = try s.e.gpa.alloc(u32, n);
     defer s.e.gpa.free(words);
@@ -234,13 +235,55 @@ fn experts(s: *Sink, ck: *core.Checkpoint, p: []const u8) !cuda.experts.Layer {
 }
 
 /// The whole checkpoint through `s`; the engine's fields are set only in the real pass.
+
+/// The checkpoint's embed_tokens.weight, accepting either bf16 (common case) or f16
+/// (the ExLlamaV3 default for the embed table). f16 is widened to bf16 before upload.
+fn embedTokens(s: *Sink, ck: *core.Checkpoint, prefix: []const u8, vocab: usize, hidden: usize) !u64 {
+    var buf: [200]u8 = undefined;
+    const path = try name(&buf, "{s}embed_tokens.weight", .{prefix});
+    const t = try ck.get(path);
+    if (t.is(.bf16, &.{ vocab, hidden })) return s.put(t.bytes);
+    if (t.is(.f16, &.{ vocab, hidden })) {
+        const rows = try f16Rows(s.e.gpa, t.bytes);
+        defer s.e.gpa.free(rows);
+        return s.put(std.mem.sliceAsBytes(rows));
+    }
+    return error.UnexpectedTensor;
+}
+
+/// Same policy as embedTokens() but at the full checkpoint-name site used by host mapping.
+fn embedTensor(ck: *core.Checkpoint, buf: *[200]u8, vocab: usize, hidden: usize) !core.checkpoint.Tensor {
+    const path = try name(buf, "model.language_model.embed_tokens.weight", .{});
+    const t = try ck.get(path);
+    if (t.is(.bf16, &.{ vocab, hidden }) or t.is(.f16, &.{ vocab, hidden })) return t;
+    return error.UnexpectedTensor;
+}
+
+
+/// A vector stored as bf16 (common case) or f32 (ExLlamaV3 norm weights): f32 widened to bf16.
+fn bf16OrF32(s: *Sink, ck: *core.Checkpoint, comptime fmt: []const u8, args: anytype, n: usize) !u64 {
+    var buf: [200]u8 = undefined;
+    const t = try ck.get(try name(&buf, fmt, args));
+    if (t.is(.bf16, &.{n})) return s.put(t.bytes);
+    if (t.is(.f32, &.{n})) {
+        const rows = try s.e.gpa.alloc(u16, n);
+        defer s.e.gpa.free(rows);
+        for (rows, 0..) |*o, i| {
+            const w: f32 = @bitCast(std.mem.readInt(u32, t.bytes[4 * i ..][0..4], .little));
+            o.* = bf16Of(w);
+        }
+        return s.put(std.mem.sliceAsBytes(rows));
+    }
+    return error.UnexpectedTensor;
+}
+
 fn all(s: *Sink, ck: *core.Checkpoint) !void {
     const e = s.e;
     const g = e.g;
     const kit = e.kit;
     const m = "model.language_model.";
     // embeddings stay bf16 rows (embedRows), mapped from host memory when the card has no room; the head is EXL3
-    const embed: u64 = if (e.host_embed != null) 0 else try plain(s, ck, "{s}embed_tokens.weight", .{m}, .bf16, &.{ g.vocab, g.hidden });
+    const embed: u64 = if (e.host_embed != null) 0 else try embedTokens(s, ck, m, g.vocab, g.hidden);
     const head = try dense(s, kit, ck, "", "lm_head", g.vocab, g.hidden);
     const final = try norm1(s, ck, "{s}norm.weight", .{m}, g.hidden);
     if (!s.measure) {
@@ -269,7 +312,7 @@ fn all(s: *Sink, ck: *core.Checkpoint) !void {
                     .out = try dense(s, kit, ck, p, "linear_attn.out_proj", g.hidden, g.valueWidth()),
                     // HF's conv1d is [channels][1][taps]: the same bytes as the engine's [channels][taps]
                     .conv = try plain(s, ck, "{s}linear_attn.conv1d.weight", .{p}, .bf16, &.{ conv, 1, geometry.taps }),
-                    .norm = try plain(s, ck, "{s}linear_attn.norm.weight", .{p}, .bf16, &.{geometry.dk}), // gated norm: unshifted
+                    .norm = try bf16OrF32(s, ck, "{s}linear_attn.norm.weight", .{p}, geometry.dk), // gated norm: unshifted (f32 widened to bf16)
                     .a_log = try f32vec(s, ck, "{s}linear_attn.A_log", .{p}, g.v_heads),
                     .dt_bias = try plain(s, ck, "{s}linear_attn.dt_bias", .{p}, .bf16, &.{g.v_heads}),
                 },
@@ -308,7 +351,7 @@ pub fn reserveGroups(k: *Kit, st: cuda.Stream, l: engine.Layer) !void {
 /// The embedding rows copied into the engine's mapped host memory.
 fn mappedEmbed(e: *Engine, ck: *core.Checkpoint, host: cuda.HostBuffer) !u64 {
     var buf: [200]u8 = undefined;
-    const t = try ck.expect(try name(&buf, "model.language_model.embed_tokens.weight", .{}), .bf16, &.{ e.g.vocab, e.g.hidden });
+    const t = try embedTensor(ck, &buf, e.g.vocab, e.g.hidden);
     return @import("cuda_host_embed.zig").rows(host, t.bytes);
 }
 
