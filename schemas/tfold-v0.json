@@ -107,7 +107,8 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 256,
-          "pattern": "^(?:__[a-z_]+__|[a-zA-Z0-9._]+)$"
+          "description": "Either the reserved '__codebook__' or a non-reserved dotted name (no other '__…__' permitted at the schema level per spec §3.3).",
+          "pattern": "^(?:__codebook__|(?!__)[a-zA-Z0-9._]+)$"
         },
         "dtype": {
           "type": "string",

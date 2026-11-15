@@ -1,0 +1,9 @@
+SPEC_VERSION_STR = "0.1"
+SPEC_VERSION_U32 = 0x00010000  # (major=0x0001, minor=0x0000)
+MAJOR_MASK = 0xFFFF0000
+WRITER_ID = "tfold-py@0.1.0"
+
+MAGIC = b"TFOLD\x00\x00\x00"
+ALIGN = 64
+TRAILER_NBYTES = 8  # FNV-1a-64
+PREAMBLE_NBYTES = 16  # magic(8) + version(4) + header_length(4)
