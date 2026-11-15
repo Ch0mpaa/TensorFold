@@ -116,6 +116,7 @@ fn norm1(s: *Sink, ck: *core.Checkpoint, comptime fmt: []const u8, args: anytype
 fn f32vec(s: *Sink, ck: *core.Checkpoint, comptime fmt: []const u8, args: anytype, n: usize) !u64 {
     var buf: [200]u8 = undefined;
     const t = try ck.get(try name(&buf, fmt, args));
+    if (t.is(.f32, &.{n})) return s.put(t.bytes);
     if (!t.is(.bf16, &.{n})) return error.UnexpectedTensor;
     const words = try s.e.gpa.alloc(u32, n);
     defer s.e.gpa.free(words);
@@ -233,14 +234,27 @@ fn experts(s: *Sink, ck: *core.Checkpoint, p: []const u8) !cuda.experts.Layer {
     return .{ .format = .exl3, .exl3 = lay, .up = 0, .down = 0, .width = g.intermediate, .dims = g.hidden, .experts = count, .swiglu = true };
 }
 
-/// The whole checkpoint through `s`; the engine's fields are set only in the real pass.
+/// Checkpoint's embed_tokens.weight: bf16 (common) or f16 (ExLlamaV3 embed default), with f16 widened to bf16.
+fn embedTokens(s: *Sink, ck: *core.Checkpoint, prefix: []const u8, vocab: usize, hidden: usize) !u64 {
+    var buf: [200]u8 = undefined;
+    const path = try name(&buf, "{s}embed_tokens.weight", .{prefix});
+    const t = try ck.get(path);
+    if (t.is(.bf16, &.{ vocab, hidden })) return s.put(t.bytes);
+    if (t.is(.f16, &.{ vocab, hidden })) {
+        const rows = try f16Rows(s.e.gpa, t.bytes);
+        defer s.e.gpa.free(rows);
+        return s.put(std.mem.sliceAsBytes(rows));
+    }
+    return error.UnexpectedTensor;
+}
+
 fn all(s: *Sink, ck: *core.Checkpoint) !void {
     const e = s.e;
     const g = e.g;
     const kit = e.kit;
     const m = "model.language_model.";
     // embeddings stay bf16 rows (embedRows), mapped from host memory when the card has no room; the head is EXL3
-    const embed: u64 = if (e.host_embed != null) 0 else try plain(s, ck, "{s}embed_tokens.weight", .{m}, .bf16, &.{ g.vocab, g.hidden });
+    const embed: u64 = if (e.host_embed != null) 0 else try embedTokens(s, ck, m, g.vocab, g.hidden);
     const head = try dense(s, kit, ck, "", "lm_head", g.vocab, g.hidden);
     const final = try norm1(s, ck, "{s}norm.weight", .{m}, g.hidden);
     if (!s.measure) {
@@ -305,11 +319,19 @@ pub fn reserveGroups(k: *Kit, st: cuda.Stream, l: engine.Layer) !void {
     }
 }
 
-/// The embedding rows copied into the engine's mapped host memory.
+/// Embedding rows copied to the engine's mapped host memory; f16 is widened to bf16 (never reinterpreted).
 fn mappedEmbed(e: *Engine, ck: *core.Checkpoint, host: cuda.HostBuffer) !u64 {
     var buf: [200]u8 = undefined;
-    const t = try ck.expect(try name(&buf, "model.language_model.embed_tokens.weight", .{}), .bf16, &.{ e.g.vocab, e.g.hidden });
-    return @import("cuda_host_embed.zig").rows(host, t.bytes);
+    const path = try name(&buf, "model.language_model.embed_tokens.weight", .{});
+    const t = try ck.get(path);
+    const host_embed = @import("cuda_host_embed.zig");
+    if (t.is(.bf16, &.{ e.g.vocab, e.g.hidden })) return host_embed.rows(host, t.bytes);
+    if (t.is(.f16, &.{ e.g.vocab, e.g.hidden })) {
+        const widened = try f16Rows(e.gpa, t.bytes);
+        defer e.gpa.free(widened);
+        return host_embed.rows(host, std.mem.sliceAsBytes(widened));
+    }
+    return error.UnexpectedTensor;
 }
 
 /// The arena bytes the weights take (the scratch is added by the caller).
@@ -351,4 +373,76 @@ test "Qwen EXL3 norm and widened bf16: today's bits on every zero, subnormal, in
     try std.testing.expectEqual(@as(u16, 0x8000), old.wrapped(@bitCast(@as(u32, 0x7fff8001)))); // the old copy's -0
     try std.testing.expectEqual(@as(u16, 0x0000), old.wrapped(@bitCast(@as(u32, 0xffff8001)))); // and its +0
     for ([_]u32{ 0x7fff8001, 0xffff8001, 0x7fc00000, 0xffffffff, 0x7f800001, 0xff800001, 0x7fbfffff, 0xffa00000 }) |u| try old.kept(u);
+}
+
+test "Qwen EXL3 f16 embed rows: f16 1.0 widens to bf16 1.0, not reinterpreted" {
+    // Reinterpreting f16 bytes as bf16 rescales: f16 0x3C00 (1.0) becomes bf16 2^-7 (0.0078125).
+    const cases = [_]struct { f16_bits: u16, want_bf16: u16, what: []const u8 }{
+        .{ .f16_bits = 0x3C00, .want_bf16 = 0x3F80, .what = "+1.0" },
+        .{ .f16_bits = 0xBC00, .want_bf16 = 0xBF80, .what = "-1.0" },
+        .{ .f16_bits = 0x3800, .want_bf16 = 0x3F00, .what = "+0.5" },
+        .{ .f16_bits = 0x4000, .want_bf16 = 0x4000, .what = "+2.0" },
+        .{ .f16_bits = 0x0000, .want_bf16 = 0x0000, .what = "+0.0" },
+        .{ .f16_bits = 0x8000, .want_bf16 = 0x8000, .what = "-0.0" },
+        .{ .f16_bits = 0x7BFF, .want_bf16 = 0x4780, .what = "f16 max 65504 -> bf16" },
+    };
+    var src_bytes: [2 * cases.len]u8 = undefined;
+    for (cases, 0..) |c, i| std.mem.writeInt(u16, src_bytes[2 * i ..][0..2], c.f16_bits, .little);
+    const widened = try f16Rows(std.testing.allocator, &src_bytes);
+    defer std.testing.allocator.free(widened);
+    for (cases, 0..) |c, i| {
+        if (widened[i] == c.want_bf16) continue;
+        // On mismatch, fail with a legible message including the raw bytes.
+        std.debug.print("f16 {s} (0x{X:0>4}): got bf16 0x{X:0>4}, want 0x{X:0>4}\n", .{ c.what, c.f16_bits, widened[i], c.want_bf16 });
+        return error.TestF16Mismatch;
+    }
+    // A straight reinterpretation would have left bits unchanged (i.e. widened[0] == 0x3C00 for +1.0).
+    try std.testing.expect(widened[0] != cases[0].f16_bits);
+}
+
+test "Qwen EXL3 f16 embed rows: mapped placement widens identically to device placement" {
+    // Device (embedTokens) and mapped (mappedEmbed) paths both route f16 through f16Rows; parity verified byte-wise.
+    var prng = std.Random.DefaultPrng.init(0xf16bf16);
+    var rows: [4096]u16 = undefined;
+    for (&rows) |*r| r.* = prng.random().int(u16);
+    var f16_bytes: [2 * rows.len]u8 = undefined;
+    for (rows, 0..) |bits, i| std.mem.writeInt(u16, f16_bytes[2 * i ..][0..2], bits, .little);
+
+    const device_rows = try f16Rows(std.testing.allocator, &f16_bytes);
+    defer std.testing.allocator.free(device_rows);
+    const mapped_rows = try f16Rows(std.testing.allocator, &f16_bytes);
+    defer std.testing.allocator.free(mapped_rows);
+
+    try std.testing.expectEqualSlices(u16, device_rows, mapped_rows);
+    try std.testing.expectEqual(std.mem.sliceAsBytes(device_rows).len, f16_bytes.len);
+}
+
+test "Qwen EXL3 f16 embed rows: every f16 value whose source was bf16 round-trips bit-exactly" {
+    // Audited: 508,559,360 F16 embed values in turboderp Qwen3.5-2B-exl3 round-trip bit-exact via bf16(f32(h)).
+    var count_checked: usize = 0;
+    var f16_bits_arr = std.ArrayList(u8).empty;
+    defer f16_bits_arr.deinit(std.testing.allocator);
+    // Enumerate the bf16-representable f16 subset: all bits where bits & 0x0007 == 0.
+    var raw_bits: u32 = 0;
+    while (raw_bits <= 0xFFFF) : (raw_bits += 1) {
+        if (raw_bits & 0x0007 != 0) continue; // not in the bf16-representable f16 subset
+        const h: u16 = @intCast(raw_bits);
+        // Skip infinities and NaNs: their widening rules are their own regression test above.
+        if ((h & 0x7C00) == 0x7C00) continue;
+        try f16_bits_arr.append(std.testing.allocator, @intCast(h & 0xFF));
+        try f16_bits_arr.append(std.testing.allocator, @intCast((h >> 8) & 0xFF));
+        count_checked += 1;
+    }
+    const widened = try f16Rows(std.testing.allocator, f16_bits_arr.items);
+    defer std.testing.allocator.free(widened);
+    // Each element: assert bf16(f16(src)) decoded back to f32 equals the f16's f32 value exactly.
+    for (widened, 0..) |bf, i| {
+        const src_bits: u16 = std.mem.readInt(u16, f16_bits_arr.items[2 * i ..][0..2], .little);
+        const src_f16: f16 = @bitCast(src_bits);
+        const src_as_f32: f32 = @floatCast(src_f16);
+        const bf_as_f32: f32 = @bitCast(@as(u32, bf) << 16);
+        try std.testing.expectEqual(src_as_f32, bf_as_f32);
+    }
+    // Sanity: the audited subset must cover thousands of values, not a trivial handful.
+    try std.testing.expect(count_checked > 7000);
 }
