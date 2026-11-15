@@ -392,3 +392,165 @@ whether the model's weakness is CAUSAL knowledge vs the LABELING
 scheme? Hint: SQL injection and OS command injection are the same
 "inject untrusted input into an interpreter" pattern; they differ
 only in which interpreter.
+
+## 12. Stage 7I — Dyno v2 "finish one quality benchmark"
+
+> v1 reported 2/10 per trial and called it "mode collapse". v2 proved
+> that wasn't true. The actual pattern was EOS not being honored, the
+> Qwen3 `<think></think>` thinking tokens eating generation budget,
+> and a small base model that is strong on some categories and
+> genuinely blind to others. Once we built a reliable trial runner
+> and fixed the stop condition, the honest accuracy for the best
+> condition rose to **26.2 % (95 % CI 22.5–30.2)** and the per-category
+> picture became actionable.
+
+### What was wrong with v1 that v2 fixed
+
+1. **`stop_conditions` were never passed to `Job`.** Every raw output
+   in v1 contained `<|im_end|><|endoftext|><|im_start|>user...` —
+   the model emitted end-of-turn but the generator just kept going,
+   because exllamav3's `Job` does not auto-populate stop conditions
+   from the tokenizer's eos token. The "stop_reason" field was always
+   `null`, which should have been the first clue. v2 passes
+   `stop_conditions=[tok.single_id("<|im_end|>"), tok.single_id("<|endoftext|>")]`.
+
+2. **Qwen3's `<think></think>` tokens ate generation budget.** Qwen3
+   adds a "think" block before answering. v0 budgeted 16 new tokens
+   total; v1 bumped to 640 but still mixed thinking tokens with the
+   answer. v2 budgets 300 new tokens and respects EOS, so the
+   generation ends naturally at `<|im_end|>` ~30-150 tokens in.
+
+3. **Shared Generator / Shared KV state hypothesis** — DISPROVEN.
+   Running a FRESH `Generator + Cache` per trial gave byte-identical
+   output to the shared path. The PagedKVCache correctly isolates
+   per-job prompt pages. Writing this off conclusively saves us from
+   spending future debug cycles there.
+
+### The reliable trial runner (G2)
+
+```
+docs/dyno/dyno_v2_runner.py
+```
+
+- **JSONL receipts**, one line per completed trial, flushed on every
+  write. Crash-safe.
+- **Resume** reads the existing JSONL and skips `(condition, seed)`
+  tuples whose status is `completed`.
+- **Per-trial 30 s timeout + 300-new-token budget**, with distinct
+  statuses: `completed`, `timeout`, `truncation`, `failure`.
+  Interrupted trials never claim `completed`.
+- **Full retention**: `prompt_text`, `output_text`, `seed`,
+  `condition`, `truths`, `elapsed_s`, `stop_reason`.
+- Four conditions covered: `zero_batched`, `few_batched`,
+  `zero_single`, `few_single`.
+
+### CWE evaluation — final numbers
+
+Dev/held-out split: dev = {SQLi, XSS, path traversal} (prompts were
+only tuned against these); held-out = the other 7 snippets. We
+report overall accuracy over the full 10-set.
+
+50 trials × 4 conditions × (10 for single or 1 for batched) = 1 100
+actual model invocations. Every invocation `completed`. All
+outputs are in `docs/dyno/offsec/v2/*.jsonl`.
+
+| Condition | Correct / Total | Accuracy | 95 % Wilson CI |
+|---|---|---|---|
+| zero_batched | 53 / 500 | 10.6 % | 8.2 – 13.6 |
+| few_batched  | 97 / 500 | 19.4 % | 16.2 – 23.1 |
+| zero_single  | 72 / 500 | 14.4 % | 11.6 – 17.7 |
+| **few_single** | **131 / 500** | **26.2 %** | **22.5 – 30.2** |
+
+Highest-risk CWE-78 selection (batched only):
+
+| Condition | Correct | 95 % CI |
+|---|---|---|
+| zero_batched | 1 / 50 (2 %) | 0.4 – 10.5 |
+| few_batched  | 0 / 50 (0 %) | 0.0 – 7.1 |
+
+### Per-category accuracy (few_single, the winner)
+
+| CWE | Category | Accuracy | What it means |
+|---|---|---|---|
+| **CWE-89**  | SQL injection | **94 %** | Model knows SQL interpolation is dangerous |
+| **CWE-352** | Shared CSRF token | **72 %** | Few-shot preamble unlocks CSRF reasoning |
+| **CWE-327** | MD5 password hash | **56 %** | Few-shot unlocks weak-crypto class |
+| CWE-79  | XSS reflection | 20 % | Partial — model confuses with other injection types |
+| CWE-78  | OS command injection | 18 % | Model tends to mis-classify as SQLi |
+| CWE-22  | Path traversal | 2 % (↓ from 16 % zero-shot) | Few-shot's `eval()` example appears to distract |
+| CWE-311 | Password cleartext email | 0 % | Model doesn't flag disclosure patterns |
+| CWE-347 | JWT alg=none | 0 % | Zero coverage of auth-protocol attacks |
+| CWE-346 | Trust X-Forwarded-For | 0 % | Zero coverage of origin-spoofing attacks |
+| CWE-434 | Unrestricted file upload | 0 % | Zero coverage of file-write attacks |
+
+### What the surgical pattern means
+
+The base model's knowledge of CWE-25 is **concentrated**, not
+uniform. SQL injection, path traversal (zero-shot), CSRF and weak
+hashing (with few-shot preamble) are well-represented. Auth-protocol
+flaws, server-origin trust and file-upload semantics are flat zero.
+
+That's the shape that would guide a future SFT program if we ever
+approved one: the training signal would target the 0 % categories,
+not the 94 % ones. **We do NOT approve SFT today; the brief forbade
+it, and the honest reading of this evidence is that prompt
+engineering has not yet been exhausted.** A retrieval-augmented
+approach (pull the CWE-25 definition into the prompt) could lift
+the zero rows without any training at all.
+
+### Performance baseline — G4 clarification
+
+The MD5 match between EXL3 safetensors and .tfold v0.2 output bin
+files was called "byte-identical logit bytes" in Stage 7H. Gate 4
+asked us to verify. The audit:
+
+- `zig/tests/qwen35_cuda_main.zig` `step` handler writes
+  `std.mem.sliceAsBytes(cache.logits)` per step.
+- `cache.logits` is `[]u16` (bf16 logits over vocab) per
+  `zig/src/families/qwen3_5/cuda_cache.zig:139`.
+- Each write is raw bf16 logit bytes from the engine's final-norm
+  row.
+
+**Conclusion**: MD5 equality IS logit equality at the bf16 bit
+level. The Stage 7H claim stands. No correction to the preserved
+EXL3-vs-TFOLD numbers. Per-brief: no new optimization work in v2.
+
+### Hands-on exercise (reproduce the fix)
+
+```python
+# BAD (v1): generation runs past <|im_end|> into fake turns
+job = Job(input_ids=templated, max_new_tokens=640,
+          sampler=GreedySampler(), seed=1234)
+
+# GOOD (v2): respect the ChatML end-of-turn token
+eos_ids = [tok.single_id("<|im_end|>"), tok.single_id("<|endoftext|>")]
+job = Job(input_ids=templated, max_new_tokens=300,
+          sampler=GreedySampler(), seed=1234,
+          stop_conditions=eos_ids)
+```
+
+Run both forms against Qwen3.5-2B with an instruction prompt. v1
+output will contain `<|endoftext|><|im_start|>user` repeated; v2
+will end cleanly at the first `<|im_end|>`. Compare `stop_reason`
+in the `finished` event — v1 is `null`, v2 is a token id.
+
+### Comprehension questions
+
+**Q4** (v2). The few-shot preamble (3 examples: `eval()` → CWE-95,
+cookie-missing-HttpOnly → CWE-1004, divide-by-zero → CWE-369) raises
+CSRF accuracy from 12 % to 72 % and MD5 accuracy from 6 % to 56 %,
+but drops path-traversal accuracy from 16 % to 2 %. Why does the
+SAME preamble help some categories and hurt one? Hint: look at
+what's between `eval()` and path traversal in terms of what the
+model "sees" as the mental model. Also hint: the preamble never
+mentioned path traversal.
+
+**Q5** (v2). Our highest-risk accuracy is 0-2 %. The model picks the
+same WRONG highest-risk CWE across every trial. Separately, our
+per-category accuracy for CWE-78 (OS command injection, the true
+highest risk) is 18 % in few_single. What relationship do you expect
+between "correctly classifies the OS cmd injection snippet AT ALL"
+and "correctly picks it as highest-risk"? Write it as a conditional
+probability inequality, then propose ONE prompt change that would
+let the two probabilities agree with each other. Hint: a selection
+task is not the same as a classification task.

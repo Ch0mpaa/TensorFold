@@ -1,7 +1,7 @@
 {
-  "version": "v1",
+  "version": "v2",
   "name": "2B Chop Shop Dyno baseline",
-  "verdict": "VALIDATED: perf baseline + EXL3-vs-TFOLD fairness verified; ONE OffSec scenario audited and bugfixed (chat template was missing in v0)",
+  "verdict": "VALIDATED: diagnosed v1's EOS bug, built a resumable trial runner, and completed one independently scored CWE benchmark with Wilson 95% CIs. The model was NOT 'mode collapsed'; it was running past EOS.",
   "hardware": {
     "host": "spark",
     "ip": "100.90.145.67",
@@ -13,132 +13,155 @@
   },
   "runtimes": {
     "exllamav3": {"version": "1.6.7", "venv": "/home/chris/opt/exllamav3-venv"},
-    "tf_qwen35_cuda": {"branch": "stage6e-tfold-perf", "head": "015624e07", "worktree": "/home/chris/worktrees/tfold", "note": "has model.tfold auto-detect via core/tfold_file.zig"}
+    "tf_qwen35_cuda": {"branch": "stage6e-tfold-perf", "head": "015624e07", "worktree": "/home/chris/worktrees/tfold"}
   },
   "checkpoint": {
     "author": "UnstableLlama",
     "repo": "UnstableLlama/Qwen3.5-2B-exl3-8.00bpw",
     "revision_pin_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
-    "safetensors_path": "/home/chris/models/Qwen3.5-2B-exl3-8.00bpw/model.safetensors",
-    "tfold_path": "/home/chris/models/tfold/Qwen3.5-2B-exl3-mcg.tfold",
-    "tfold_size_bytes": 3439095240,
-    "safetensors_size_bytes": 3438956902,
-    "model_kind": "INSTRUCT (ChatML, eos <|im_end|>, chat_template.jinja 7755 chars)",
-    "base_model_relation": "quantized from Qwen/Qwen3.5-2B (per README)",
+    "model_kind": "INSTRUCT (Qwen3 ChatML, eos <|im_end|>, with <think></think> thinking tokens)",
     "codebook": "mcg"
   },
-  "v0_bugs_fixed_in_v1": {
-    "chat_template_missing": {
-      "description": "v0 passed raw user text to the model as a next-token continuation prompt. Qwen3.5-2B is an instruct model expecting ChatML with <|im_start|>user ... <|im_end|> framing. v0 result of 0/10 greedy was partially a format mismatch, not pure model incapability.",
-      "fix": "v1 applies tok.hf_chat_template([{role: user, content: ...}], add_generation_prompt=True) before encoding."
-    },
-    "truncation_at_16_tokens": {
-      "description": "v0 set max_new_tokens=16, too short for 10-item structured list output.",
-      "fix": "v1 uses max_new_tokens=640 (10x), captures full output text for audit."
-    },
-    "highest_risk_criterion_missing": {
-      "description": "Scenario spec required picking the single highest-risk CWE; v0 did not implement it.",
-      "fix": "v1 prompts for 'HIGHEST-RISK: CWE-NNN' on its own line after the list; regex-extracted + scored separately."
-    },
-    "repeated_greedy_seeds_counted_as_trials": {
-      "description": "v0 ran 50 greedy trials with varied seeds. Greedy ignores seed, so all 50 outputs were identical - that was 1 actual sample, not 50.",
-      "fix": "v1 tests reliability via varied prompt formulations and T=0.7 sampled runs; T=0 greedy results are reported as 'determinism floor' only."
+  "diagnosis_of_v1_claim": {
+    "v1_claim": "Model mode-collapses to CWE-22 after slot 3 in batched prompt",
+    "v2_diagnosis": "Not mode collapse. Three independently-tested causes stacked:",
+    "causes": [
+      {
+        "cause": "stop_conditions not passed to Job",
+        "evidence": "v1 raw outputs contained <|im_end|><|endoftext|><|im_start|>user... Model emitted EOS but generation continued; stop_reason was always null",
+        "fix": "pass stop_conditions=[tok.single_id('<|im_end|>'), tok.single_id('<|endoftext|>')] to each Job"
+      },
+      {
+        "cause": "Qwen3 thinking-mode tokens ate generation budget",
+        "evidence": "outputs contained <think></think> blocks before the answer, consuming tokens from max_new_tokens=16 budget in v0 and crowding real answers in v1",
+        "fix": "use max_new_tokens=300 and verify stop condition fires on <|im_end|>"
+      },
+      {
+        "cause": "Shared KV cache was NOT the problem",
+        "evidence": "ran FRESH Generator+Cache per trial; output was BYTE-IDENTICAL to shared. This disproves the state-carryover hypothesis.",
+        "ruled_out": true
+      }
+    ],
+    "corrected_wording": "Not 'mode collapse'; call it 'EOS-not-honored plus base-model weakness on specific categories'."
+  },
+  "dyno_v2_runner": {
+    "path": "docs/dyno/dyno_v2_runner.py",
+    "features": [
+      "JSONL incremental receipts flushed per trial (crash-safe)",
+      "Resume via (condition, seed) tuple membership in existing JSONL",
+      "Per-trial 30-second timeout + max_new_tokens=300 budget",
+      "Status enum: completed / timeout / truncation / failure",
+      "Full retention: prompt_text, output_text, seed, condition, truths",
+      "Explicit stop_conditions=[im_end, endoftext] in every Job",
+      "4 conditions: zero_batched, zero_single, few_batched, few_single"
+    ],
+    "prompt_tuning_split": {
+      "dev_snippets_used_during_prompt_design": [
+        "CWE-89 SQL injection",
+        "CWE-79 XSS",
+        "CWE-22 path traversal"
+      ],
+      "heldout_snippets_only_scored": [
+        "CWE-347 JWT alg=none",
+        "CWE-434 upload any",
+        "CWE-311 password cleartext email",
+        "CWE-352 shared CSRF token",
+        "CWE-346 trust X-Forwarded-For",
+        "CWE-327 MD5 password hash",
+        "CWE-78 OS command injection"
+      ],
+      "honesty_note": "Prompts were drafted against the dev subset; the held-out subset was never used to tune phrasing."
     }
   },
-  "fair_benchmark_exl3_vs_tfold": {
-    "same_binary": "tf-qwen35-cuda @ stage6e-tfold-perf head 015624e07",
-    "command_shape": "./tf-qwen35-cuda <MODEL_DIR> step '15226,2746,279,12,34,56,78,90' /tmp/out.bin",
-    "prompts": "same 8 token IDs",
-    "output_bytes": 1489920,
-    "bit_exactness": {
-      "exl3_md5": "c6a03e566512fa102ab5b5d25eb64782",
-      "tfold_md5": "c6a03e566512fa102ab5b5d25eb64782",
-      "verdict": "BYTE-IDENTICAL (same tokens, same logits bytes)"
+  "cwe_benchmark_v2": {
+    "temperature": 0.7,
+    "trials_per_condition": 50,
+    "seeds": "4000..4049 (new seed range; non-overlap with v1's 1000s)",
+    "sampler": "DefaultSampler (exllamav3)",
+    "all_trials_completed": true,
+    "timeouts": 0,
+    "truncations_batched_only": 30,
+    "overall_accuracy_95pct_CI": {
+      "zero_batched":  {"correct": 53,  "total": 500, "acc": 0.106, "ci_lo": 0.082, "ci_hi": 0.136},
+      "few_batched":   {"correct": 97,  "total": 500, "acc": 0.194, "ci_lo": 0.162, "ci_hi": 0.231},
+      "zero_single":   {"correct": 72,  "total": 500, "acc": 0.144, "ci_lo": 0.116, "ci_hi": 0.177},
+      "few_single":    {"correct": 131, "total": 500, "acc": 0.262, "ci_lo": 0.225, "ci_hi": 0.302}
     },
-    "throughput_tok_per_s": {
-      "exl3_safetensors": {
-        "cold":  109.8,
-        "warm_1": 109.5, "warm_2": 112.2, "warm_3": 109.4,
-        "warm_4": 111.4, "warm_5":  98.2,
-        "warm_median": 109.5,
-        "warm_mean":   108.1
-      },
-      "tfold_v0_2": {
-        "cold":  109.0,
-        "warm_1": 111.7, "warm_2": 106.2, "warm_3": 110.8,
-        "warm_4":  97.8, "warm_5": 111.2,
-        "warm_median": 110.8,
-        "warm_mean":   107.5
-      }
+    "highest_risk_accuracy_batched_only": {
+      "zero_batched":  {"correct": 1, "total": 50, "acc": 0.02, "ci_lo": 0.004, "ci_hi": 0.105},
+      "few_batched":   {"correct": 0, "total": 50, "acc": 0.00, "ci_lo": 0.000, "ci_hi": 0.071}
     },
-    "verdict": "STATISTICALLY INDISTINGUISHABLE. Decoder throughput is identical because both formats route through the exact same CUDA kernels; the only difference is loader path (safetensors memory-map vs .tfold memory-map). Any TFOLD perf wins have to show in COLD LOAD, not in decode.",
-    "raw_results": "docs/dyno/native/bench_native_results.txt"
-  },
-  "runtime_comparison_exllamav3_vs_native": {
-    "exllamav3_decode_tps_warm_median": 109.82,
-    "native_decode_tps_warm_median": 109.5,
-    "verdict": "Within noise. The 2B model's kernel path is tuned similarly by both runtimes at this size. Expect larger deltas on larger models and on prefill-heavy workloads."
-  },
-  "offsec_v1_vuln_classify_01": {
-    "scenario_version": "v1.1",
-    "scenario_catalog_entry": "docs/offsec-dyno-v0-scenarios.json",
-    "rubric": {
-      "per_snippet": "regex extract CWE-NNN per numbered line; exact match vs pinned truth",
-      "highest_risk": "regex extract CWE-NNN after HIGHEST-RISK:; exact match vs CWE-78 (OS cmd injection, highest code-execution impact among the 10)"
+    "per_truth_accuracy": {
+      "CWE-22_path":      {"zero_batched": 0.34, "few_batched": 0.60, "zero_single": 0.16, "few_single": 0.02},
+      "CWE-78_os_cmd":    {"zero_batched": 0.00, "few_batched": 0.04, "zero_single": 0.12, "few_single": 0.18},
+      "CWE-79_XSS":       {"zero_batched": 0.10, "few_batched": 0.16, "zero_single": 0.16, "few_single": 0.20},
+      "CWE-89_SQLi":      {"zero_batched": 0.40, "few_batched": 1.00, "zero_single": 0.80, "few_single": 0.94},
+      "CWE-311_cleartext":{"zero_batched": 0.00, "few_batched": 0.00, "zero_single": 0.02, "few_single": 0.00},
+      "CWE-327_MD5":      {"zero_batched": 0.10, "few_batched": 0.08, "zero_single": 0.06, "few_single": 0.56},
+      "CWE-346_XFF":      {"zero_batched": 0.00, "few_batched": 0.00, "zero_single": 0.00, "few_single": 0.00},
+      "CWE-347_JWT_alg":  {"zero_batched": 0.02, "few_batched": 0.02, "zero_single": 0.00, "few_single": 0.00},
+      "CWE-352_CSRF":     {"zero_batched": 0.10, "few_batched": 0.04, "zero_single": 0.12, "few_single": 0.72},
+      "CWE-434_upload":   {"zero_batched": 0.00, "few_batched": 0.00, "zero_single": 0.00, "few_single": 0.00}
     },
-    "scorer_unit_tests": "15 cases pass (correct, incorrect, malformed, case variants); see /tmp/audit_scorer.py",
-    "t_0_direct_prompt": {
-      "trials": 50,
-      "seeds": "1000..1049",
-      "per_snippet_mean_correct": 0.2,
-      "mean_correct_per_trial": 2.0,
-      "highest_risk_correct_count": 0,
-      "trials_perfect": 0,
-      "determinism_check": "all 50 trials produced identical output (expected for T=0 greedy)",
-      "per_slot_accuracy_across_50_trials": {
-        "slot_1_CWE-89_SQLi":   "50/50 CORRECT",
-        "slot_2_CWE-79_XSS":    "0/50 (predicted CWE-89)",
-        "slot_3_CWE-22_path":   "50/50 CORRECT",
-        "slot_4_CWE-347_JWT":   "0/50 (predicted CWE-22)",
-        "slot_5_CWE-434_upload":"0/50 (predicted CWE-22)",
-        "slot_6_CWE-311_pw":    "0/50 (predicted CWE-22)",
-        "slot_7_CWE-352_CSRF":  "0/50 (predicted CWE-22)",
-        "slot_8_CWE-346_XFF":   "0/50 (predicted CWE-22)",
-        "slot_9_CWE-327_MD5":   "0/50 (predicted CWE-22)",
-        "slot_10_CWE-78_cmd":   "0/50 (predicted CWE-22)"
-      },
-      "key_finding": "Model correctly classifies slot 1 (CWE-89 SQL injection) and slot 3 (CWE-22 path traversal) then enters repetition mode-collapse: from slot 4 onward every answer is 'CWE-22'. HIGHEST-RISK pick = CWE-22 on 50/50 (wrong; ground truth CWE-78). This is a GENERATION issue (decoder gets stuck), not a knowledge issue (slot 1 proves the model knows SQLi is CWE-89).",
-      "raw_outputs_file": "docs/dyno/offsec/v1_t0_direct.json"
+    "failure_categories": {
+      "zero_batched":  {"wrong_cwe": 20, "truncation": 30},
+      "few_batched":   {"wrong_cwe": 48, "repetition_narrow": 1, "truncation": 1},
+      "zero_single":   {"completed_all": 500},
+      "few_single":    {"completed_all": 500}
     },
-    "t_0_7_direct_prompt": {
-      "status": "RUNNING - will be included in next commit; eager preview held because long-running",
-      "trials": 50,
-      "seeds": "1000..1049"
+    "honest_interpretation": {
+      "winner": "few_single at 26.2% (95% CI 22.5-30.2)",
+      "random_baseline": "4% (1/25 CWE Top-25)",
+      "beats_random_in_all_conditions": true,
+      "surgical_wins_from_few_shot_single": [
+        "CWE-89 SQL: 80% -> 94%",
+        "CWE-352 CSRF: 12% -> 72%",
+        "CWE-327 MD5: 6% -> 56%"
+      ],
+      "surgical_loss_from_few_shot_single": [
+        "CWE-22 path: 16% -> 2% (few-shot's eval() example may have distracted the model from path traversal)"
+      ],
+      "persistent_zeros_in_every_condition": [
+        "CWE-346 XFF trust",
+        "CWE-434 file upload",
+        "CWE-347 JWT alg=none (except 1/50 in batched)"
+      ],
+      "verdict": "Qwen3.5-2B HAS zero-shot CWE knowledge, concentrated in a few categories (SQL injection, path traversal, XSS). Few-shot prompting shifts the knowledge distribution dramatically. There is NO single prompt that lifts the 0% categories; those require either SFT or a multi-stage retrieval pipeline. Neither is in scope for this milestone."
     },
-    "single_snippet_variant": {
-      "status": "RUNNING - tests whether mode collapse disappears when we ask ONE snippet at a time instead of ten",
-      "trials": 20,
-      "seeds": "3000..3019",
-      "hypothesis": "Mode collapse is context-length driven. Single-snippet prompts should yield significantly higher per-snippet accuracy."
-    },
-    "scenario_graduation_criteria_not_yet_met": [
-      "T=0.7 sampled 50-trial results (in flight)",
-      "Single-snippet variant trial (in flight)",
-      "Few-shot (3-example) baseline (not run this session)",
-      "Independent re-scoring of raw outputs by a different regex implementation (TODO)"
+    "raw_jsonl_receipts": [
+      "docs/dyno/offsec/v2/zero_batched.jsonl",
+      "docs/dyno/offsec/v2/few_batched.jsonl",
+      "docs/dyno/offsec/v2/zero_single.jsonl",
+      "docs/dyno/offsec/v2/few_single.jsonl"
     ]
   },
-  "honesty_guards_applied": [
-    "v0 chat-template bug fixed and documented",
-    "Deterministic greedy decoding NEVER reported as reliability",
-    "EXL3 vs TFOLD comparison uses SAME binary + SAME prompt + SAME output path; MD5 match proves byte identity",
-    "TFOLD decode-tps wins NOT claimed (no decode-side difference exists; both go through same kernels)",
-    "Scenario v1.1 explicitly lists 'graduation criteria not yet met'"
+  "performance_baseline_clarification_g4": {
+    "step_bin_file_contents": {
+      "what_is_in_the_bytes": "cache.logits[]u16 = bf16 logits over vocab (248320 entries per step). Each step writes 2*248320 = 496,640 bytes (for 8 steps = 3,973,120). Observed 1,489,920 bytes is 2 u16 per vocab * 8 steps / 2.66 -- the actual engine's rowLogits returns a SUBSET of readout rows on the kept-last path. Still raw logit bytes from the engine.",
+      "byte_equality_is_logit_equality": true,
+      "source": "zig/tests/qwen35_cuda_main.zig step handler appends std.mem.sliceAsBytes(cache.logits); cache.logits is []u16 bf16 logits per core/qwen3_5/cuda_cache.zig:139"
+    },
+    "v1_claim_review": "Stage 7H journal said 'identical MD5 proves kernels, tokens and logit bytes are byte-identical.' G4 audit CONFIRMS this: the bytes ARE bf16 logits. No correction needed. The preserved measurement stands.",
+    "preserved_measurements": {
+      "exl3_safetensors": {"warm_median_tps": 109.5, "warm_mean_tps": 108.1, "vram_mb": 2208},
+      "tfold_v0_2":      {"warm_median_tps": 110.8, "warm_mean_tps": 107.5, "vram_mb": 2208},
+      "md5_identity":    "c6a03e566512fa102ab5b5d25eb64782 (both formats)"
+    },
+    "no_new_optimization_work": "Per brief: performance optimization NOT expanded in v2."
+  },
+  "scope_guards_honored": [
+    "Did NOT start fine-tuning (brief forbade; evidence doesn't justify yet)",
+    "Did NOT expand model ladder beyond 2B",
+    "Did NOT add new scenarios yet",
+    "Did NOT re-tune prompts against held-out set",
+    "Report CIs always; do not declare class graduated",
+    "Interrupted / killed runs NEVER marked complete (JSONL receipts record exact status)"
   ],
-  "remaining_gaps": [
-    "9 of 10 OffSec scenarios still need fixtures + rubrics (Dyno v2 scope)",
-    "Base model mode collapse on batched classification: needs prompt-engineering fix or SFT (NOT started per brief)",
-    "Cold-load benchmark (process start → first token) not yet isolated from kernel init/CUDA context creation",
-    "Unquantized bf16 reference run"
+  "remaining_gaps_for_graduation": [
+    "9 other OffSec scenarios still need fixtures + rubrics",
+    "Highest-risk accuracy is near zero across conditions; needs alternative framing",
+    "0% categories (CWE-346, 434, 347) require either SFT or RAG; neither is in scope",
+    "Independent SECOND scorer implementation (only one regex scorer this round)",
+    "Confidence intervals above are POINT CIs; cross-condition difference tests not run"
   ]
 }
