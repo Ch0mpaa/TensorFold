@@ -1,0 +1,46 @@
+{
+  "label": "exl3_qwen35_2b",
+  "measurements": {
+    "gpu_mem_before_mb": 0.0,
+    "t_import_s": 0.8807976245880127,
+    "t_cold_load_s": 1.9418468475341797,
+    "gpu_mem_after_load_mb": 2207.724609375,
+    "prefill_tokens": 15,
+    "runs": [
+      {
+        "iter": 0,
+        "cold": true,
+        "ttft_s": 0.07788634300231934,
+        "decode_tokens": 128,
+        "decode_s": 1.185685634613037,
+        "decode_tps": 107.95441579400965
+      },
+      {
+        "iter": 1,
+        "cold": false,
+        "ttft_s": 0.017445087432861328,
+        "decode_tokens": 128,
+        "decode_s": 1.1580936908721924,
+        "decode_tps": 110.526463453574
+      },
+      {
+        "iter": 2,
+        "cold": false,
+        "ttft_s": 0.01752305030822754,
+        "decode_tokens": 128,
+        "decode_s": 1.1655628681182861,
+        "decode_tps": 109.81818613237603
+      },
+      {
+        "iter": 3,
+        "cold": false,
+        "ttft_s": 0.017362356185913086,
+        "decode_tokens": 128,
+        "decode_s": 1.1710960865020752,
+        "decode_tps": 109.29931495401098
+      }
+    ],
+    "gpu_mem_peak_mb": 2247.00634765625,
+    "t_warm_cache_s": 0.0005524158477783203
+  }
+}

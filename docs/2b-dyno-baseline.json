@@ -1,0 +1,144 @@
+{
+  "version": "v0",
+  "name": "2B Chop Shop Dyno baseline",
+  "verdict": "PARTIAL: perf baseline complete; OffSec Dyno scaffolded with 1/10 scenario fully executed",
+  "hardware": {
+    "host": "spark",
+    "ip": "100.90.145.67",
+    "gpu": "NVIDIA GB10 (Grace Blackwell, sm_121, compute_cap 12.1)",
+    "cuda_umd": "13.4",
+    "driver": "615.71.09",
+    "torch": "2.11.0+cu130",
+    "python": "3.12"
+  },
+  "runtime_under_test": {
+    "exllamav3": "1.6.7 (pypi)",
+    "venv": "/home/chris/opt/exllamav3-venv"
+  },
+  "checkpoint": {
+    "author": "UnstableLlama",
+    "repo": "UnstableLlama/Qwen3.5-2B-exl3-8.00bpw",
+    "revision_pin_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
+    "local_path": "/home/chris/models/Qwen3.5-2B-exl3-8.00bpw/model.safetensors",
+    "size_bytes": 3438956902,
+    "marker": "mcg",
+    "codebook_note": "mcg (not mul1); results MUST NOT be compared against EXL3-mul1 or non-EXL3 quantizations"
+  },
+  "perf_baseline_exl3_via_exllamav3": {
+    "prompt": "You are a helpful assistant. List three security best practices for password hashing.",
+    "prompt_tokens": 15,
+    "context_length": 4096,
+    "max_new_tokens": 128,
+    "sampler": "GreedySampler (temperature=0, deterministic)",
+    "seed": 1234,
+    "gpu_mem_before_mb": 0.0,
+    "gpu_mem_after_load_mb": 2207.72,
+    "gpu_mem_peak_mb": 2247.01,
+    "cold_load_s": 1.942,
+    "warm_cache_init_s": 0.00055,
+    "runs": [
+      {"iter": 0, "cold": true,  "ttft_s": 0.07789, "decode_tokens": 128, "decode_s": 1.1857, "decode_tps": 107.95},
+      {"iter": 1, "cold": false, "ttft_s": 0.01745, "decode_tokens": 128, "decode_s": 1.1581, "decode_tps": 110.53},
+      {"iter": 2, "cold": false, "ttft_s": 0.01752, "decode_tokens": 128, "decode_s": 1.1656, "decode_tps": 109.82},
+      {"iter": 3, "cold": false, "ttft_s": 0.01736, "decode_tokens": 128, "decode_s": 1.1711, "decode_tps": 109.30}
+    ],
+    "decode_tps_warm_median": 109.82,
+    "decode_tps_warm_variance_pct": 0.9,
+    "ttft_warm_steady_s": 0.0174
+  },
+  "perf_baseline_tfold_v0_2_reader": {
+    "status": "READER ONLY - no end-to-end inference CLI accepts .tfold yet",
+    "evidence": {
+      "tool_tested": "./zig-out/bin/tf-qwen35-cuda /tmp/stage7g-tfold-model step 15226,2746,279 /tmp/out",
+      "exit_error": "error: NoSafetensors"
+    },
+    "raw_io_measurement": {
+      "file_path": "/home/chris/models/tfold/Qwen3.5-2B-exl3-mcg.tfold",
+      "file_size_bytes": 3439095240,
+      "size_delta_vs_safetensors_bytes": 138338,
+      "size_delta_reason": "TFOLD v0.2 header overhead on ~3.4 GB payload",
+      "cold_read_mb_s": 15166.2,
+      "note": "page-cached read; not a true cold measurement; drop_caches requires root. Caps load-side gains, not decoder."
+    },
+    "deferred": "A tfold->inference CLI is a separate PR scope."
+  },
+  "runtime_comparisons_not_run": {
+    "exllamav2": "does not read EXL3 format; no comparison point",
+    "llama_cpp": "no mcg-codebook EXL3 reader exists in llama.cpp",
+    "unquantized_bf16": "no local checkpoint; download ~5 GB out of scope for this session"
+  },
+  "scope_guards": [
+    "Compared only within the same quantization (EXL3-mcg) against its own runtime (exllamav3).",
+    "Did NOT compare mul1 vs mcg decoder outputs.",
+    "Did NOT claim any format-only speedup.",
+    "Did NOT claim TFOLD inference performance (reader-only state reported honestly).",
+    "Reported reader I/O separately from decoder throughput."
+  ],
+  "offsec_dyno_v0": {
+    "scenarios_drafted": 10,
+    "scenarios_fully_executed": 1,
+    "executed_scenarios": [
+      {
+        "id": "vuln_classify_01_cwe",
+        "category": "Vulnerability classification",
+        "fixture_snippets": 10,
+        "ground_truth_cwe_ids": ["CWE-89", "CWE-79", "CWE-22", "CWE-347", "CWE-434", "CWE-311", "CWE-352", "CWE-346", "CWE-327", "CWE-78"],
+        "scoring_rule": "regex extract 'CWE-NNN'; exact match against pinned truth; 10 snippets per trial, score = count correct",
+        "seeds": "1000..1049 (50 trials)",
+        "results_temperature_0_0": {
+          "sampler": "GreedySampler",
+          "trials": 50,
+          "mean_correct_per_trial": 0.0,
+          "min": 0,
+          "max": 0,
+          "trials_perfect_10_of_10": 0,
+          "trials_zero_of_10": 50,
+          "note": "All 50 trials returned the same 10 tokens (greedy is deterministic); seed had no effect; this is NOT reliability measurement, it's a correctness floor."
+        },
+        "results_temperature_0_7": {
+          "sampler": "DefaultSampler",
+          "trials": 50,
+          "mean_correct_per_trial": 0.42,
+          "min": 0,
+          "max": 2,
+          "trials_perfect_10_of_10": 0,
+          "trials_zero_of_10": 32,
+          "note": "Varied seeds produce varied outputs. Mean 0.42/10 is approximately chance (CWE Top-25 random guess yields ~0.4/10). Base model Qwen3.5-2B appears near-random on zero-shot CWE classification."
+        },
+        "sample_wrong_predictions_seed_1000_T0": [
+          {"truth": "CWE-89 (SQL injection)",  "pred": "CWE-78"},
+          {"truth": "CWE-79 (XSS)",            "pred": "CWE-191"},
+          {"truth": "CWE-22 (path traversal)", "pred": "CWE-79"}
+        ],
+        "honest_interpretation": "Qwen3.5-2B base model understands the CWE-NNN output format but cannot zero-shot map vulnerabilities to the correct CWE IDs. Instruction-tuning (SFT + DPO) would be required before this scenario is a useful signal.",
+        "walltime_s_per_trial_batch_50": {"t_0_0": 85.7, "t_0_7": 84.2},
+        "walltime_s_per_single_trial": 1.71,
+        "raw_results": [
+          "docs/dyno/offsec/vuln_classify_01_t0.json",
+          "docs/dyno/offsec/vuln_classify_01_t07.json"
+        ]
+      }
+    ],
+    "scenarios_deferred_to_v1": [
+      "ad_attack_path_01_easy (needs bloodhound.json fixture)",
+      "ad_attack_path_02_medium (needs bloodhound.json fixture)",
+      "vuln_classify_02_severity_dispute (needs severity-disputes.json fixture)",
+      "authz_01_rbac_bypass (needs Flask app.py fixture)",
+      "authz_02_idor_stacked (needs idor-routes.json fixture)",
+      "codegen_01_sql_param (needs vuln-sql.py fixture + smoke harness)",
+      "codegen_02_jwt_verify (needs vuln-jwt.py fixture + smoke harness)",
+      "toolcall_01_single_shell (needs toolcall-api.json fixture)",
+      "toolcall_02_evidence_report (needs evidence-bundle fixture)"
+    ],
+    "trials_target_v1": "50 per scenario, then 100",
+    "scenarios_catalog": "docs/offsec-dyno-v0-scenarios.json",
+    "honesty_guard_applied": "Deterministic decoding (T=0) was NEVER reported as reliability; only T=0.7 variance is."
+  },
+  "remaining_gaps_for_full_championship": [
+    "9 of 10 OffSec scenarios have no fixtures or rubrics yet.",
+    "No TFOLD end-to-end inference CLI; .tfold vs EXL3 kernel-level comparison requires that work.",
+    "No llama.cpp or exllamav2 comparison (no matching reader on either side).",
+    "No unquantized bf16 reference run.",
+    "Base model Qwen3.5-2B near-random on zero-shot CWE; an instruction-tuned variant or few-shot prompt engineering is a prerequisite for the Dyno to produce useful signal on this scenario class."
+  ]
+}

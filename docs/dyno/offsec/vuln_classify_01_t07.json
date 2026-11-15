@@ -1,0 +1,3365 @@
+{
+  "summary": {
+    "scenario_id": "vuln_classify_01_cwe",
+    "temperature": 0.7,
+    "trials": 50,
+    "snippets_per_trial": 10,
+    "mean_correct_per_trial": 0.42,
+    "min_correct": 0,
+    "max_correct": 2,
+    "trials_perfect": 0,
+    "trials_zero": 32
+  },
+  "results": [
+    {
+      "trial": 0,
+      "seed": 1000,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-115",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-115",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-119",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-531",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-115",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-115",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-115",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-584",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-145",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-115",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 1,
+      "seed": 1001,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-89",
+          "correct": true
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-186",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-786",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-400",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-200",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-287",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-400",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-779",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-220",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-93",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 2,
+      "seed": 1002,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-122",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-401",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-1211",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-125",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-151",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-121",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 3,
+      "seed": 1003,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-194",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-798",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-190",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-194",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-194",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-798",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-194",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-79",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 4,
+      "seed": 1004,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-114",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-401",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-77",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-774",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-77",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-77",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-461",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-78",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "trial": 5,
+      "seed": 1005,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-191",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-799",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-799",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-129",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-799",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-799",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-799",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-799",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-79",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 6,
+      "seed": 1006,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-191",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-1709",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-799",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-799",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-1209",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-532",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-1209",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 7,
+      "seed": 1007,
+      "correct_of_10": 2,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-501",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-347",
+          "correct": true
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-597",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-547",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-347",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-797",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-327",
+          "correct": true
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-79",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 8,
+      "seed": 1008,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-101",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-401",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-401",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-601",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-601",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-601",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-401",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-79",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 9,
+      "seed": 1009,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-191",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-799",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-799",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-79",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 10,
+      "seed": 1010,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-191",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-798",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-798",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-798",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-798",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-798",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-798",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-328",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-79",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 11,
+      "seed": 1011,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-191",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-1910",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-108",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-798",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-798",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-798",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-192",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-1900",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 12,
+      "seed": 1012,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-190",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-194",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-194",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-948",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-194",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": null,
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 13,
+      "seed": 1013,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-89",
+          "correct": true
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-292",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-200",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-200",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-800",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-292",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-90",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 14,
+      "seed": 1014,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-618",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-792",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-611",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-822",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-601",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-297",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-918",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 15,
+      "seed": 1015,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-190",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-192",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-122",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-774",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-192",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-821",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-192",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 16,
+      "seed": 1016,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-94",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-904",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-410",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-22",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-825",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-400",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-412",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-410",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-904",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 17,
+      "seed": 1017,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-191",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-1715",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-151",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-1115",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-1715",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-291",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-1015",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 18,
+      "seed": 1018,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-595",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-995",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-542",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-595",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-532",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-542",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-542",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-532",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-91",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 19,
+      "seed": 1019,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-100",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-191",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-100",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-501",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-104",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-501",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-101",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-101",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-194",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-90",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 20,
+      "seed": 1020,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": null,
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 21,
+      "seed": 1021,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-150",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-123",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-122",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-553",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": null,
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 22,
+      "seed": 1022,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-89",
+          "correct": true
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-88",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-834",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-88",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-834",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-844",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-83",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-234",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-93",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 23,
+      "seed": 1023,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-109",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-20",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-209",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-78",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "trial": 24,
+      "seed": 1024,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-20",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-297",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-501",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-207",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-79",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 25,
+      "seed": 1025,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-100",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-501",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-790",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 26,
+      "seed": 1026,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-79",
+          "correct": true
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-704",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-794",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-794",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-794",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-79",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 27,
+      "seed": 1027,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-134",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-534",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-534",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-532",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-534",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-534",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-94",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 28,
+      "seed": 1028,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-89",
+          "correct": true
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-192",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-90",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-602",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-122",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-802",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-802",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-322",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-90",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 29,
+      "seed": 1029,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-118",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-119",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-118",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": null,
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 30,
+      "seed": 1030,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-22",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-823",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-77",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-92",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 31,
+      "seed": 1031,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": null,
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 32,
+      "seed": 1032,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-118",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-918",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-418",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-518",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-519",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-418",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-418",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-418",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-91",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 33,
+      "seed": 1033,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-1210",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-177",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-121",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 34,
+      "seed": 1034,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-89",
+          "correct": true
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-785",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-185",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 35,
+      "seed": 1035,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-90",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-90",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-1010",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-90",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-601",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-601",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-90",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-400",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-90",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 36,
+      "seed": 1036,
+      "correct_of_10": 2,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-191",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-331",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-121",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-891",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-327",
+          "correct": true
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-78",
+          "correct": true
+        }
+      ]
+    },
+    {
+      "trial": 37,
+      "seed": 1037,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-860",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-460",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-460",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-790",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 38,
+      "seed": 1038,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-20",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-20",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-22",
+          "correct": true
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-291",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-201",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-201",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-287",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-201",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-222",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-90",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 39,
+      "seed": 1039,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-101",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-101",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-101",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-101",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-101",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 40,
+      "seed": 1040,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-89",
+          "correct": true
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-190",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-93",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-22",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-267",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-800",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-297",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-93",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 41,
+      "seed": 1041,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-89",
+          "correct": true
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-897",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": null,
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 42,
+      "seed": 1042,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-200",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-86",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-930",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-530",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-791",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-93",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 43,
+      "seed": 1043,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-89",
+          "correct": true
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-890",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-820",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-890",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-820",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-820",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-820",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-520",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-890",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 44,
+      "seed": 1044,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-89",
+          "correct": true
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-113",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-22",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-843",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-22",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-94",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 45,
+      "seed": 1045,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-89",
+          "correct": true
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-401",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-80",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-801",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-319",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-89",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 46,
+      "seed": 1046,
+      "correct_of_10": 2,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-89",
+          "correct": true
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-827",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-127",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-827",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-807",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-89",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-327",
+          "correct": true
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-89",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 47,
+      "seed": 1047,
+      "correct_of_10": 1,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-89",
+          "correct": true
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-802",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-892",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-802",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-802",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-802",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-802",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-802",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-102",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-802",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 48,
+      "seed": 1048,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-79",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-501",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-531",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": "CWE-401",
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-591",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": "CWE-531",
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-401",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-499",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": "CWE-501",
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-491",
+          "correct": false
+        }
+      ]
+    },
+    {
+      "trial": 49,
+      "seed": 1049,
+      "correct_of_10": 0,
+      "outputs": [
+        {
+          "desc_head": "User-supplied input is appended into an ",
+          "truth": "CWE-89",
+          "pred": "CWE-78",
+          "correct": false
+        },
+        {
+          "desc_head": "The web app reflects a URL parameter ver",
+          "truth": "CWE-79",
+          "pred": "CWE-138",
+          "correct": false
+        },
+        {
+          "desc_head": "A file_read endpoint accepts a path para",
+          "truth": "CWE-22",
+          "pred": "CWE-788",
+          "correct": false
+        },
+        {
+          "desc_head": "The JWT verifier accepts tokens whose al",
+          "truth": "CWE-347",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The upload handler saves whatever the cl",
+          "truth": "CWE-434",
+          "pred": "CWE-538",
+          "correct": false
+        },
+        {
+          "desc_head": "A password reset form emails the plainte",
+          "truth": "CWE-311",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "The CSRF token for a form is the same gl",
+          "truth": "CWE-352",
+          "pred": "CWE-768",
+          "correct": false
+        },
+        {
+          "desc_head": "The audit log reads the X-Forwarded-For ",
+          "truth": "CWE-346",
+          "pred": "CWE-768",
+          "correct": false
+        },
+        {
+          "desc_head": "The code uses MD5 to hash passwords stor",
+          "truth": "CWE-327",
+          "pred": null,
+          "correct": false
+        },
+        {
+          "desc_head": "A command executor calls os.system with ",
+          "truth": "CWE-78",
+          "pred": "CWE-788",
+          "correct": false
+        }
+      ]
+    }
+  ]
+}
