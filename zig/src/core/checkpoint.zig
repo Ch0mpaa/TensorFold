@@ -5,6 +5,7 @@ const Io = std.Io;
 const st = @import("safetensors.zig");
 const index_format = @import("checkpoint_index.zig");
 const prefetching = @import("checkpoint_prefetch.zig");
+const tfold_file = @import("tfold_file.zig");
 
 pub const cache = @import("checkpoint_cache.zig");
 pub const direct = @import("checkpoint_direct.zig");
@@ -86,15 +87,36 @@ pub const Checkpoint = struct {
         return openModelPrefixes(gpa, io, dir, if (prefix) |p| &.{p} else &.{});
     }
     /// Every shard of `dir`, mapped, with only names under `prefixes` indexed (an empty list: every name).
+    /// If `dir/model.tfold` exists the loader prefers it; otherwise falls back to safetensors shards.
     pub fn openModelPrefixes(gpa: std.mem.Allocator, io: Io, dir: []const u8, prefixes: []const []const u8) !Checkpoint {
         try @import("save_guard").check(io, dir);
-        const paths = try shardFiles(gpa, io, dir);
-        defer freeShardFiles(gpa, paths);
         var ck: Checkpoint = .{ .gpa = gpa, .io = io };
         errdefer ck.close();
+
+        // Prefer a v0.2 model.tfold when present.
+        const tfold_path = try std.fs.path.join(gpa, &.{ dir, "model.tfold" });
+        defer gpa.free(tfold_path);
+        if (tfoldExists(io, tfold_path)) {
+            try ck.files.ensureTotalCapacityPrecise(gpa, 1);
+            ck.files.appendAssumeCapacity(try tfold_file.openPrefixes(gpa, io, tfold_path, prefixes));
+            return ck;
+        }
+
+        // Otherwise, safetensors shards.
+        const paths = try shardFiles(gpa, io, dir);
+        defer freeShardFiles(gpa, paths);
         try ck.files.ensureTotalCapacityPrecise(gpa, paths.len);
         for (paths) |p| ck.files.appendAssumeCapacity(try st.File.openPrefixes(gpa, io, p, prefixes));
         return ck;
+    }
+
+    /// Whether `path` names an existing regular file (errors other than
+    /// FileNotFound are swallowed).
+    fn tfoldExists(io: Io, path: []const u8) bool {
+        const f = Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+        var mut = f;
+        mut.close(io);
+        return true;
     }
 
     /// One more file (an MTP head beside the model's files).

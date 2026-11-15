@@ -8,7 +8,7 @@ pub fn steps(b: *std.Build, target: std.Build.ResolvedTarget) void {
         const core = b.createModule(.{ .root_source_file = b.path("zig/src/core/root.zig"), .target = target, .optimize = mode, .link_libc = true });
         core.addImport("gpu_memory", @import("gpu_memory.zig").module(b, target));
         core.addImport("tokenizer", b.createModule(.{ .root_source_file = b.path("zig/src/core/tokenizer/tokenizer.zig"), .target = target, .optimize = mode, .link_libc = true }));
-        step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = core, .filters = &.{"checkpoint admission:"} })).step);
+        step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = core, .filters = &.{"checkpoint admission:", "tfold_file:", "fnv1a64:"} })).step);
         if (mode == .debug) b.step("test-modelopt-part-host", "The shared ModelOpt part reader (core/modelopt_part.zig) without a GPU")
             .dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = core, .filters = &.{"part:"} })).step);
         if (mode == .debug) b.step("test-fp8-block-host", "The shared block-FP8 reader and exact scale widening (core/quant/fp8.zig)")

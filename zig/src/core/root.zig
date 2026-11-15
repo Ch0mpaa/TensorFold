@@ -114,6 +114,7 @@ test {
     _ = exl3_load;
     _ = @import("exl3_rect_test.zig");
     _ = checkpoint;
+    _ = @import("tfold_file_test.zig");
     _ = @import("checkpoint_prefetch.zig");
     _ = @import("checkpoint_direct.zig");
     _ = checkpoint_identity;
