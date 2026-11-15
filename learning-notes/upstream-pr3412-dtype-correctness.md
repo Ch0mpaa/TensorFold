@@ -286,3 +286,112 @@ what their inputs look like.
 limit, and when would a tighter bound catch a bug the current test
 would miss? Hint: consider ties, subnormals, and the exponent-aware
 nature of "half an ULP".
+
+## 12. Stage 7F addendum — local CUDA regression on DGX Spark
+
+> Added after the Synthena follow-up review accepted the split plan and
+> asked for actual CUDA regression runs on the real checkpoint.
+
+### What ran, where
+
+Host: DGX Spark (`NVIDIA GB10`, compute capability 12.1, sm_121). Zig
+0.17.0, CUDA 13 toolchain, `tf-qwen35-cuda` built with
+`-Dnvcc=nvcc -Dsm=121 -Doptimize=ReleaseFast`.
+
+Two branches tested:
+
+- **PR #3412 head `ff439ed55`** — mcg admission + dual-marker refusal.
+- **Follow-up branch `e9558e288`** — above, plus f16 embed widening and
+  f32 A_log passthrough (will be its own PR).
+
+### What the regression found
+
+A **real buffer-aliasing bug** that the Stage 7E hygiene commit introduced
+into `admit.group()`. The original Stage 7E code wrote:
+
+```zig
+const mul1_name = try name(&buf, "{s}.mul1", .{base});
+const mcg_name = try name(&buf, "{s}.mcg", .{base});
+if (ck.has(mul1_name) and ck.has(mcg_name)) return error.UnsupportedQwenQuantization;
+```
+
+Both `name()` calls used the same `&buf`. `std.fmt.bufPrint` wrote into
+that buffer, so the second call overwrote the first. On a mul1-only
+checkpoint, `mul1_name` ended up spelling `p.mcg`; admission fell through
+to the else branch, and a correctly-formed mul1 checkpoint was refused
+as `UnsupportedQwenQuantization`.
+
+This broke:
+
+- `EXL3 admission: invalid widths refuse before upload...`
+- `EXL3 admission: mixed supported widths and allocator failures stay host owned`
+- `EXL3 admission: a group carrying both mul1 and mcg markers is refused` (my own new test)
+
+**Fix**: add a second buffer so each name has its own backing store.
+Trivially small patch:
+
+```zig
+var buf: [240]u8 = undefined;
+var mcg_buf: [240]u8 = undefined;
+...
+const mul1_name = try name(&buf, "{s}.mul1", .{base});
+const mcg_name = try name(&mcg_buf, "{s}.mcg", .{base});
+```
+
+Committed as the amended PR #3412 head `ff439ed55`.
+
+### Full host-test tally (both branches)
+
+| Test step | Pass | Skip | Fail |
+|---|---|---|---|
+| `test-qwen35-exl3-admission-host` | 6 | 0 | 0 |
+| `test-exl3-cuda-host` | 671 | 10 | 0 |
+| `test-qwen35-cache-host` | 23 | 0 | 0 |
+| `test-qwen35-exl3-owner-host` | 1 | 0 | 0 |
+| `test-qwen35-formats-host` | 11 | 0 | 0 |
+| **Total** | **712** | **10** | **0** |
+
+### End-to-end inference on the real checkpoint
+
+Running `tf-qwen35-cuda ~/models/Qwen3.5-2B-exl3-8.00bpw step
+"15226,2746,279" /tmp/out` produces, on BOTH branches:
+
+```
+error: model.language_model.layers.0.linear_attn.norm.weight: f32 { 128 }, expected bf16 { 128 }
+error: UnexpectedTensor
+```
+
+This is **correct and expected**. The checkpoint stores `linear_attn.norm.weight`
+as F32. The admission layer honestly refuses to accept the F32 norm
+because Synthena's review required that every change keep every token
+exact — and F32 → BF16 narrowing fails that on this checkpoint (1,969
+of 2,304 values are not bit-exact, max relative error 0.39 %).
+
+Supporting full-model mcg Qwen3.5-2B inference requires a kernel-side
+F32 norm path in `tf_q35_gdn_post`. That is a separate (third) PR and
+is intentionally not on either reviewed branch.
+
+### What this proves (and what it doesn't)
+
+**Proven**:
+
+- PR #3412 does not regress the existing mul1 admission path.
+- The dual-marker refusal check actually fires (bug caught + fixed).
+- Both branches honestly refuse F32 norms; no silent rounding.
+- The dtype branch adds bit-exact f16 embed widening and f32 A_log
+  passthrough on top of the admission branch; same 712 tests pass.
+
+**Not proven** (and not claimed):
+
+- End-to-end token generation on a real mcg Qwen3.5-2B checkpoint
+  (needs the third PR).
+- End-to-end token parity vs a mul1 reference run on Qwen3.5-2B
+  (no stock mul1 Qwen3.5 checkpoint exists to compare against; all
+  UnstableLlama Qwen3.5 variants ship mcg + F32 norms).
+- Upstream CI green (workflows still `action_required` on fork PRs
+  waiting on maintainer approval).
+
+### Receipt
+
+Machine-readable receipt with exact commands, SHAs, counters, error
+messages, and scope guards: `docs/stage7f-pr3412-local-regression.json`.

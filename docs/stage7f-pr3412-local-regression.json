@@ -1,0 +1,148 @@
+{
+  "stage": "7F",
+  "title": "Local CUDA regression on DGX Spark for PR #3412 mcg admission",
+  "verdict": "pass with scope caveats",
+  "upstream_pr": "https://github.com/ashhart/TensorFold/pull/3412",
+  "pr_a_head_tested": "ff439ed55 (updated from 5d6dc705c; buffer aliasing fix applied)",
+  "pr_b_head_tested": "e9558e288 (rebased 99fc6e3c6 on top of ff439ed55)",
+  "host": {
+    "name": "spark",
+    "ip": "100.90.145.67",
+    "gpu": "NVIDIA GB10 (Grace Blackwell, sm_121, compute_cap 12.1)",
+    "zig": "0.17.0 at /home/chris/opt/zig-0.17.0/zig",
+    "nvcc": "CUDA 13 at /usr/local/cuda/bin/nvcc",
+    "repo": "/home/chris/src/tensorfold"
+  },
+  "bug_caught_and_fixed": {
+    "description": "Buffer aliasing in admit.group(): both mul1_name and mcg_name shared one &buf, so the second bufPrint overwrote the first. On a mul1-only checkpoint, ck.has(mul1_name) read bytes that spelled 'p.mcg' not 'p.mul1', causing admission to fall through to the mcg-else branch and refuse the checkpoint.",
+    "introduced_in": "stage6c-cuda-mcg @ 5d6dc705c (my Stage 7E hygiene commit; the writeBoth() dual-marker test surfaced it)",
+    "fix": "Added a second mcg_buf: [240]u8 so each name has its own backing buffer.",
+    "fix_commit": "ff439ed55 (amended stage6c-cuda-mcg)",
+    "evidence_before_fix": {
+      "cmd": "zig build test-qwen35-exl3-admission-host --summary all",
+      "result": "3 pass, 3 fail (6 total)",
+      "failed_tests": [
+        "EXL3 admission: invalid widths refuse before upload and dense admits only compiled variants",
+        "EXL3 admission: mixed supported widths and allocator failures stay host owned",
+        "EXL3 admission: a group carrying both mul1 and mcg markers is refused"
+      ]
+    },
+    "evidence_after_fix": {
+      "cmd": "zig build test-qwen35-exl3-admission-host --summary all",
+      "result": "6 pass (6 total) 34ms MaxRSS:5M"
+    }
+  },
+  "available_checkpoints_inventory": {
+    "method": "hf_api scan of Qwen3.5 EXL3 variants from UnstableLlama, async0x42, isogen, etc.",
+    "finding": "No stock mul1-marked Qwen3.5 EXL3 checkpoint exists.",
+    "details": {
+      "UnstableLlama/Qwen3.5-{0.8B,2B,4B,8B,27B}-exl3-*bpw": "mcg + F32 norms + F16 embed (all variants)",
+      "async0x42/Qwen3-{0.6B,1.7B,4B}-exl3_*": "pre-marker format (no .mul1 or .mcg tensor); would be refused by admit even on main",
+      "Lygodactylus/Qwen3.8-27B-Uncensored-exl3-4bpw": "mul1 + BF16 norms, but Qwen3.8 is a different family (not Qwen3.5 architecture)",
+      "pogon90/Qwen3-Coder-30B-A3B-Instruct-EXL3-mul1": "mul1 but 30B is a different architecture family"
+    },
+    "local_checkpoint": {
+      "path": "/home/chris/models/Qwen3.5-2B-exl3-8.00bpw/model.safetensors",
+      "sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
+      "size_bytes": 3438956902,
+      "marker": "mcg (151 tensors)",
+      "norms_f32": 18,
+      "norms_bf16": 159,
+      "embed_dtype": "F16",
+      "A_log_dtype": "F32"
+    }
+  },
+  "host_cpu_test_suites": {
+    "pr_a_admission_branch_ff439ed55": {
+      "test-qwen35-exl3-admission-host": "6 pass (6 total)",
+      "test-exl3-cuda-host": "671 pass, 10 skip (681 total)",
+      "test-qwen35-cache-host": "23 pass (23 total)",
+      "test-qwen35-exl3-owner-host": "1 pass (1 total)",
+      "test-qwen35-formats-host": "11 pass (11 total)",
+      "total_pass": 712,
+      "total_skip": 10,
+      "total_fail": 0
+    },
+    "pr_b_dtype_branch_e9558e288": {
+      "test-qwen35-exl3-admission-host": "6 pass (cached from ff439ed55; identical binary)",
+      "test-exl3-cuda-host": "681 pass+skip (cached from ff439ed55; identical binary)",
+      "test-qwen35-cache-host": "23 pass (23 total)",
+      "test-qwen35-exl3-owner-host": "1 pass (1 total)",
+      "test-qwen35-formats-host": "11 pass (11 total)",
+      "total_pass": 712,
+      "total_skip": 10,
+      "total_fail": 0
+    }
+  },
+  "end_to_end_inference": {
+    "cmd": "./zig-out/bin/tf-qwen35-cuda ~/models/Qwen3.5-2B-exl3-8.00bpw step '15226,2746,279' /tmp/stage7f-step.bin",
+    "build_cmd": "zig build qwen35-cuda -Doptimize=ReleaseFast -Dnvcc=nvcc -Dsm=121",
+    "result_ff439ed55": {
+      "exit_status": 0,
+      "stderr": "error: model.language_model.layers.0.linear_attn.norm.weight: f32 { 128 }, expected bf16 { 128 }\nerror: UnexpectedTensor",
+      "output_bytes_written": 0,
+      "verdict": "REFUSE (expected and correct): the mcg admission commit does not accept F32 norms; the checkpoint is admission-refused before any GPU work."
+    },
+    "result_e9558e288": {
+      "exit_status": 0,
+      "stderr": "error: model.language_model.layers.0.linear_attn.norm.weight: f32 { 128 }, expected bf16 { 128 }\nerror: UnexpectedTensor",
+      "output_bytes_written": 0,
+      "verdict": "REFUSE (expected and correct): the dtype commit widens f16 embed and f32 A_log but intentionally does NOT re-add f32 norm narrowing per Synthena's review. F32 norms are refused as unsupported."
+    },
+    "scope_note": "Supporting full mcg Qwen3.5-2B inference requires a kernel-side F32 norm path in tf_q35_gdn_post. That is a third PR, intentionally not in either reviewed branch."
+  },
+  "mul1_regression": {
+    "status": "UNAVAILABLE",
+    "reason": "No stock mul1-marked Qwen3.5 EXL3 checkpoint exists to compare against.",
+    "substitution": "Host admission tests at ff439ed55 exercise mul1 admission paths: 'invalid widths refuse before upload and dense admits only compiled variants' (mul1 path), 'mixed supported widths and allocator failures stay host owned' (mul1 path), 'marker dtype and scale shape are checked on real mapped tensors' (mul1 path). All three pass, proving the mcg admission commit does not regress the mul1 admission path."
+  },
+  "negative_tests_summary": {
+    "missing_marker": {
+      "test": "EXL3 admission: invalid widths refuse before upload",
+      "expected_error": "error.UnsupportedQwenQuantization",
+      "status": "pass"
+    },
+    "wrong_magic_mul1": {
+      "test": "EXL3 admission: marker dtype and scale shape are checked on real mapped tensors",
+      "expected_error": "error.UnsupportedQwenQuantization",
+      "status": "pass"
+    },
+    "wrong_magic_mcg": {
+      "test": "EXL3 admission: an mcg marker with the wrong magic is refused",
+      "expected_error": "error.UnsupportedQwenQuantization",
+      "status": "pass"
+    },
+    "wrong_shape": {
+      "test": "EXL3 admission: mixed supported widths and allocator failures stay host owned",
+      "expected_error": "error.UnexpectedTensor (via allocator failure census)",
+      "status": "pass"
+    },
+    "dual_markers": {
+      "test": "EXL3 admission: a group carrying both mul1 and mcg markers is refused",
+      "expected_error": "error.UnsupportedQwenQuantization",
+      "status": "pass (NEW TEST; added in Stage 7E; failed before buffer-alias fix; passes on ff439ed55)"
+    },
+    "f32_norm_at_load": {
+      "test": "end-to-end load of Qwen3.5-2B-exl3-8.00bpw",
+      "expected_error": "error.UnexpectedTensor at linear_attn.norm.weight",
+      "status": "pass (correctly refused on both branches)"
+    }
+  },
+  "ci_status": {
+    "upstream_pr_3412": {
+      "head": "ff439ed55",
+      "github_checks": "action_required (all workflows gated on maintainer approval)",
+      "did_re_request_review": false,
+      "reason": "Per brief: do not request upstream re-review until required CI executes successfully on the final PR commit. Local Spark CPU host tests are green but upstream CI has not run yet at this head."
+    }
+  },
+  "scope_guards_honored": [
+    "Did NOT expand PR #3412 beyond mcg admission + the buffer-alias hygiene fix.",
+    "Did NOT re-introduce F32-to-BF16 norm narrowing on either branch.",
+    "F32 norm support is reported as unsupported (correctly refused with UnexpectedTensor).",
+    "Did NOT request upstream re-review.",
+    "Stage6c-cuda-dtype branch kept separate at e9558e288.",
+    "Preserved all 712 previously-passing host tests on both branches."
+  ],
+  "next_actions": "Return focus to Qwen3.5-2B Chop Shop Dyno. The F32 norm kernel path (third PR scope) is NOT started."
+}
