@@ -2,6 +2,10 @@
 
 Each release's page on GitHub has its notes and measurements. See [the 1.0.0 release notes](RELEASE-NOTES-1.0.0.md) for the native binary's supported models and migration details.
 
+## 1.0.12
+
+- `.tfold v0.1` format specification published. New native model file format designed from safetensors (fixed-length JSON header + 64-byte-aligned tensor region + mmap layout) and GGUF (typed quant conventions, up-front tensor count, versioned header). Spec lives at `docs/tfold-format-v0.md`; authoritative header schema at `schemas/tfold-v0.json`; validated example at `schemas/tfold-v0-example.json`. The format pins the source checkpoint SHA-256 so a file bound to a wrong checkpoint fails closed, FNV-1a-64 trailer covers everything including the header, every tensor carries its own SHA-256, and unknown architectures, dtypes, quant schemes, and tokenizer types are rejected at the schema level. Codebooks are embedded by reference inside the tensor region as a reserved `__codebook__` tensor; tokenizers are kept external and verified by SHA-256 to avoid GGUF's per-file-monolith duplication. This is Stage 1 of the 8-stage `.tfold` roadmap (spec → Python writer/reader → CPU executor → Zig loader → EXL3 converter → autoregressive inference → mobile runtime → dyno comparison); no writer, reader, or loader lands in this release.
+
 ## 1.0.11
 
 - TensorFold Mobile adds a fail-closed Google Tensor G5 LiteRT 2.3.0 probe for Google's official `selfie_multiclass.tflite` segmentation model. The probe accepts only the externally staged 16,371,837-byte SHA-256-pinned model, compares one CPU `CompiledModel` oracle with five measured NPU runs after an excluded warm-up, and requires LiteRT's native non-CPU-full-acceleration attestation. It does not execute TensorFold EXL3 or LLM models and cannot change CPU-selected serving.

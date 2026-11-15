@@ -1,0 +1,53 @@
+{
+  "tfold": {
+    "version": "0.1",
+    "writer": "tfold-py@0.1.0"
+  },
+  "model": {
+    "name": "Qwen3.5-2B",
+    "arch": "qwen3",
+    "parameters": 2140000000,
+    "vocab_size": 151936,
+    "context_length": 32768,
+    "source_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
+    "source_url": "turboderp/Qwen3.5-2B-exl3@8.00bpw"
+  },
+  "tokenizer": {
+    "type": "tiktoken",
+    "sha256": "9c3a47dafba6b32be5c4f08b2d9917aa41e87552ac9f84f0e013e9db7b89de10"
+  },
+  "quant": {
+    "scheme": "exl3",
+    "bits_per_weight": 8.0,
+    "block_size": 128,
+    "codebook_sha256": "f6e2a1b3c4d5e6f7a890123456789012345678901234567890123456789012ab",
+    "codebook_offset": 65536,
+    "codebook_nbytes": 65536
+  },
+  "tensors": [
+    {
+      "name": "__codebook__",
+      "dtype": "u8",
+      "shape": [65536],
+      "offset": 65536,
+      "nbytes": 65536,
+      "sha256": "f6e2a1b3c4d5e6f7a890123456789012345678901234567890123456789012ab"
+    },
+    {
+      "name": "model.language_model.embed_tokens.weight",
+      "dtype": "fp16",
+      "shape": [151936, 2048],
+      "offset": 131072,
+      "nbytes": 622329856,
+      "sha256": "4ad47947dfa769a9d7eb2754732e855775bb3df70e66902bb2ee4429d27dc776"
+    },
+    {
+      "name": "model.language_model.layers.0.linear_attn.in_proj_qkv.weight",
+      "dtype": "exl3_tile",
+      "shape": [2048, 6144],
+      "offset": 622460928,
+      "nbytes": 12582912,
+      "sha256": "5ef6279518fbef7940d8da4011b6f0bb77375ffb3a6953ce9fc2c7752844343a"
+    }
+  ]
+}

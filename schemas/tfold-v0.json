@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://screwedup.tech/schemas/tfold-v0.json",
+  "title": "tfold v0.1 header",
+  "description": "JSON header carried inside a .tfold model file, after the 16-byte binary preamble. Authoritative schema; see docs/tfold-format-v0.md for the on-disk framing.",
+  "type": "object",
+  "required": ["tfold", "model", "tokenizer", "quant", "tensors"],
+  "additionalProperties": false,
+
+  "properties": {
+    "tfold": { "$ref": "#/$defs/tfold" },
+    "model": { "$ref": "#/$defs/model" },
+    "tokenizer": { "$ref": "#/$defs/tokenizer" },
+    "quant": { "$ref": "#/$defs/quant" },
+    "tensors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 65535,
+      "items": { "$ref": "#/$defs/tensor" }
+    }
+  },
+
+  "$defs": {
+
+    "sha256_hex": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Lowercase hex, exactly 64 characters"
+    },
+
+    "tfold": {
+      "type": "object",
+      "required": ["version", "writer"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "type": "string", "pattern": "^0\\.1$" },
+        "writer":  { "type": "string", "minLength": 1, "maxLength": 128 }
+      }
+    },
+
+    "model": {
+      "type": "object",
+      "required": ["name", "arch", "parameters", "vocab_size", "context_length", "source_sha256", "source_url"],
+      "additionalProperties": false,
+      "properties": {
+        "name":           { "type": "string", "minLength": 1, "maxLength": 128 },
+        "arch":           { "type": "string", "enum": ["qwen3", "qwen3_moe", "llama", "glm", "gemma3"] },
+        "parameters":     { "type": "integer", "minimum": 1 },
+        "vocab_size":     { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "context_length": { "type": "integer", "minimum": 1, "maximum": 4294967295 },
+        "source_sha256":  { "$ref": "#/$defs/sha256_hex" },
+        "source_url":     { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+
+    "tokenizer": {
+      "type": "object",
+      "required": ["type", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "type":   { "type": "string", "enum": ["tiktoken", "sentencepiece", "bpe", "unigram"] },
+        "sha256": { "$ref": "#/$defs/sha256_hex" }
+      }
+    },
+
+    "quant": {
+      "type": "object",
+      "required": ["scheme", "bits_per_weight", "block_size"],
+      "additionalProperties": false,
+      "properties": {
+        "scheme": {
+          "type": "string",
+          "enum": ["fp16", "bf16", "fp32", "exl3", "exl3_mcg", "gguf_q4_0", "gguf_q4_k_m", "gguf_q8_0"]
+        },
+        "bits_per_weight": { "type": "number", "minimum": 0.1, "maximum": 32 },
+        "block_size":      { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "codebook_sha256": { "$ref": "#/$defs/sha256_hex" },
+        "codebook_offset": { "type": "integer", "minimum": 0 },
+        "codebook_nbytes": { "type": "integer", "minimum": 0 }
+      },
+      "allOf": [
+        {
+          "if":   { "properties": { "scheme": { "enum": ["fp16", "bf16", "fp32"] } } },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["codebook_sha256"] },
+                { "required": ["codebook_offset"] },
+                { "required": ["codebook_nbytes"] }
+              ]
+            }
+          }
+        },
+        {
+          "if":   { "properties": { "scheme": { "enum": ["exl3", "exl3_mcg"] } } },
+          "then": { "required": ["codebook_sha256", "codebook_offset", "codebook_nbytes"] }
+        }
+      ]
+    },
+
+    "tensor": {
+      "type": "object",
+      "required": ["name", "dtype", "shape", "offset", "nbytes", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^(?:__[a-z_]+__|[a-zA-Z0-9._]+)$"
+        },
+        "dtype": {
+          "type": "string",
+          "enum": ["fp16", "bf16", "fp32", "u8", "i8", "u16", "i16", "u32", "i32", "exl3_tile", "exl3_mcg_tile"]
+        },
+        "shape": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "type": "integer", "minimum": 1, "maximum": 4294967295 }
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Byte offset from start of file, MUST be 64-byte aligned"
+        },
+        "nbytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "sha256": { "$ref": "#/$defs/sha256_hex" }
+      }
+    }
+  }
+}
