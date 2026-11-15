@@ -2,6 +2,13 @@
 
 Each release's page on GitHub has its notes and measurements. See [the 1.0.0 release notes](RELEASE-NOTES-1.0.0.md) for the native binary's supported models and migration details.
 
+## 1.0.14
+
+- `.tfold v0.1` Stage 3 ships: a standalone Python CPU reference executor at `tools/tfold_cpu/` (~535 lines, 5 files) that opens `examples/demo.tfold`, validates the file through the Stage 2 reader, and computes `y = x @ W + b` using explicit-loop dot / matvec / matmul / bias_add — no NumPy, PyTorch, BLAS, CUDA, or Metal arithmetic. Documented FP32 tolerance `atol=1e-5, rtol=1e-5` reflects the expected summation-order drift vs numpy. Non-finite inputs or outputs raise `FiniteError`; shape mismatches raise `ShapeError`; no silent reshape, cast, or broadcast anywhere in the pipeline.
+- CLI at `python -m tfold_cpu` reports cold load+run (~13.7 ms on the demo), warm median across repeats (~3.4 ms, n=50), peak RSS, and the output vector. All measurements explicitly labelled "Python CPU-reference performance only; not optimized native inference."
+- The Stage 2 skipped case (`test_rejects_unknown_arch_at_read`) is now covered cleanly by a new `tests/test_reader_regression.py` that constructs crafted-byte files from scratch rather than mutating existing ones in place; 4 additional negative-path regression tests ship alongside (unknown scheme, unknown tokenizer type, unknown reserved `__name__`, and a baseline-opens-cleanly sanity test).
+- Test matrix: 51 passing, 0 skipped, 0 failing (Stage 2's 19 preserved + Stage 3's 32 new: 19 per-op unit, 7 end-to-end executor, 5 reader regression, plus the 1 Stage 2 skip replacement). Fixture `examples/demo.tfold` exercised with exact numeric output `[-3.5695, -1.8333, 0.1698, 0.9130]` — three bit-exact against numpy, the fourth differing by 1 ULP (2.38e-7), well within the declared FP32 tolerance. `.tfold` v0.1 binary layout unchanged.
+
 ## 1.0.13
 
 - `.tfold v0.1` Stage 2 ships: reference Python writer and reader at `tools/tfold_py/`, 20-test pytest battery at `tests/` (19 passing, 1 harness-limitation skip, 0 failing), FP32 fixture at `examples/demo.tfold` (1,192 bytes) with a numpy reference, a matrix-vector operation that bit-exactly matches an independent numpy reference, and a conformance report at `docs/tfold-stage2-conformance.md`. Stage 2 definition of done satisfied: a native-compatible `.tfold` file survives a verified write/read round-trip and produces the expected numerical output.

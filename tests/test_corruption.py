@@ -118,30 +118,9 @@ def test_rejects_malformed_json(tmp_path):
 
 
 # ---------- §4.6 HEADER_SCHEMA ----------
-def test_rejects_unknown_arch_at_read(tmp_path):
-    """If a producer somehow wrote an unknown arch, the reader rejects."""
-    good = _good_fixture(tmp_path)
-    raw = bytearray(good.read_bytes())
-    (hlen,) = struct.unpack("<I", bytes(raw[12:16]))
-    header = json.loads(raw[PREAMBLE_NBYTES:PREAMBLE_NBYTES + hlen].decode("utf-8"))
-    header["model"]["arch"] = "unknown_arch"
-    new_hb = json.dumps(header, separators=(",", ":"), sort_keys=False).encode("utf-8")
-    # Exact-same length only; otherwise alignment/offsets would shift. Pad with
-    # a space inside a string to keep JSON valid at the same byte count.
-    delta = len(new_hb) - hlen
-    if delta > 0:
-        pytest.skip("mutation grew JSON; cannot test in place")
-    if delta < 0:
-        new_hb = new_hb + b" " * (-delta)
-        # json.loads will accept trailing whitespace inside the JSON? No — the
-        # new_hb here is JUST the header bytes. json.loads of b'...}  ' works.
-    raw[PREAMBLE_NBYTES:PREAMBLE_NBYTES + hlen] = new_hb
-    bad = tmp_path / "ua.tfold"
-    bad.write_bytes(bytes(raw))
-    with pytest.raises(E.SpecError) as ei:
-        tfold_py.read(bad)
-    # Either schema or integrity catches this first; both are acceptable
-    assert ei.value.code in (E.HEADER_SCHEMA, E.INTEGRITY, E.UNKNOWN_ARCH)
+# The unknown-arch-at-read case lives in tests/test_reader_regression.py
+# (built fresh from raw bytes so JSON length is free to change). Keeping
+# only a pointer here to avoid confusion.
 
 
 # ---------- §4.7 INTEGRITY ----------
