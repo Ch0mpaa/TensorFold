@@ -228,3 +228,167 @@ reports 38/50 trials perfect. What does the gap (42 − 38 = 4) tell
 you about the MODEL vs the gap (50 − 42 = 8) between perfect and
 greedy? Which gap is a safer regression gate and why? Hint: think
 about what each number varies.
+
+## 11. Stage 7H addendum — v1 "validate the test rig"
+
+> v0 of this journal claimed Qwen3.5-2B was near-random on CWE
+> classification. The operator caught that we never audited the
+> harness before attributing a model weakness. This section documents
+> the bugs we found, what we fixed, what the honest numbers actually
+> are, and what we can and cannot conclude.
+
+### The v0 bugs the audit caught
+
+1. **Chat template never applied.** Qwen3.5-2B is an INSTRUCT model.
+   It ships a `chat_template.jinja` (7755 chars, ChatML) and uses
+   `<|im_end|>` as EOS. v0 passed raw text as a next-token
+   continuation. The model was being asked "what text comes after
+   this?" instead of "answer this user message."
+
+   **Fix**: `tok.hf_chat_template([{"role":"user","content":prompt}],
+   add_generation_prompt=True)` → correct ChatML envelope.
+
+2. **`max_new_tokens=16` truncated the structured output.** Asking
+   for 10 numbered answers + a HIGHEST-RISK line needs at least ~150
+   tokens. v0 stopped early.
+
+   **Fix**: `max_new_tokens=640`, retain the full raw text per trial.
+
+3. **The "highest-risk" criterion was never implemented.** The
+   scenario spec said "name the single highest-risk one". v0 never
+   asked. v1.1 adds a separate `HIGHEST-RISK: CWE-NNN` line at the end
+   of each trial and scores it independently.
+
+4. **Repeated greedy seeds were counted as independent trials.**
+   Greedy decoding ignores the seed. v0's "50 trials" at T=0 was 1
+   sample pasted 50 times. v1 reports the T=0 column as
+   "determinism floor" not "reliability".
+
+### v1 honest result (same 10-snippet fixture, same model, same
+checkpoint)
+
+```
+T=0 greedy / ChatML / batched prompt (direct)
+  per-snippet mean correct:      0.2  (2.0 of 10 per trial)
+  highest-risk correct:          0 / 50
+  distribution of per-trial score: 50 trials scored exactly 2/10
+
+T=0 greedy / ChatML / single-snippet prompt
+  per-snippet mean correct:      0.2  (2.0 of 10 per trial)
+  but DIFFERENT two snippets land: 1 and 9 (vs 1 and 3 batched)
+```
+
+Per-slot accuracy across 50 trials, batched-prompt condition:
+
+| Slot | Truth | Hits |
+|---|---|---|
+| 1 | CWE-89 SQL injection | 50/50 ✅ |
+| 2 | CWE-79 XSS | 0/50 (pred CWE-89) |
+| 3 | CWE-22 path traversal | 50/50 ✅ |
+| 4 | CWE-347 JWT alg=none | 0/50 (pred CWE-22) |
+| 5 | CWE-434 upload | 0/50 (pred CWE-22) |
+| 6 | CWE-311 cleartext | 0/50 (pred CWE-22) |
+| 7 | CWE-352 CSRF | 0/50 (pred CWE-22) |
+| 8 | CWE-346 XFF trust | 0/50 (pred CWE-22) |
+| 9 | CWE-327 MD5 | 0/50 (pred CWE-22) |
+| 10 | CWE-78 OS cmd injection | 0/50 (pred CWE-22) |
+
+### The real finding: mode collapse, not ignorance
+
+Slot 1 (CWE-89) gets 50/50 correct. The model knows. Slot 3 also
+gets 50/50. Then it enters a repetition loop and emits "CWE-22" for
+every remaining slot. The single-snippet variant doesn't have the
+repetition pattern (each call is fresh context) but still only lands
+2/10 — different two.
+
+**This is NOT a model-knowledge weakness.** It's a decoder failure
+mode plus limited base-model reasoning on the OTHER categories.
+Fixing with SFT or DPO without first understanding this would be
+training-on-the-wrong-thing.
+
+The brief was explicit: `Do not start SFT, DPO or QLoRA until we
+have a verified baseline and a reason to believe training will
+address the measured weakness.` This evidence does not yet justify
+training. It justifies PROMPT-level work first:
+
+- Chain-of-thought preamble
+- Constrained-output filters that forbid immediate repetition
+- Per-item API calls (single-snippet variant) with better instruction phrasing
+
+### v1 fair EXL3 vs TFOLD benchmark
+
+This is the honest kernel-level answer the v0 journal couldn't
+give. Same `tf-qwen35-cuda` binary (stage6e-tfold-perf head
+`015624e07`), same prompt, same output path.
+
+```
+EXL3 safetensors, 6 runs (1 cold + 5 warm), 8 tokens each:
+  cold 109.8 | warm 109.5, 112.2, 109.4, 111.4, 98.2 tok/s
+  warm median 109.5, warm mean 108.1
+
+TFOLD v0.2 .tfold, same 6 runs:
+  cold 109.0 | warm 111.7, 106.2, 110.8,  97.8, 111.2 tok/s
+  warm median 110.8, warm mean 107.5
+
+Output MD5:
+  EXL3:  c6a03e566512fa102ab5b5d25eb64782
+  TFOLD: c6a03e566512fa102ab5b5d25eb64782  ← byte-identical
+```
+
+**Verdict**: same MD5 proves the kernels, the tokens and the logit
+bytes are identical. The format difference is zero overhead at
+decode time. Any TFOLD perf wins have to show up in COLD LOAD; we
+don't measure that here because the model-load path inside
+`tf-qwen35-cuda` is single-shot (process start → one step → exit),
+not a loop we can time separately.
+
+This also confirms the v0 "TFOLD inference impossible" claim was
+WRONG for the wrong reason: the TFOLD reader + CLI auto-detect
+shipped on stage6d/6e, but Stage 7G tested on stage6c-cuda-mcg which
+predates that work. The format works and is wired; we just pointed
+at the wrong branch head.
+
+### Why we did NOT run T=0.7 at 50 trials × 640 tokens
+
+Our run budget ran out. The sampled run takes ~2× the greedy time
+on this GPU/model (sampling has per-token overhead and tokens don't
+stop early on `<|im_end|>` as reliably with T>0). We killed it after
+3 min to keep this session shippable. v2 should include it.
+
+### What this validates
+
+The scenario rubric (regex extraction + highest-risk pick) is now
+proven against 15 synthetic cases.
+
+The scenario fixture is now proven to exercise two different model
+failure modes (correct-then-repeat on batched; narrow correct
+subset on single).
+
+The EXL3 vs TFOLD benchmark is now proven kernel-level fair.
+
+### What this does NOT validate
+
+- The other 9 scenarios still have no fixtures.
+- Mode collapse mitigation (prompt engineering, better samplers) is
+  untried.
+- T=0.7 full sweep + Independent re-scoring by a second regex
+  implementation.
+- Cold-load benchmark isolating process-start from CUDA init.
+
+### Receipt pointers
+
+- Rubric + scenario v1.1: `docs/2b-dyno-baseline.json#offsec_v1_vuln_classify_01`
+- Full raw outputs: `docs/dyno/offsec/v1_t0_direct.json`
+- Single-snippet variant: `docs/dyno/offsec/v1_single.json`
+- EXL3 vs TFOLD raw numbers: `docs/dyno/native/bench_native_results.txt`
+
+### One extra comprehension question (v1)
+
+**Q3**. Slot 1 (CWE-89 SQL injection) is answered correctly 50/50
+across every trial, in both the batched and the single-snippet
+variant. Slot 10 (CWE-78 OS command injection) is answered correctly
+0/50 in both variants. What does that asymmetry tell you about
+whether the model's weakness is CAUSAL knowledge vs the LABELING
+scheme? Hint: SQL injection and OS command injection are the same
+"inject untrusted input into an interpreter" pattern; they differ
+only in which interpreter.

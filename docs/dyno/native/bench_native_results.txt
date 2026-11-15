@@ -1,0 +1,24 @@
+=== EXL3 safetensors cold ===
+8 steps: the first 9.2 ms, then 9.1 ms a step (109.8 tok/s)
+=== EXL3 warm 1 ===
+8 steps: the first 9.4 ms, then 9.1 ms a step (109.5 tok/s)
+=== EXL3 warm 2 ===
+8 steps: the first 8.8 ms, then 8.9 ms a step (112.2 tok/s)
+=== EXL3 warm 3 ===
+8 steps: the first 8.8 ms, then 9.1 ms a step (109.4 tok/s)
+=== EXL3 warm 4 ===
+8 steps: the first 9.8 ms, then 9.0 ms a step (111.4 tok/s)
+=== EXL3 warm 5 ===
+8 steps: the first 10.0 ms, then 10.2 ms a step (98.2 tok/s)
+=== TFOLD cold ===
+8 steps: the first 8.8 ms, then 9.2 ms a step (109.0 tok/s)
+=== TFOLD warm 1 ===
+8 steps: the first 9.4 ms, then 9.0 ms a step (111.7 tok/s)
+=== TFOLD warm 2 ===
+8 steps: the first 8.9 ms, then 9.4 ms a step (106.2 tok/s)
+=== TFOLD warm 3 ===
+8 steps: the first 9.8 ms, then 9.0 ms a step (110.8 tok/s)
+=== TFOLD warm 4 ===
+8 steps: the first 10.1 ms, then 10.2 ms a step (97.8 tok/s)
+=== TFOLD warm 5 ===
+8 steps: the first 8.8 ms, then 9.0 ms a step (111.2 tok/s)
