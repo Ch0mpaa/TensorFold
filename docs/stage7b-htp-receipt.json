@@ -1,0 +1,142 @@
+{
+  "stage": "7B",
+  "gate": "real-hexagon-v79-execution",
+  "description": "A real QNN HTP v79 projection graph executed on the Hexagon DSP of a stock retail OnePlus 13 (CPH2655, SM8750, Android 16 SDK 36) from the TensorFold Android APK's untrusted_app context. Numerical output matched the ARM64 CPU oracle within the app-coded 0.0005 tolerance.",
+  "timestamp_utc": "2026-11-15T11:50:46Z",
+  "verdict": "PASS for the fixed-synthetic HTP projection; DEFERRED for the two live-payload HTP projections (payload files not staged this session).",
+  "device": {
+    "adb_id": "d2e6b41e",
+    "build_fingerprint": "OnePlus/CPH2653EEA/OP5D55L1:15/AP3A.240617.008/V.R4T3.1accb8e_566b33_566b34:user/release-keys",
+    "soc_model": "SM8750 (Snapdragon 8 Elite)",
+    "hexagon_architecture": "V79",
+    "android_release": "16",
+    "android_sdk": 36,
+    "security_patch": "2025-10-01",
+    "state": "stock retail, unrooted, SELinux enforcing"
+  },
+  "apk_under_test": {
+    "package": "dev.tensorfold.mobile",
+    "variant": "release (prod)",
+    "signer": "debug keystore (dev build chain)",
+    "debuggable_flag": false,
+    "appId": 10263,
+    "running_uid": "u0_a263",
+    "process_selinux_context": "u:r:untrusted_app:... (app process)",
+    "runas_shell_selinux_context": "u:r:runas_app:s0:c6,c257,c512,c768",
+    "qnn_libs_in_apk": [
+      "libQnnHtp.so",
+      "libQnnHtpV79Stub.so",
+      "libQnnHtpV79Skel.so",
+      "libQnnHtpV79CalculatorStub.so",
+      "libQnnHtpPrepare.so",
+      "libQnnSystem.so",
+      "libtensorfold_qnn_probe.so",
+      "libtensorfold_qnn_live.so",
+      "libtensorfold_openai.so",
+      "libtensorfold_engine_2b.so",
+      "libtensorfold_engine_4b.so",
+      "libtensorfold_engine_moe.so",
+      "libqnn_platform_validator.so"
+    ],
+    "uses_native_library_registered": ["libcdsprpc.so", "libadsprpc.so", "libOpenCL.so"]
+  },
+  "selinux_evidence": {
+    "shell_UID_can_open_fastrpc_cdsp": false,
+    "shell_UID_error": "openat(/dev/fastrpc-cdsp) = -1 EACCES  (from Stage 7A strace)",
+    "runas_app_can_open_fastrpc_cdsp": false,
+    "runas_app_evidence": "run-as dev.tensorfold.mobile: stat /dev/fastrpc-cdsp -> Permission denied (from Stage 7B session attempt; runas_app context restricted vs untrusted_app)",
+    "untrusted_app_can_open_fastrpc_cdsp_direct": false,
+    "untrusted_app_untrusted_hal_path_works": true,
+    "untrusted_app_evidence": "Direct open('/dev/fastrpc-cdsp') failed (Permission denied) AND fastrpc_apps_user.c:3844 open_shell failed; however the library fell back to the HAL path and cdsprpcd daemon (system UID) successfully opened /vendor/dsp/cdsp/fastrpc_shell_unsigned_3 on the app's behalf. Unsigned PD was then created on domain 3 (CDSP)."
+  },
+  "cpu_arm64_reference": {
+    "operator": "quantized symmetric-u8 MatMul [1,4] x [4,3]",
+    "activation": [1, 2, 3, 4],
+    "weights_row_major_u8": [1, 2, 3, 4, 5, 6, 7, 8, 9, 1, 0, 2],
+    "integer_cpu_dots_fp32": [34.0, 36.0, 50.0],
+    "tolerance": 0.0005,
+    "source": "QnnProbe.cpp::kSyntheticInput / kSyntheticWeights / kSyntheticReference"
+  },
+  "htp_execution_v79": {
+    "projection": "fixed_synthetic",
+    "projection_label_in_ui": "QNN HTP v79 fixed synthetic projection passed (2.16 ms).",
+    "status": "PASS",
+    "elapsed_ms": 2.16,
+    "max_abs_error": "<= 0.0005 (tolerance; app marked projection as passed implying <= tol)",
+    "fastrpc_domain": 3,
+    "fastrpc_domain_label": "CDSP",
+    "qnn_backend_library": "libQnnHtp.so",
+    "qnn_backend_stub_arm_side": "libQnnHtpV79Stub.so",
+    "qnn_backend_skel_dsp_side": "libQnnHtpV79Skel.so",
+    "dsp_shell": "/vendor/dsp/cdsp/fastrpc_shell_unsigned_3 (Unsigned PD)",
+    "pd_type": "Unsigned Process Domain",
+    "spawn_time_us_first_cycle": 29548,
+    "load_time_us_first_cycle": 38010,
+    "spawn_time_us_second_cycle": 36090,
+    "load_time_us_second_cycle": 37282,
+    "spawn_time_us_third_cycle": 31769,
+    "load_time_us_third_cycle": 37852,
+    "notes": "Three distinct FastRPC session spawn + skel load + close cycles were observed back-to-back; this matches the three successive HTP projection gates (synthetic / live-checkpoint / full-block) in QnnProbe.cpp. Only the first (synthetic) projection runs without external payload; the other two reported 'Live checkpoint payload is not prepared in this app's private storage.' on this fresh install."
+  },
+  "deferred_projections_this_session": [
+    {
+      "label": "Live app-owned checkpoint projection",
+      "status_text": "Live checkpoint payload is not prepared in this app's private storage.",
+      "reason": "Required file files/tensorfold/qnn/live-checkpoint-v1.bin not staged on fresh install."
+    },
+    {
+      "label": "Full 2048x6144 app-owned projection",
+      "status_text": "Live checkpoint payload is not prepared in this app's private storage.",
+      "reason": "Required file files/tensorfold/qnn/live-full-projection-v2.bin not staged."
+    },
+    {
+      "label": "Persistent full projection",
+      "status_text": "Live checkpoint payload is not prepared in this app's private storage.",
+      "reason": "Same files required; shares the live checkpoint / full projection payloads."
+    }
+  ],
+  "ui_visible_summary_exact": "QNN HTP v79 fixed synthetic projection passed (2.16 ms). Live app-owned checkpoint projection failed: Live checkpoint payload is not prepared in this app's private storage.. Full 2048x6144 app-owned projection failed: Live checkpoint payload is not prepared in this app's private storage.. Persistent full projection failed: Live checkpoint payload is not prepared in this app's private storage.. TensorFold model inference remains on CPU pending retained-token parity.",
+  "ui_screenshot": "docs/images/stage7b-htp-pass.png",
+  "logcat_evidence_file": "docs/stage7b-logcat.txt",
+  "key_logcat_excerpts": [
+    "11-15 11:50:46.251 nativeloader: Load libtensorfold_qnn_probe.so ... ok",
+    "11-15 11:50:46.252 fastrpc_apps_user.c:5047: multidsplib_env_init: libcdsprpc.so loaded",
+    "11-15 11:50:46.262 cdsprpcd: Successfully opened file /vendor/dsp/cdsp/fastrpc_shell_unsigned_3",
+    "11-15 11:50:46.287 fastrpc_apps_user.c:3924: Created user PD on domain 3, Unsigned:Y, Signed:N",
+    "11-15 11:50:46.326 remote_handle64_open: opened handle 0xb400006fc3fc7390 for file:///libQnnHtpV79Skel.so?qnn_2_50_0_skel_handle_invoke on domain 3 (spawn time 29548 us, load time 38010 us), refs 1",
+    "11-15 11:50:46.529 remote_handle64_close: closed handle ... name libQnnHtpV79Skel.so, refs 0"
+  ],
+  "controls_and_distinctions": {
+    "stock_retail_android": true,
+    "rooted_or_engineering_device": false,
+    "selinux_enforcing": true,
+    "system_permissions_unmodified": true,
+    "device_security_settings_unmodified": true,
+    "cpu_fallback_counted_as_htp": false,
+    "qnn_calculator_api_success_counted_as_htp": false,
+    "notes": "The QnnProbe.cpp code path builds a real QNN HTP context, graph and MatMul node, executes QnnGraph_execute, reads back the output tensor, and compares to the integer CPU oracle. The 2.16 ms elapsed time is measured from the ARM side across the full QnnGraph_execute call which includes the FastRPC marshal to CDSP, the DSP-side kernel, and the result return."
+  },
+  "tests_preserved": {
+    "fork_python_pytest_in_stage_7a_run": {"pass": 84, "total": 84},
+    "fork_zig_tfold_tests": {"expected": 21, "run_in_session": false, "notes": "File set unchanged"},
+    "upstream_test_checkpoint_io_host_last_measured_stage_6e": {"pass": 62, "total": 62},
+    "upstream_test_qwen35_exl3_admission_host_last_measured_stage_6d": {"pass": 5, "total": 5},
+    "upstream_test_exl3_cuda_host_last_measured_stage_6d": {"pass": 1017, "total": 1027, "skip": 10},
+    "on_device_arm64_exl3_from_stage_7a": {"pass": 2, "total": 2},
+    "stage_7b_delta_this_session": "No TensorFold source was modified in Stage 7B; only app binary install + run + UI capture + logcat + docs commit."
+  },
+  "scope_guards": {
+    "no_new_quantization_scheme": true,
+    "no_new_cuda_kernel": true,
+    "no_new_device_backend": true,
+    "no_new_ui_functionality": true,
+    "did_not_claim_full_llm_npu_inference": true,
+    "no_hardware_purchased": true,
+    "no_selinux_disabled": true,
+    "no_root_required": true
+  },
+  "ties_back_to_stage_7a": {
+    "stage_7a_finding": "Shell-launched qnn-platform-validator reports 'Unit Test Passed' but strace shows EACCES on /dev/fastrpc-cdsp. The 'Pass' was ARM-side stub fallback, not HTP delegation.",
+    "stage_7b_resolution": "The TensorFold APK runs its QnnProbe JNI from the actual untrusted_app context which, unlike shell_UID or runas_app, has the Android loader-registered uses_native_library=libcdsprpc.so permission AND is permitted to reach cdsprpcd daemon via Binder/HAL. The daemon (system UID) opens the DSP shell on the app's behalf and returns a working PD handle. End result: the app can delegate to Hexagon v79; a shell binary of the same name cannot."
+  }
+}
