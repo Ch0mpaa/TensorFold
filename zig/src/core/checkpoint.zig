@@ -98,7 +98,9 @@ pub const Checkpoint = struct {
         defer gpa.free(tfold_path);
         if (tfoldExists(io, tfold_path)) {
             try ck.files.ensureTotalCapacityPrecise(gpa, 1);
-            ck.files.appendAssumeCapacity(try tfold_file.openPrefixes(gpa, io, tfold_path, prefixes));
+            // Env-var opt-in: TF_TFOLD_LOG_STATS=1 prints phase breakdown.
+            const log_stats = std.c.getenv("TF_TFOLD_LOG_STATS") != null;
+            ck.files.appendAssumeCapacity(try tfold_file.openOptions(gpa, io, tfold_path, .{ .prefixes = prefixes, .log_stats = log_stats }));
             return ck;
         }
 

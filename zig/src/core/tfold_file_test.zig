@@ -271,3 +271,48 @@ test "fnv1a64: a known vector" {
     try t.expectEqual(tf.FNV_OFFSET_BASIS, tf.fnv1a64(tf.FNV_OFFSET_BASIS, &.{}));
     try t.expectEqual(@as(u64, 0x85944171f73967e8), tf.fnv1a64(tf.FNV_OFFSET_BASIS, "foobar"));
 }
+
+// ---------------------------------------------------------------------------
+// Stage 6e: FNV optimization tests
+// ---------------------------------------------------------------------------
+
+test "fnv1a64_unrolled: bit-identical to scalar reference over random 16 MB" {
+    const buf = try a.alloc(u8, 16 * 1024 * 1024);
+    defer a.free(buf);
+    var prng = std.Random.DefaultPrng.init(0xC0DED00D);
+    prng.fill(buf);
+    const h_scalar = tf.fnv1a64_scalar(tf.FNV_OFFSET_BASIS, buf);
+    const h_unrolled = tf.fnv1a64_unrolled(tf.FNV_OFFSET_BASIS, buf);
+    try t.expectEqual(h_scalar, h_unrolled);
+}
+
+test "fnv1a64_unrolled: identical for odd lengths exercising the tail" {
+    const alpha = "The quick brown fox jumps over the lazy dog";
+    inline for (.{ 0, 1, 7, 8, 15, 16, 17, 31, 32, 33, 1023, 1024, 1025 }) |n| {
+        if (n <= alpha.len) {
+            const s = alpha[0..n];
+            try t.expectEqual(tf.fnv1a64_scalar(tf.FNV_OFFSET_BASIS, s), tf.fnv1a64_unrolled(tf.FNV_OFFSET_BASIS, s));
+        }
+    }
+    // A buffer specifically sized to spill into the tail path.
+    var buf: [1025]u8 = undefined;
+    for (&buf, 0..) |*b, i| b.* = @truncate(i);
+    try t.expectEqual(tf.fnv1a64_scalar(tf.FNV_OFFSET_BASIS, &buf), tf.fnv1a64_unrolled(tf.FNV_OFFSET_BASIS, &buf));
+}
+
+test "fnv1a64_regression: a 1 MiB buffer hashes faster than 20 MB/s floor" {
+    // Build/debug can be absurdly slow; this test only enforces a loose floor
+    // meant to catch catastrophic regressions (algorithm swapped, CPU running
+    // on the little cluster, something hijacked in startup).
+    const N: usize = 1 * 1024 * 1024;
+    const buf = try a.alloc(u8, N);
+    defer a.free(buf);
+    @memset(buf, 0xA5);
+    const t0: i64 = @intCast(@divTrunc(std.Io.Clock.awake.now(t.io).toNanoseconds(), 1_000_000));
+    _ = tf.fnv1a64(tf.FNV_OFFSET_BASIS, buf);
+    const dt_ms: i64 = @as(i64, @intCast(@divTrunc(std.Io.Clock.awake.now(t.io).toNanoseconds(), 1_000_000))) - t0;
+    // 1 MiB / dt_ms = MB/s (approximate: MiB vs MB difference ignored).
+    const floor_bytes_per_ms: i64 = 20 * 1000; // 20 MB/s
+    const bytes_per_ms: i64 = if (dt_ms <= 0) 1_000_000_000 else @divTrunc(@as(i64, @intCast(N)), dt_ms);
+    try t.expect(bytes_per_ms >= floor_bytes_per_ms);
+}

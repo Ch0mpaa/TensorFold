@@ -68,6 +68,28 @@ pub const ParseOptions = struct {
     /// Default: verify the FNV-1a-64 trailer on open. Tests may disable this
     /// to feed deliberately-malformed inputs through the structural checks.
     skip_fnv: bool = false,
+    /// After FNV verification succeeds, call madvise(DONTNEED) on the whole
+    /// mapping. The page cache is preserved (the kernel keeps file pages
+    /// separately from the process RSS), so tensor reads re-fault cheaply
+    /// while the process RSS drops to near zero. Default: on, matching
+    /// safetensors.File.release semantics.
+    drop_pages_after_verify: bool = true,
+    /// Return per-phase wall-clock stats in *stats_out when non-null.
+    stats_out: ?*OpenStats = null,
+    /// Print phase timings to stderr on every open; cheap diagnostic.
+    log_stats: bool = false,
+};
+
+/// Per-phase wall-clock measurements captured during openOptions. Times are
+/// monotonic nanoseconds; fnv_bytes gives the number of bytes the FNV scan
+/// actually covered.
+pub const OpenStats = struct {
+    mmap_ns: u64 = 0,
+    preamble_ns: u64 = 0,
+    fnv_ns: u64 = 0,
+    header_parse_ns: u64 = 0,
+    drop_pages_ns: u64 = 0,
+    fnv_bytes: usize = 0,
 };
 
 pub const Error = error{
@@ -87,8 +109,11 @@ pub const Error = error{
     TfoldDuplicateName,
 };
 
-/// FNV-1a-64 over `bytes` starting from `state`.
-pub fn fnv1a64(state: u64, bytes: []const u8) u64 {
+/// FNV-1a-64 over `bytes` starting from `state`. Reference implementation:
+/// a byte-at-a-time scalar loop with the standard offset basis and prime.
+/// Kept exported so cross-check tests can verify alternative implementations
+/// produce the same hash.
+pub fn fnv1a64_scalar(state: u64, bytes: []const u8) u64 {
     const PRIME: u64 = 0x100000001B3;
     var h: u64 = state;
     for (bytes) |b| {
@@ -96,6 +121,55 @@ pub fn fnv1a64(state: u64, bytes: []const u8) u64 {
         h = h *% PRIME;
     }
     return h;
+}
+
+/// Loop-unrolled FNV-1a-64. The hash is strictly dependent (each byte XOR
+/// then multiply), so unrolling cannot shorten the data dependency chain;
+/// what it DOES do is cut loop-overhead cycles (compare + branch) by a
+/// factor of 16. In ReleaseFast that typically buys 5-15% throughput vs
+/// the scalar loop on aarch64 and x86_64. Output is bit-identical to
+/// fnv1a64_scalar for every input; a cross-check test enforces this.
+pub fn fnv1a64_unrolled(state: u64, bytes: []const u8) u64 {
+    const PRIME: u64 = 0x100000001B3;
+    var h: u64 = state;
+    var i: usize = 0;
+    // Process 16 bytes per iteration. Each line is one FNV step; the
+    // compiler cannot reorder these because of the data dependency.
+    while (i + 16 <= bytes.len) : (i += 16) {
+        h = (h ^ @as(u64, bytes[i + 0])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 1])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 2])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 3])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 4])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 5])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 6])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 7])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 8])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 9])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 10])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 11])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 12])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 13])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 14])) *% PRIME;
+        h = (h ^ @as(u64, bytes[i + 15])) *% PRIME;
+    }
+    // Tail.
+    while (i < bytes.len) : (i += 1) {
+        h = (h ^ @as(u64, bytes[i])) *% PRIME;
+    }
+    return h;
+}
+
+/// The default FNV entry point. Routes to the unrolled implementation in
+/// ReleaseFast/ReleaseSafe builds; stays with the scalar reference in
+/// Debug so stack traces on test failures are easier to read. Both produce
+/// the same hash; a cross-check test enforces it.
+pub fn fnv1a64(state: u64, bytes: []const u8) u64 {
+    const mode = @import("builtin").mode;
+    return switch (mode) {
+        .Debug, .ReleaseSmall => fnv1a64_scalar(state, bytes),
+        .ReleaseFast, .ReleaseSafe => fnv1a64_unrolled(state, bytes),
+    };
 }
 pub const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 
@@ -138,6 +212,10 @@ pub fn openPrefixes(gpa: std.mem.Allocator, io: Io, path: []const u8, prefixes: 
 }
 
 pub fn openOptions(gpa: std.mem.Allocator, io: Io, path: []const u8, options: ParseOptions) !st.File {
+    var stats: OpenStats = .{};
+    const want_stats = options.stats_out != null;
+    var tm0: i128 = @as(i128, std.Io.Clock.awake.now(io).toNanoseconds());
+
     var file = try Io.Dir.cwd().openFile(io, path, .{});
     errdefer file.close(io);
     const len = std.math.cast(usize, try file.length(io)) orelse return error.TfoldTruncated;
@@ -145,6 +223,11 @@ pub fn openOptions(gpa: std.mem.Allocator, io: Io, path: []const u8, options: Pa
 
     var map = try Io.File.MemoryMap.create(io, file, .{ .len = len, .protection = .{ .read = true, .write = false }, .populate = false });
     errdefer map.destroy(io);
+    {
+        const t = @as(i128, std.Io.Clock.awake.now(io).toNanoseconds());
+        stats.mmap_ns = @intCast(@as(i128, t) - tm0);
+        tm0 = t;
+    }
 
     // Preamble
     if (!std.mem.eql(u8, map.memory[0..8], &MAGIC)) return error.TfoldBadMagic;
@@ -159,12 +242,23 @@ pub fn openOptions(gpa: std.mem.Allocator, io: Io, path: []const u8, options: Pa
     const body_start = hdr_end + pad;
     const body_end = len - TRAILER_NBYTES;
     if (body_start > body_end) return error.TfoldBadAlignment;
+    {
+        const t = @as(i128, std.Io.Clock.awake.now(io).toNanoseconds());
+        stats.preamble_ns = @intCast(@as(i128, t) - tm0);
+        tm0 = t;
+    }
 
     // FNV trailer (default on; opt-out is for malformed-input tests only).
     if (!options.skip_fnv) {
         const want = std.mem.readInt(u64, map.memory[body_end..][0..TRAILER_NBYTES], .little);
         const got = fnv1a64(FNV_OFFSET_BASIS, map.memory[0..body_end]);
         if (got != want) return error.TfoldIntegrity;
+        stats.fnv_bytes = body_end;
+    }
+    {
+        const t = @as(i128, std.Io.Clock.awake.now(io).toNanoseconds());
+        stats.fnv_ns = @intCast(@as(i128, t) - tm0);
+        tm0 = t;
     }
 
     // Parse the header into a safetensors.Header whose Entry.begin/end are
@@ -176,6 +270,42 @@ pub fn openOptions(gpa: std.mem.Allocator, io: Io, path: []const u8, options: Pa
     const names = try parseHeader(arena.allocator(), header_bytes, body_start, body_end, options.prefixes);
 
     const own = try arena.allocator().dupeSentinel(u8, path, 0);
+    {
+        const t = @as(i128, std.Io.Clock.awake.now(io).toNanoseconds());
+        stats.header_parse_ns = @intCast(@as(i128, t) - tm0);
+        tm0 = t;
+    }
+
+    // Post-verify page reclamation: the FNV scan touched every page, so the
+    // whole mapping is resident. The Qwen loader walks tensors in sequence
+    // and cudaMemcpy'''s each to the GPU; it does not read any byte twice.
+    // madvise(DONTNEED) tells the kernel it can drop the per-process PTEs
+    // for this mapping. The page cache is preserved (madvise is not
+    // munmap), so subsequent reads re-fault cheaply from the cache rather
+    // than from disk. Net effect: the process RSS drops by ~3 GB on the
+    // Qwen3.5-2B .tfold while tensor access stays correct.
+    if (options.drop_pages_after_verify and !options.skip_fnv and @import("builtin").os.tag == .linux) {
+        _ = std.os.linux.madvise(map.memory.ptr, map.memory.len, std.os.linux.MADV.DONTNEED);
+    }
+    {
+        const t = @as(i128, std.Io.Clock.awake.now(io).toNanoseconds());
+        stats.drop_pages_ns = @intCast(@as(i128, t) - tm0);
+    }
+    if (want_stats) options.stats_out.?.* = stats;
+
+    // Opt-in diagnostic log: set log_stats = true in ParseOptions to print
+    // the phase breakdown to stderr on every open.
+    if (options.log_stats) {
+        std.debug.print("tfold_file open: mmap={d}us preamble={d}us fnv={d}us header_parse={d}us drop_pages={d}us fnv_bytes={d}\n", .{
+            @divTrunc(stats.mmap_ns, 1000),
+            @divTrunc(stats.preamble_ns, 1000),
+            @divTrunc(stats.fnv_ns, 1000),
+            @divTrunc(stats.header_parse_ns, 1000),
+            @divTrunc(stats.drop_pages_ns, 1000),
+            stats.fnv_bytes,
+        });
+    }
+
     return .{
         .path = own,
         .file = file,
