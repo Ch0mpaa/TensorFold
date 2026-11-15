@@ -1,12 +1,11 @@
-//! Standalone build.zig for the .tfold v0.1 native loader.
+//! Standalone build.zig for the .tfold v0.1 native loader + Stage 5
+//! EXL3 conversion tests.
 //!
-//! NOT connected to TensorFold's monolith build.zig to keep stage-4 work
-//! isolated. Invoke from the repo root:
+//! Invoke from the repo root:
 //!
 //!   zig build -Dtarget=native --build-file zig/src/tfold/build.zig run-demo
 //!   zig build -Dtarget=native --build-file zig/src/tfold/build.zig test
 //!   zig build -Dtarget=aarch64-linux-gnu --build-file zig/src/tfold/build.zig
-//!     (ARM64 cross-compile check; no Android runtime needed)
 
 const std = @import("std");
 
@@ -14,13 +13,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Reusable module
-    const tfold_mod = b.addModule("tfold", .{
+    _ = b.addModule("tfold", .{
         .root_source_file = b.path("tfold.zig"),
     });
-    _ = tfold_mod;
 
-    // Demo executable
+    // Demo exe
     const demo_exe = b.addExecutable(.{
         .name = "tfold-cpu-demo",
         .root_module = b.createModule(.{
@@ -30,13 +27,11 @@ pub fn build(b: *std.Build) void {
         }),
     });
     b.installArtifact(demo_exe);
-
     const run_demo = b.addRunArtifact(demo_exe);
-    // (Build.args passthrough is Zig 0.18+; intentionally omitted here.)
     const run_step = b.step("run-demo", "Run tfold-cpu-demo");
     run_step.dependOn(&run_demo.step);
 
-    // Tests
+    // Core tests (reader + ops + demo fixture round-trip)
     const tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("tests.zig"),
@@ -45,6 +40,24 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_tests = b.addRunArtifact(tests);
-    const test_step = b.step("test", "Run tfold native loader tests");
+
+    // Stage 5 tests (converted EXL3 fixture)
+    // Stage 5 tests (converted EXL3 fixture) — needs core/exl3_format.zig
+    // for the production decoder.
+    const exl3_format_mod = b.createModule(.{
+        .root_source_file = b.path("../core/exl3_format.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const exl3_tests_mod = b.createModule(.{
+        .root_source_file = b.path("exl3_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    exl3_tests_mod.addImport("exl3_format", exl3_format_mod);
+    const exl3_tests = b.addTest(.{ .root_module = exl3_tests_mod });
+    const run_exl3 = b.addRunArtifact(exl3_tests);
+    const test_step = b.step("test", "Run tfold native loader + EXL3 conversion tests");
     test_step.dependOn(&run_tests.step);
+    test_step.dependOn(&run_exl3.step);
 }

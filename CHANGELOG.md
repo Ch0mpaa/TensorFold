@@ -2,6 +2,13 @@
 
 Each release's page on GitHub has its notes and measurements. See [the 1.0.0 release notes](RELEASE-NOTES-1.0.0.md) for the native binary's supported models and migration details.
 
+## 1.0.16
+
+- `.tfold v0.1` Stage 5 ships: `tools/tfold_convert/` reads the committed EXL3 oracle fixture at `zig/tests/fixtures/exl3_oracle.bin` (SHA-256-pinned: `8eecb6ac56325a50634eaf75cd2c2ff4aed74e4341b5f2af6c05a3bf0985c810`) and converts its publicly-verifiable 128×128 mcg 8.00-bpw block from `turboderp/Qwen3.5-2B-exl3@8.00bpw/model.safetensors` into `examples/oracle-mcg-128x128.tfold` (18,312 bytes). The real packed trellis bytes (16,384 bytes), fp16 `suh`/`svh` scale vectors (256 bytes each), and the mcg codebook multiplier (4 bytes of `0xCBAC1FED` as `__codebook__`) round-trip byte-for-byte through the Python Stage 2 reader and the native Zig Stage 4 reader. **No re-quantization**: bits in, bits out.
+- Decoded weights verified via the existing production EXL3 decoder in `zig/src/core/exl3_format.zig`. Spec §4 integrity (FNV-1a-64 trailer + per-tensor SHA-256) passes in both readers on the real converted file. Zig-side `exl3_test.zig` asserts quant.scheme/dtype/shape identities, finite decode output, and `0xCBAC1FED` codebook value.
+- v0.1 limits documented honestly: one EXL3 group per file (one codebook + one width + one trellis + per-side scales). Full multi-layer checkpoints with mixed widths need v0.2 extensions (per-tensor `quant_overrides`, variable `__codebook__` tables). **No v0.1 spec change was made**; limits are flagged, not patched around.
+- 12 new Python tests + 2 new Zig tests = 14 new, all passing. 51 Stage 2/3 Python tests + 14 Stage 4 Zig tests still pass; zero regressions from the 65-test baseline. Combined: 79 tests pass across both languages. Learning journal at `learning-notes/stage05-exl3-conversion.md` explains EXL3 trellis quantization, codebook arithmetic (not tables), packaging vs quantization distinction, a worked numerical example, a hands-on exercise, and two comprehension questions with answers. Conformance report at `docs/tfold-stage5-conformance.md`.
+
 ## 1.0.15
 
 - `.tfold v0.1` Stage 4 ships: native Zig loader at `zig/src/tfold/` (6 files, ~890 LOC) that opens `examples/demo.tfold`, performs every spec §4 fail-closed validation in native Zig — TooSmall, BadMagic, VersionUnsupported, HeaderOverflow, HeaderParse, HeaderSchema, Integrity (FNV-1a-64), TensorOob, TensorAlign, TensorOverlap, TensorDupName, UnknownArch/Dtype/Scheme/TokenizerType/ReservedName, CheckpointMismatch, TensorIntegrity (per-tensor SHA-256). Integer overflow guarded via `std.math.add` and `@mulWithOverflow` on every length computation.
