@@ -1,0 +1,114 @@
+{
+  "stage": "7A",
+  "gate": "snapdragon-execution-proof",
+  "description": "Physical-device ARM64 + QNN HTP-library probe on OnePlus 13 (Snapdragon 8 Elite, Hexagon v79), with honest reporting of what each path actually ran.",
+  "timestamp_utc": "2026-11-15T07:00:00Z",
+  "devices": {
+    "device_a_id": "d2e6b41e",
+    "device_b_id": "e1db9f1d",
+    "common_identity": {
+      "manufacturer": "OnePlus",
+      "model": "CPH2655",
+      "hw_name": "OP5D55L1",
+      "soc_model": "SM8750",
+      "soc_vendor": "QTI",
+      "soc_marketing_name": "Snapdragon 8 Elite",
+      "hexagon_architecture": "V79",
+      "android_release": "16",
+      "android_sdk": 36,
+      "oplus_build_fingerprint": "OnePlus/CPH2653EEA/OP5D55L1:15/AP3A.240617.008/V.R4T3.1accb8e_566b33_566b34:user/release-keys",
+      "security_patch": "2025-10-01"
+    }
+  },
+  "arm64_cpu_execution": {
+    "binary": "tensorfold-qualcomm-exl3-test",
+    "binary_arch": "ELF 64-bit LSB arm64, dynamic linker /system/bin/linker64, built for Android 29 (NDK r30)",
+    "binary_size_bytes": 3957408,
+    "binary_sha256": "3d582dac62a761c96de73b07b8fee48c97bec99163b8da90ef3d6e78ff2050b4",
+    "device_tested": "d2e6b41e",
+    "tests_run": [
+      "exl3_format.test.the reference decoder reproduces the numpy oracle on every codebook and width",
+      "exl3_format.test.a real mcg 8.00 bpw block unpacks and dequantizes to the oracle's values"
+    ],
+    "result": "2/2 OK",
+    "determinism_runs": 3,
+    "determinism_match": true,
+    "timing_samples_ms": [30, 10, 10, 40, 40],
+    "latency_median_ms": 30,
+    "comparison": "exact byte equality - the Zig decoder's dq output matches the oracle's FP64 dequant reference verbatim via std.testing.expectEqualSlices(u8, dq_got, dq_want)",
+    "max_abs_error_vs_reference": 0.0
+  },
+  "python_numpy_reference": {
+    "source": "tools/tfold_convert/oracle.py::load_oracle_mcg_block",
+    "fixture_path": "zig/tests/fixtures/exl3_oracle.bin",
+    "fixture_sha256": "8eecb6ac56325a50634eaf75cd2c2ff4aed74e4341b5f2af6c05a3bf0985c810",
+    "codebook": "mcg",
+    "bits_per_weight": 8.0,
+    "halves": 16,
+    "K": 128,
+    "N": 128,
+    "dq_fp64_shape": [128, 128],
+    "dq_fp64_sum": 2.706761009,
+    "dq_fp64_sha256": "b28f6c89fdcb9232680dc0b5348353b98a382ff68b944b158d7536bdf876072a",
+    "dq_fp64_min": -0.088964541,
+    "dq_fp64_max": 0.125063432,
+    "dq_fp64_mean": 1.652075811e-04,
+    "dq_fp64_std": 1.315255452e-02
+  },
+  "qnn_htp_probe": {
+    "device_tested": "e1db9f1d",
+    "qnn_libs_present": {
+      "libQnnHtp.so": {"size_bytes": 3978976, "sha256": "09e930b6af975bae23bcf6965ac2ce60f6b999aff37cb7eabe9b4d7c1bc3f264"},
+      "libQnnHtpV79Stub.so": {"size_bytes": 791424, "sha256": "42c2e49965c66e4924fe509ba9547c4d04ad9e618c950dd8b1eaa84fab0d0ca9"},
+      "libQnnHtpV79Skel.so": {"size_bytes": 12559528, "sha256": "238675526b2932efe83a66784937e310ce238e76577e16e9c4358e81711e5333"},
+      "libQnnHtpV79CalculatorStub.so": {"size_bytes": 250872},
+      "libQnnSystem.so": {"size_bytes": 4068024},
+      "libQnnHtpProfilingReader.so": {"size_bytes": 639120}
+    },
+    "qnn_platform_validator": {
+      "backend": "DSP",
+      "backend_hardware": "Supported",
+      "backend_libraries": "Found",
+      "core_version": "Hexagon Architecture V79",
+      "library_version_queryable": false,
+      "calculator_unit_test_api_result": "Passed",
+      "wall_ms_samples": [48, 55, 59],
+      "wall_ms_median": 55
+    },
+    "actual_htp_delegation_from_shell": {
+      "achieved": false,
+      "evidence": "strace of qnn-platform-validator reveals openat('/dev/fastrpc-cdsp', O_RDONLY|O_NONBLOCK) = -1 EACCES (Permission denied) on 6 separate attempts. The device node exists but is unreachable from an unprivileged shell UID. The QNN API-level 'calculator Passed' is a loader-side success inside libQnnHtpV79CalculatorStub.so; the actual Hexagon DSP side (libQnnHtpV79Skel.so) was never entered because the FastRPC channel was never opened.",
+      "strace_evidence_lines": [
+        "openat(AT_FDCWD, \"/dev/fastrpc-cdsp-secure\", O_RDONLY|O_NONBLOCK) = -1 EACCES (Permission denied)",
+        "openat(AT_FDCWD, \"/dev/fastrpc-cdsp\", O_RDONLY|O_NONBLOCK) = -1 EACCES (Permission denied)",
+        "openat(AT_FDCWD, \"/vendor/dsp/fastrpc_shell_unsigned_3\", O_RDONLY) = -1 EACCES (Permission denied)"
+      ],
+      "path_to_genuine_htp_delegation": "TensorFold app UID (dev.tensorfold.mobile) - previously documented in docs/qualcomm-android.md as having succeeded on Phone B (same hardware) with projection MatMul CPU-vs-HTP zero-max-abs-error over 24 samples. Current release build is non-debuggable so run-as is denied this session."
+    }
+  },
+  "honest_summary": {
+    "arm64_cpu_isolated_op_proven": true,
+    "arm64_vs_python_reference": "exact bit equality (EXL3 oracle FP64 bytes match verbatim)",
+    "qnn_htp_libraries_loadable": true,
+    "qnn_htp_core_detected": "Hexagon V79",
+    "qnn_htp_actual_delegation_this_session": false,
+    "qnn_htp_prior_evidence_available": "docs/qualcomm-android.md - Phone B CPH2655 (same hardware) delegated MatMul to HTP0 with HVX/HMX/VTCM confirmed by verbose backend trace; 24 samples matched FP32 oracle with zero max-abs-error",
+    "unsupported_ops_this_session": "none attempted; MatMul harness (qualcomm-matmul) requires GGML cross-build which the brief forbids as new framework development",
+    "cpu_fallback_observed": "qnn-platform-validator calculator test is loader-side scalar in the stub when DSP channel is blocked; this is API-level success without genuine delegation",
+    "failed_qualifications": "shell-UID HTP delegation on this fresh session. Prior app-UID delegation stands from Stage 6 Qualcomm work."
+  },
+  "stage_6e_reconciliation_addendum": {
+    "context": "Stage 6e measured native TFOLD open on the GB10 DGX Spark (aarch64 CUDA server), reporting FNV scan 3.42 s at 1.005 GB/s and peak RSS 6.19 GB on Qwen3.5-2B.tfold.",
+    "stage_7a_hardware_is_different": "OnePlus 13 Snapdragon 8 Elite (Hexagon NPU + Oryon ARM cores + mobile DDR), not the GB10's data-center aarch64 + CUDA memory subsystem.",
+    "cross_check_attempted": "no re-measurement of Stage 6e numbers on the phone this session. The brief asks for reconciliation, not re-measurement: Stage 6e numbers remain valid for the GB10 Spark; they do NOT generalize to mobile. A future Stage 7B or 7C targeting on-phone TFOLD open (if the full .tfold ever deploys on-device) would need its own FNV + RSS measurement.",
+    "claim_preserved": "Stage 6e did not claim TFOLD outperforms safetensors, and did not generalize to any other hardware. No Stage 7A measurement contradicts or weakens Stage 6e's reported numbers."
+  },
+  "tests_preserved": {
+    "fork_python_pytest": {"expected": 84, "run_in_session": false, "note": "not re-run this session; unchanged file set"},
+    "fork_zig_tfold_tests": {"expected": 21, "run_in_session": false, "note": "unchanged file set"},
+    "upstream_test_checkpoint_io_host": {"expected_from_stage6e": 62, "run_in_session": false},
+    "upstream_test_qwen35_exl3_admission_host": {"expected_from_stage6e": 5, "run_in_session": false},
+    "upstream_test_exl3_cuda_host": {"expected_from_stage6e": 1017, "run_in_session": false}
+  },
+  "verdict": "PARTIAL - ARM64 CPU isolated-operator numerical execution proven on real OnePlus 13 silicon with bit-exact Python-reference parity. QNN HTP backend libraries loadable and Hexagon v79 detected, but actual DSP delegation NOT demonstrated this session from shell UID (EACCES on /dev/fastrpc-cdsp). Prior Phone B app-UID HTP evidence remains valid. Stage 7A acceptance criterion 'real numerical execution on a physical Snapdragon device, verified against the CPU reference, with explicit evidence of which backend actually ran' is satisfied for ARM64 and honestly deferred for HTP."
+}
