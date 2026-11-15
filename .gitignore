@@ -27,3 +27,6 @@ zig-out-android-vulkan/
 
 # Versioned GUI build resources, generated app engines stay ignored in app/.gitignore.
 !app/build/
+
+# Stage 7C staging artifacts (generated; not source)
+/build/stage7c/

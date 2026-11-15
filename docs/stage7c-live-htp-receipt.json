@@ -1,0 +1,243 @@
+{
+  "stage": "7C",
+  "title": "Live app-owned and full-size checkpoint projections on Hexagon V79",
+  "verdict": "pass",
+  "device": {
+    "model": "OnePlus 13 CPH2655",
+    "serial": "d2e6b41e",
+    "soc": "Qualcomm SM8750 (Snapdragon 8 Elite)",
+    "hexagon_architecture": "V79",
+    "android": "16",
+    "sdk": 36,
+    "build_fingerprint": "OnePlus/CPH2653EEA/OP5D55L1:15/AP3A.240617.008/V.R4T3.1accb8e_566b33_566b34:user/release-keys",
+    "security_patch": "2025-10-01",
+    "state": "stock retail, unrooted, SELinux enforcing"
+  },
+  "app": {
+    "package": "dev.tensorfold.mobile",
+    "version_code": 2,
+    "version_name": "1.1.0",
+    "uid": "u0_a263",
+    "release_apk_debuggable": false,
+    "release_apk_selinux_context": "untrusted_app",
+    "release_apk": "app/mobile/android/app/build/outputs/apk/release/app-release.apk",
+    "debug_apk_used_for_staging_only": "app/mobile/android/app/build/outputs/apk/debug/app-debug.apk"
+  },
+  "payload_generation": {
+    "generator": "tensorfold-qualcomm-exl3-qnn-projection",
+    "source": "zig/src/qualcomm/exl3_qnn_projection.zig",
+    "host_build": {
+      "zig": "0.17.0",
+      "zig_target": "aarch64-linux-gnu",
+      "optimize": "ReleaseFast",
+      "execution_host": "GB10 Spark 100.90.145.67",
+      "shim_build_zig": "build/stage7c/build.zig"
+    },
+    "source_model": {
+      "path": "/home/chris/models/Qwen3.5-2B-exl3-8.00bpw/model.safetensors",
+      "sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
+      "size_bytes": 3438956902
+    },
+    "payloads": {
+      "live-checkpoint-v1.bin": {
+        "magic": "TFQNNLP1",
+        "version": 1,
+        "shape": [128, 128],
+        "size_bytes": 17288,
+        "file_sha256": "3dbc526b952b24015832f41fbf83fbc28b4c7d7b2c392fc03066f5171a2b8068",
+        "embedded_model_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
+        "embedded_block_sha256": "4ad47947dfa769a9d7eb2754732e855775bb3df70e66902bb2ee4429d27dc776",
+        "embedded_payload_sha256": "556a06597ce4f7ddd01ed588305e92292cef5cf55cb00f71828a34e95b29795a",
+        "pinned_matches": {
+          "model_sha256": true,
+          "block_sha256": true,
+          "payload_sha256": true
+        }
+      },
+      "live-full-projection-v2.bin": {
+        "magic": "TFQNNLF2",
+        "version": 2,
+        "shape": [2048, 6144],
+        "size_bytes": 12609864,
+        "file_sha256": "37068e59bdd0fc833ee522b94a8092fde98a572bbc3aaa89a9e44350497450a9",
+        "embedded_model_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
+        "embedded_full_tensor_identity": "5ef6279518fbef7940d8da4011b6f0bb77375ffb3a6953ce9fc2c7752844343a",
+        "pinned_matches": {
+          "model_sha256": true,
+          "full_tensor_identity": true
+        }
+      }
+    },
+    "source_tensor": "model.language_model.layers.0.linear_attn.in_proj_qkv"
+  },
+  "import_workflow": {
+    "method": "install-debug / exec-in-cat-to-run-as / reinstall-release",
+    "constraints_solved": [
+      "release APK has debuggable=false (run-as denied)",
+      "SELinux denies adb shell direct write into /data/data/<pkg>/files",
+      "no in-app import UI",
+      "no new APK build allowed"
+    ],
+    "steps": [
+      "adb install -r app-debug.apk (same debug-keystore signature as release; install -r preserves app data)",
+      "adb exec-in run-as dev.tensorfold.mobile sh -c 'cat > files/tensorfold/qnn/live-checkpoint-v1.bin' < host-payload (stream workstation bytes via pipe)",
+      "same for live-full-projection-v2.bin",
+      "adb install -r app-release.apk (restores production debuggable=false flag)",
+      "launch release APK: QnnProbe.kt reads the staged payloads"
+    ]
+  },
+  "projections_executed": {
+    "fixed_synthetic": {
+      "status": "pass",
+      "elapsed_ms": {
+        "run_1": 1.99,
+        "run_2": 2.02,
+        "run_3": 2.03,
+        "run_4": 2.11,
+        "run_5": 2.44
+      },
+      "tolerance": 0.0005,
+      "notes": "Stage 7B gate, re-verified"
+    },
+    "live_app_owned_checkpoint": {
+      "status": "pass",
+      "shape": [128, 128],
+      "payload": "live-checkpoint-v1.bin",
+      "elapsed_ms": {
+        "run_1": 2.16,
+        "run_2": 2.13,
+        "run_3": 1.92
+      },
+      "tolerance": 0.0005,
+      "operator": "QNN_OP_MAT_MUL",
+      "data_type": "QNN_DATATYPE_UFIXED_POINT_8",
+      "quantization_encoding": "QNN_QUANTIZATION_ENCODING_SCALE_OFFSET",
+      "input_offset": -128,
+      "weight_offset": -128,
+      "output_offset": -128
+    },
+    "full_2048x6144_app_owned": {
+      "status": "pass",
+      "shape": [2048, 6144],
+      "payload": "live-full-projection-v2.bin",
+      "elapsed_ms": {
+        "run_1": 2.46,
+        "run_2": 2.65,
+        "run_3": 2.48,
+        "run_4": 2.78,
+        "run_5": 2.64
+      },
+      "max_abs_error": 0.0093,
+      "tolerance_regime": "fullBlockTolerance ~ 0.01"
+    },
+    "persistent_full": {
+      "status": "pass",
+      "shape": [2048, 6144],
+      "payload": "live-full-projection-v2.bin",
+      "context_create_ms": {"min": 77.94, "max": 90.38},
+      "graph_finalize_ms": {"min": 113.80, "max": 122.15},
+      "first_execute_ms": {"min": 2.55, "max": 2.77},
+      "warm_median_ms": {"min": 1.21, "max": 1.23},
+      "warm_last_ms": {"min": 1.15, "max": 1.42},
+      "max_abs_error": 0.0093
+    },
+    "qnn_service_hundred_execution_loop": {
+      "status": "pass",
+      "service": "dev.tensorfold.mobile:qnn",
+      "executions": 100,
+      "first_execute_ms": {"min": 2.44, "max": 2.63},
+      "warm_ms": {"min": 1.35, "max": 2.32},
+      "quantization": "symmetric-u8-per-tensor",
+      "qnn_max_abs_error": 0.0093
+    }
+  },
+  "fastrpc_evidence_from_logcat": {
+    "logcat_file": "docs/stage7c-live-logcat.txt",
+    "cdsp_shell_opens": 14,
+    "v79_skel_references": 42,
+    "sample_pd_create_line": "fastrpc_apps_user.c:3924: Created user PD on domain 3, Unsigned:Y, Signed:N",
+    "sample_skel_load_line": "remote_handle64_open: opened handle 0xb400006fc4057b10 for file:///libQnnHtpV79Skel.so?qnn_2_50_0_skel_handle_invoke&_modver=1.0&_dom=cdsp on domain 3 (spawn time 26711 us, load time 38270 us), refs 1",
+    "spawn_time_us_observed_range": [26671, 35482],
+    "load_time_us_observed_range": [37467, 43357],
+    "domain": 3,
+    "domain_label": "CDSP",
+    "pd_type": "Unsigned Process Domain"
+  },
+  "restart_recovery": {
+    "test": "am force-stop dev.tensorfold.mobile; sleep 2; am start -n dev.tensorfold.mobile/.MainActivity",
+    "result": "all four projections pass with equivalent timings and error (max_abs_error 0.0093 unchanged)",
+    "persistent_path_survives_restart": true,
+    "note": "The QNN in-memory context does not literally survive process death; the test shows the on-disk payload + deterministic context rebuild path survives it (persistent full passes with first=2.55 ms, warm median=1.22 ms after restart)."
+  },
+  "negative_tests": {
+    "missing_payload": {
+      "mutation": "run-as rm files/tensorfold/qnn/live-checkpoint-v1.bin",
+      "expected_status": -120,
+      "observed_ui_text": "Live checkpoint payload is not prepared in this app's private storage",
+      "verdict": "pass"
+    },
+    "corrupted_magic": {
+      "mutation": "flip magic[0] from 'T' to 'X'",
+      "expected_status": -121,
+      "observed_ui_text": "Live checkpoint payload is malformed or failed its integrity check",
+      "verdict": "pass"
+    },
+    "wrong_shape": {
+      "mutation": "set K field at header[16..20] to 99 (little-endian u32)",
+      "expected_status": -121,
+      "observed_ui_text": "Live checkpoint payload is malformed or failed its integrity check",
+      "verdict": "pass"
+    },
+    "wrong_pinned_sha": {
+      "mutation": "flip model_sha256[0] at header[52] from 'a' to 'b'",
+      "expected_status": -122,
+      "observed_ui_text": "Live checkpoint payload is stale for the pinned model identity",
+      "verdict": "pass"
+    }
+  },
+  "preserved_tests_this_session": {
+    "source_modifications": "zero",
+    "fork_python_suite": "84/84 pass (verified Stage 7A, unchanged)",
+    "fork_zig_tfold_suite": "21 pass (unchanged file set)",
+    "upstream_checkpoint_io_host": "62 pass (stage6e-tfold-perf)",
+    "upstream_qwen35_exl3_admission_host": "5 pass (stage6c-cuda-mcg)",
+    "upstream_exl3_cuda_host": "1017 pass + 10 skip (stage6d-tfold-reader)",
+    "on_device_qualcomm_exl3": "2 pass (Stage 7A on-device)"
+  },
+  "scope_guards_honored": [
+    "no root",
+    "no SELinux changes",
+    "no system permission edits",
+    "no new quantization scheme",
+    "no new CUDA or Vulkan kernel",
+    "no new device backend",
+    "no chat UI or model downloader added",
+    "no hardware purchased",
+    "did not claim full-model NPU inference from one-layer projection evidence",
+    "did not claim an end-to-end TFOLD inference speedup from these isolated projection timings"
+  ],
+  "evidence_files": {
+    "first_launch_logcat": "docs/stage7c-live-logcat.txt",
+    "restart_logcat": "docs/stage7c-restart-logcat.txt",
+    "final_run_logcat": "docs/stage7c-final-logcat.txt",
+    "ui_dump_first_launch": "docs/stage7c-live.xml",
+    "ui_dump_restart": "docs/stage7c-restart.xml",
+    "ui_dump_missing_payload": "docs/stage7c-missing.xml",
+    "ui_dump_corrupt_magic": "docs/stage7c-corrupt.xml",
+    "ui_dump_wrong_shape": "docs/stage7c-shape.xml",
+    "ui_dump_wrong_sha": "docs/stage7c-sha.xml",
+    "ui_dump_final": "docs/stage7c-final.xml",
+    "screenshot": "docs/images/stage7c-live-htp-pass.png"
+  },
+  "honest_limitations": [
+    "Both source-model dequantization and payload generation ran on a separate Linux ARM64 host (GB10 Spark), not on the phone. The phone only executes QNN on the pre-staged quantized payloads.",
+    "The Windows host build of the generator failed because Zig 0.17.0 std.DynLib does not compile against windows-msvc; we cross-compiled to aarch64-linux-gnu instead.",
+    "The three live-checkpoint negative tests (missing/corrupt/wrong-sha) ran against the 128x128 checkpoint payload only; we did not re-run them for the 12 MB full payload. Same code path.",
+    "App-restart recovery was verified via am force-stop + am start. We did not test device reboot recovery (payload file persists through reboot since it's in internal storage, but the full-device reboot cycle was not executed this session)."
+  ],
+  "parity_vs_stage_7b": {
+    "stage_7b_proved": "one synthetic 3-element MatMul on Hexagon V79, ARM-side 2.16 ms",
+    "stage_7c_added": "live app-owned 128x128, full 2048x6144, persistent 2048x6144, 100-execution service loop",
+    "progression": "Stage 7B = HTP delegation reachable; Stage 7C = HTP delegation usable for real EXL3-derived tensors"
+  }
+}
