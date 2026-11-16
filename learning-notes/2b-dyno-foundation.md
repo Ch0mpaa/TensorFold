@@ -929,7 +929,6 @@ Stage 7L does NOT tell us whether a shorter catalog would suffice
 CWE-89 regression could be fixed by rewording to reduce the
 "constructs all or part of ... command" overlap with CWE-78. Both
 are in-scope for a future stage.
-
 ### Hands-on exercise
 
 Pick any one zero-category snippet from Stage 7L sampled receipts.
@@ -955,3 +954,104 @@ a production CWE classifier that must stay under a fixed per-request
 latency SLO, derive a rough rule for when adding the catalog is
 still worth it. Hint: think about tokens-per-correct-answer and
 prefill vs decode time on a specific hardware class.
+
+
+## 16. Stage 7M — CWE disambiguation (two words changed, one blocker closed)
+
+> Stage 7L's 91.5% catalog-condition number included a brutal
+> regression: CWE-89 went from 98% to 59.3%. Stage 7M tests the
+> hypothesis that the catalog's CWE-78 and CWE-89 entries confused
+> the model because of literal stem overlap, and fixes it by
+> rewriting exactly those two entries.
+
+### Confirming the hypothesis (free — no new run)
+
+Re-scoring Stage 7L's 150 CWE-89 trials under condition B showed
+**44 of the 61 errors went to CWE-78** (72%). Under condition A (no
+catalog) and condition C (length-matched neutral text) the model
+picked CWE-78 just 1 time out of 150. The confusion is not
+background noise — it's a specific interaction with the catalog's
+shared "constructs all or part of ... command using externally-
+influenced input" phrasing.
+
+### The catalog revision
+
+Two entries rewritten, eight byte-identical. Diff is intentionally
+small:
+
+- CWE-78 now LEADS with "operating-system shell or subprocess API"
+  and names concrete sinks: `os.system`, `subprocess shell=True`,
+  `Runtime.exec /bin/sh -c`, `spawn`, backticks, `$(...)`.
+- CWE-89 now LEADS with "database driver or ORM" and names
+  concrete sinks: `cursor.execute`, `knex.raw`, `sa.text`, `PDO`,
+  `gorm.Raw`, `Jdbc.executeQuery`.
+- Each entry carries a short negation of the other
+  category ("SQL databases are not involved" / "Operating-system
+  shells are not involved").
+
+Nothing else changed in the catalog.
+
+### Headline (sampled, 2,000 trials per condition)
+
+| Cond | k/n | Trial Wilson | Item bootstrap over 40 | Det |
+|---|---|---|---|---|
+| A (Stage 7L catalog) | 1,867/2,000 (**93.3%**) | 92.2-94.4 | 88.4-97.3 | 38/40 |
+| B (revised catalog)  | 1,900/2,000 (**95.0%**) | 94.0-95.9 | 91.3-97.9 | **40/40** |
+
+Paired McNemar p = 1.16e-3; B significantly better than A, though
+item-level CIs overlap.
+
+Per-CWE deltas (B-A):
+- CWE-89: **+18.5** (62.0 → 80.5)  ← target recovered
+- CWE-22: +6.0
+- CWE-79: +2.5
+- CWE-346: +2.0
+- CWE-78: +1.5 (preserved at 100%)
+- CWE-347 / 434 / 352 / 327: 0 (all preserved)
+- **CWE-311: -14.0** (100 → 86)  ← NEW regression; 28/200 went to CWE-327
+
+Cost: TTFT 25.1 → 48.3 ms (longer catalog, 821 → 980 prompt tokens).
+Tokens/correct essentially unchanged (7.1 → 7.0).
+
+### What this tells us
+
+The targeted fix worked: CWE-89 → CWE-78 confusion collapsed from
+55/200 to 10/200 trials. But the catalog is now ~160 tokens longer
+and the model's attention mass redistributed. The next-most-
+collapsible pair in the 2B's representation — CWE-311 ("no
+encryption at all") vs CWE-327 ("broken algorithm") — became the
+new confusion site, with 28/200 CWE-311 trials misclassified as
+CWE-327.
+
+The lesson: at 2B scale, fixing one pairwise confusion exposes the
+next-weakest pair. Per-pair prompt engineering is a conveyor belt;
+it did close the Stage 7L blocker but it is probably not the right
+long-term structure. Stage 7N could try chain-of-selection (ask
+for a top-3 shortlist, then disambiguate) which attacks the
+bandwidth limit structurally rather than one pair at a time.
+
+### Hands-on exercise
+
+Open `docs/dyno/offsec/stage7m/sampled.jsonl`. For snippet `s7m01`
+(a `cur.execute` SQL injection in Python), read all 50 seeds under
+conditions A and B. Note the pred CWE on each.
+1. Under A (Stage 7L catalog) what fraction went to CWE-78? Under B
+   (revised)?
+2. Repeat for `s7m05` (a `subprocess.Popen shell=True`). In which
+   direction does the confusion run before and after the fix?
+
+Write 3-4 sentences linking what you see to the catalog revision.
+
+### Comprehension questions
+
+**Q12** (7M). The catalog revision is TWO ENTRIES out of ten. If
+I told you the revised catalog's OVERALL held-out accuracy was 93%,
+what would you insist on seeing before accepting the claim? List the
+two specific measurements the brief REQUIRES to prevent a hidden
+regression in one of the eight untouched categories.
+
+**Q13** (7M). The confusion between CWE-78 and CWE-89 was a
+"catalog-induced" error — evidence: it does not happen under A or
+C. Under what conditions would you expect catalog revisions to
+still fail, even with disambiguating wording? Hint: think about how
+many categories you have and how distinct their concrete sinks are.

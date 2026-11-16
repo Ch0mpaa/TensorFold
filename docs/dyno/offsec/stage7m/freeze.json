@@ -1,0 +1,67 @@
+{
+  "frozen_at": "stage7m-prep",
+  "frozen_before_any_output_inspected": true,
+  "model": {
+    "repo": "UnstableLlama/Qwen3.5-2B-exl3-8.00bpw",
+    "revision_pin_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
+    "runtime": "exllamav3 1.6.7",
+    "context_tokens": 8192,
+    "eos_ids": [248046, 248044]
+  },
+  "assets": {
+    "catalog_original": {
+      "path": "docs/dyno/offsec/stage7l/catalog.md",
+      "sha256": "92811f6e0272d0da1c31695f9e289a1baf15e78d94d3b404f14a799d9d97fcf8",
+      "role_in_stage7m": "condition A = Stage 7L catalog (unchanged)"
+    },
+    "catalog_revised": {
+      "path": "docs/dyno/offsec/stage7m/catalog_v2.md",
+      "sha256": "d705df48e6db7575f401a9f8eb91fb0f567d70637a8798053c344874ff0321b2",
+      "role_in_stage7m": "condition B = CWE-78 and CWE-89 entries rewritten to drop the 'constructs all or part of ... command' stem overlap; 8 other entries byte-identical to A"
+    },
+    "snippets_json": {
+      "path": "docs/dyno/offsec/stage7m/snippets.json",
+      "sha256": "4a023a9eb1e28d36f4a1cb0560322ba8de71da0052a7dd885228f0629f835023",
+      "count": 40,
+      "per_cwe": 4
+    }
+  },
+  "conditions": {
+    "A_stage7l_catalog": {
+      "name": "Stage 7L catalog (unchanged)",
+      "template_structure": "<catalog original body>\n\n---\n\n<<Stage 7L few_single baseline template>>"
+    },
+    "B_revised_catalog": {
+      "name": "Stage 7M revised catalog (CWE-78 and CWE-89 rewritten)",
+      "template_structure": "<catalog v2 body>\n\n---\n\n<<Stage 7L few_single baseline template>>"
+    }
+  },
+  "sampler": {
+    "deterministic": {"constructor": "GreedySampler()"},
+    "sampled": {"constructor": "DefaultSampler()"}
+  },
+  "seeds": {
+    "deterministic_count": 1,
+    "sampled_seeds": "range(7000, 7050)",
+    "seeds_do_not_overlap_prior_stages": true
+  },
+  "limits": {
+    "max_new_tokens_per_trial": 100,
+    "per_trial_timeout_seconds": 60
+  },
+  "scoring": {
+    "primary": "scorer_v2b (zero regex; 100% agreement with scorer_v2a on 1,100 v2.1 trials)",
+    "truth_from": "snippet['cwe']",
+    "confusion_matrix": "10 x 10 built from parse_single(output_text) vs cwe_truth"
+  },
+  "data_hygiene": [
+    "No snippet model output read by the author before analysis is complete.",
+    "Neither catalog may be changed based on observed Stage 7M results.",
+    "Any post-hoc change to any frozen asset invalidates this evaluation."
+  ],
+  "trial_count": {
+    "deterministic": 80,
+    "sampled": 4000,
+    "total": 4080
+  }
+}
