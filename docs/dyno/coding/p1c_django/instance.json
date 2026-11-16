@@ -1,0 +1,36 @@
+{
+  "instance_id": "django__django-14089",
+  "repo": "django/django",
+  "base_commit": "d01709aae21de9cd2565b9c52f32732ea28a2d98",
+  "target_file": "django/utils/datastructures.py",
+  "problem_statement": "Allow calling reversed() on an OrderedSet\nDescription\n\t\nCurrently, \u200bOrderedSet isn't reversible (i.e. allowed to be passed as an argument to Python's \u200breversed()). This would be natural to support given that OrderedSet is ordered. This should be straightforward to add by adding a __reversed__() method to OrderedSet.\n",
+  "FAIL_TO_PASS": [
+    "utils_tests.test_datastructures.OrderedSetTests.test_reversed"
+  ],
+  "PASS_TO_PASS": [
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_copy",
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_create_with_invalid_key",
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_create_with_invalid_values",
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_del",
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_dict",
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_equal",
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_getitem",
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_in",
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_items",
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_list",
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_repr",
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_set",
+    "utils_tests.test_datastructures.CaseInsensitiveMappingTests.test_str",
+    "utils_tests.test_datastructures.DictWrapperTests.test_dictwrapper",
+    "utils_tests.test_datastructures.ImmutableListTests.test_custom_warning",
+    "utils_tests.test_datastructures.ImmutableListTests.test_sort",
+    "utils_tests.test_datastructures.OrderedSetTests.test_bool",
+    "utils_tests.test_datastructures.OrderedSetTests.test_contains",
+    "utils_tests.test_datastructures.OrderedSetTests.test_discard",
+    "utils_tests.test_datastructures.OrderedSetTests.test_init_with_iterable"
+  ],
+  "test_patch": "diff --git a/tests/utils_tests/test_datastructures.py b/tests/utils_tests/test_datastructures.py\n--- a/tests/utils_tests/test_datastructures.py\n+++ b/tests/utils_tests/test_datastructures.py\n@@ -1,7 +1,7 @@\n \"\"\"\n Tests for stuff in django.utils.datastructures.\n \"\"\"\n-\n+import collections.abc\n import copy\n import pickle\n \n@@ -34,6 +34,11 @@ def test_discard(self):\n         s.discard(2)\n         self.assertEqual(len(s), 1)\n \n+    def test_reversed(self):\n+        s = reversed(OrderedSet([1, 2, 3]))\n+        self.assertIsInstance(s, collections.abc.Iterator)\n+        self.assertEqual(list(s), [3, 2, 1])\n+\n     def test_contains(self):\n         s = OrderedSet()\n         self.assertEqual(len(s), 0)\n",
+  "failing_test_body": "",
+  "test_cmd_f2p": "cd tests && python3 runtests.py --parallel 1 {targets} 2>&1",
+  "test_cmd_p2p": "cd tests && python3 runtests.py --parallel 1 {targets} 2>&1"
+}
