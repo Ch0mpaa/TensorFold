@@ -1,0 +1,83 @@
+{
+  "model": "/home/chris/models/qwen35-2b-orig",
+  "dtype": "bfloat16",
+  "max_tokens": 32,
+  "concurrencies": [
+    {
+      "concurrency": 1,
+      "wall_times_s": [
+        0.747,
+        0.738,
+        0.773
+      ],
+      "wall_median_s": 0.747,
+      "gen_tokens_total_median": 32,
+      "total_throughput_tok_s_median": 42.84,
+      "per_request_decode_tok_s_median": 42.84,
+      "ttft_s_min": 0.026,
+      "ttft_s_median": 0.026,
+      "ttft_s_p95": 0.029,
+      "vram_during_batch_mib": 0.0,
+      "p50_wall_s": 0.72,
+      "p95_wall_s": 0.72
+    },
+    {
+      "concurrency": 4,
+      "wall_times_s": [
+        0.695,
+        0.685,
+        0.692
+      ],
+      "wall_median_s": 0.692,
+      "gen_tokens_total_median": 128,
+      "total_throughput_tok_s_median": 184.93,
+      "per_request_decode_tok_s_median": 46.23,
+      "ttft_s_min": 0.027,
+      "ttft_s_median": 0.027,
+      "ttft_s_p95": 0.028,
+      "vram_during_batch_mib": 0.0,
+      "p50_wall_s": 0.667,
+      "p95_wall_s": 0.667
+    },
+    {
+      "concurrency": 16,
+      "wall_times_s": [
+        0.779,
+        0.797,
+        0.778
+      ],
+      "wall_median_s": 0.779,
+      "gen_tokens_total_median": 512,
+      "total_throughput_tok_s_median": 657.42,
+      "per_request_decode_tok_s_median": 41.09,
+      "ttft_s_min": 0.028,
+      "ttft_s_median": 0.028,
+      "ttft_s_p95": 0.029,
+      "vram_during_batch_mib": 0.0,
+      "p50_wall_s": 0.739,
+      "p95_wall_s": 0.739
+    },
+    {
+      "concurrency": 32,
+      "wall_times_s": [
+        0.914,
+        0.931,
+        0.915
+      ],
+      "wall_median_s": 0.915,
+      "gen_tokens_total_median": 1024,
+      "total_throughput_tok_s_median": 1119.13,
+      "per_request_decode_tok_s_median": 34.97,
+      "ttft_s_min": 0.028,
+      "ttft_s_median": 0.029,
+      "ttft_s_p95": 0.03,
+      "vram_during_batch_mib": 0.0,
+      "p50_wall_s": 0.905,
+      "p95_wall_s": 0.905
+    }
+  ],
+  "prompt_count": 5,
+  "vram_base_mib": 0.0,
+  "cold_load_s": 412.58,
+  "vram_after_load_mib": 0.0
+}

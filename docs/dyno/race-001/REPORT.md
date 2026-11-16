@@ -9,10 +9,14 @@ Frozen config: `CONFIG.md` in this directory (every sha256 pinned there must mat
 | **Logit bytes identity** | sha256 | **A = B** | `0385e13dd46771cd…` | `0385e13dd46771cd…` | n/a (different runtime) | 22 out of 22 TFOLD runs byte-identical |
 | **Greedy token sequence** | tokens | **A = B** | `197 197 13 197 197 13 … 13 197` | identical | reported in Race B fidelity | behavioral parity holds |
 | **Scenario compute** | ms (prefill+decode of 48 rows) | **TIE** | 875 ms | 884 ms | n/a | within 1.5% (noise floor) |
-| **Peak VRAM** | GiB | **TIE** | 5.73 | 5.73 | see Race B | identical weight footprint |
+| **Peak VRAM (observed)** | GiB | **TIE** | 5.73 | 5.73 | ~5.3 (nvidia-smi during sweep) | TFOLD stage includes KV tables; vLLM reports 0 via pynvml on GB10 UMA |
 | **Wall-clock open+run** | s | A (startup) | 3.58 | 7.48 | see Race B | 3.9 s delta = FNV-1a-64 trailer verification (median `fnv=4529 ms`) |
-| **Resident set** | MiB | TIE | 7420 | 7418 | see Race B | mmap page population same |
-| **Integrity check** | — | **B exclusive** | not present | full-file FNV-1a-64 before any tensor read | n/a | this *is* the cost of lossless integrity |
+| **Cold load** | s | **TFOLD (both paths)** | 3.58 (A) / 7.48 (B) | — | 412.58 (vLLM) | TFOLD wins by 55× vs vLLM (FlashInfer/FlashAttention JIT first-touch dominates vLLM) |
+| **Resident set (host)** | MiB | A/B TIE; vLLM higher | 7420 | 7418 | ~10,200 (ps rss during load) | mmap pages for TFOLD; vLLM carries torch + CUDA context |
+| **Integrity check** | — | **B exclusive** | not present | full-file FNV-1a-64 before any tensor read | not performed | this *is* the cost of lossless integrity |
+| **Batched throughput (C=32)** | tok/s total | **vLLM wins (unique)** | n/a (CLI single-stream) | n/a | 1119.13 | TFOLD stage CLI does not batch today; no-winner for TFOLD here |
+| **Per-request decode (C=1)** | tok/s | **no winner** | scenario-run, not comparable | scenario-run, not comparable | 42.84 | see "no-winner lines" below |
+| **TTFT (C=1)** | ms | **vLLM only** | not exposed | not exposed | 26 | TFOLD stage does not stream tokens |
 
 ### No-winner lines (metrics with no clean verdict)
 
@@ -72,7 +76,7 @@ Policy comparison:
 | runtime | upstream FP32 norm → kept as | audit telemetry | our conclusion |
 |---|---|---|---|
 | TFOLD (`normBf16OrF32`) | BF16 (RNE at load) | `TF_NORM_AUDIT=1` emits max_abs, max_rel, non_finite per tensor | explicit, bounded, logged |
-| vLLM (`dtype=bfloat16`) | (see audit receipt) | silent at load | `dtype` arg is a global cast directive |
+| vLLM (`dtype=bfloat16`) | BF16 (RNE at load) | silent | audit confirms same narrowing rule as TFOLD |
 
 If vLLM narrows to BF16 (expected default), **the two runtimes operate on
 numerically equivalent kernel inputs** (both narrowed via RNE) and the
@@ -84,12 +88,15 @@ throughput comparison is apples-to-oranges and gets a `no-winner` label.
 Full receipts in `receipts/vllm_sweep.json`. Protocol: cold load, 1 warmup
 batch per concurrency, 3 timed repeats, median reported.
 
-| C | wall (s) | total tok/s | per-req decode tok/s | TTFT med (s) | P50 (s) | P95 (s) | VRAM (MiB) |
-|---|---|---|---|---|---|---|---|
-| 1  | *see receipt* | *see receipt* | *see receipt* | *see receipt* | *see receipt* | *see receipt* | *see receipt* |
-| 4  | *see receipt* | *see receipt* | *see receipt* | *see receipt* | *see receipt* | *see receipt* | *see receipt* |
-| 16 | *see receipt* | *see receipt* | *see receipt* | *see receipt* | *see receipt* | *see receipt* | *see receipt* |
-| 32 | *see receipt* | *see receipt* | *see receipt* | *see receipt* | *see receipt* | *see receipt* | *see receipt* |
+| C | wall med (s) | wall stdev | total tok/s | per-req tok/s | TTFT med (s) | P50 (s) | P95 (s) | VRAM (MiB) |
+|---|---|---|---|---|---|---|---|---|
+| 1  | 0.747 | 0.018 | 42.84  | 42.84 | 0.026 | 0.72 | 0.72 | pynvml=0 (observed ≈5.3 GiB via nvidia-smi) |
+| 4  | 0.692 | 0.005 | 184.93 | 46.23 | 0.027 | 0.667 | 0.667 | pynvml=0 (same) |
+| 16 | 0.779 | 0.011 | 657.42 | 41.09 | 0.028 | 0.739 | 0.739 | pynvml=0 (same) |
+| 32 | 0.915 | 0.009 | 1119.13| 34.97 | 0.029 | 0.905 | 0.905 | pynvml=0 (same) |
+
+Cold load: **412.58 s** (mostly FlashAttention/JIT first-touch; well above the 3.58 s TFOLD safetensors-dir wall-clock).
+VRAM: pynvml returns 0 on GB10 because the GPU uses Unified Memory Architecture; nvidia-smi observed ~5.3 GiB during the sweep.
 
 ### TFOLD side of Race B
 
