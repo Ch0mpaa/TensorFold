@@ -1,0 +1,25 @@
+{
+  "task_id": "agentic-p2c-fresh-rename-function",
+  "stage": "P2c-agentic-fresh-held-out",
+  "description": "Rename every occurrence of the function `legacy_fetch` to `fetch` across the repo. Callers reference it by name in src/ and tests/. The repo must still compile and `pytest -q` must pass.",
+  "oracle_rules": [
+    "grep -r 'legacy_fetch' returns 0 hits",
+    "grep -r 'def fetch' returns at least 1 hit",
+    "python -m compileall -q . exits 0",
+    "pytest -q exits 0"
+  ],
+  "seed_repo_files": {
+    "src/__init__.py": "",
+    "src/api.py":   "def legacy_fetch(url):\n    return {'url': url, 'body': 'ok'}\n",
+    "src/pipe.py":  "from src.api import legacy_fetch\n\ndef pipeline(urls):\n    return [legacy_fetch(u)['body'] for u in urls]\n",
+    "tests/__init__.py": "",
+    "tests/test_api.py":  "from src.api import legacy_fetch\n\ndef test_basic():\n    assert legacy_fetch('x')['url'] == 'x'\n",
+    "tests/test_pipe.py": "from src.pipe import pipeline\n\ndef test_pipeline():\n    assert pipeline(['a', 'b']) == ['ok', 'ok']\n"
+  },
+  "old_key": "legacy_fetch",
+  "required_idiom_patterns": ["def fetch", "fetch("],
+  "env_for_tests": {},
+  "turn_cap": 25,
+  "model_time_cap_s": 60,
+  "notes": "rename task - the required substitute string is the function name 'fetch' rather than an os.environ idiom. Shape: identifier rename across multiple files + imports."
+}

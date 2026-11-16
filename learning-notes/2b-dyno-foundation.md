@@ -1314,3 +1314,105 @@ you had to pick ONE of these two metrics as your official
 graduation signal for the AGENTIC track, which would you pick and
 why? The brief's "the environment confirms success" rule constrains
 your answer; so does operator trust in a tool-using agent.
+
+## 20. Stage P2c — Agentic failure diagnosis + minimal intervention
+
+> P2b showed constrained decoding unlocked 100% tool-parse rate but
+> 0/22 task completion. WHY? Diagnostic re-run with full trace
+> capture, per-attempt classification, and ONE minimal harness
+> intervention lifted completion 1→5 on DEBUG-prints and 0→2 on a
+> fresh rename task without touching the oracle.
+
+### Reconciliation of prior denominator
+
+§19 wrote "3/26 verified completion" — arithmetic error. The actual
+P1b + P2b totals:
+- 60 total attempts (raw + treatment lanes combined).
+- 30 treatment-lane attempts (assisted P1b + constrained P2b).
+- 3 resolved, all in P1b-fresh-assisted.
+- Correct ratio: **3 / 60** overall, **3 / 30** treatment only,
+  **3 / 15** fresh-only treatment.
+
+Not a different conclusion (2B still NOT GRADUATED on any track),
+just honest math.
+
+### The four failure modes we found
+
+Per-attempt classification across 22 baseline constrained traces:
+
+| Label | Count | Earliest mistake |
+|---|---|---|
+| repeated_actions | 10 / 22 | 3+ identical consecutive tool calls (usually write_file looping) |
+| incorrect_edit | 3 / 22 | finish called with the old pattern still in the repo |
+| missing_validation | 4 / 22 | finish called without ever running grep |
+| other / resolved | 5 / 22 | hit cap without a diagnosable path; 1 actual pass |
+
+Earliest-irreversible-mistake turn was recorded per attempt. For
+incorrect_edit + missing_validation, the mistake is the `finish` call
+itself (model declared done too early). For repeated_actions, the
+mistake is the first of the three identical consecutive tool calls.
+
+### The intervention (one if-branch)
+
+Keep a `saw_zero_grep` flag per attempt. Set it True the moment the
+model's grep for the task's `old_key` returns rc=1. When the model
+calls `finish`, if the flag is False, the harness returns a REJECTED
+observation saying "grep the pattern first; it must return rc=1".
+The loop continues; the 25-turn cap is unchanged; the oracle is
+unchanged.
+
+No prompt engineering beyond ONE extra sentence about the gate. We
+do NOT silently repair raw output; both lanes are preserved.
+
+### Measurement (3 tasks × 2 lanes × 11 seeds = 66 attempts)
+
+| Task | Baseline | Intervened | Δ | Finish rejections |
+|---|---|---|---|---|
+| API-key | 0 / 11 | 0 / 11 | 0 | 9 |
+| DEBUG-prints | 1 / 11 | **5 / 11** | **+4** | 1 |
+| Rename (fresh held-out) | 0 / 11 | **2 / 11** | **+2** | 0 |
+
+Paired on seed × lane: DEBUG improved on 5 seeds that baseline
+failed; rename improved on 2 seeds. API-key stayed at 0 because the
+oracle requires THREE independent conditions and the gate only
+gates on ONE of them.
+
+### Why the API-key task does not improve
+
+The API-key oracle is a conjunction: grep=0 AND
+`os.environ["API_KEY"]` present AND `import os` present AND pytest
+passes. The grep-before-finish gate addresses the first condition
+only. The 2B model, after satisfying grep=0, consistently forgets
+`import os` or writes a replacement that drops the function-call
+arg. pytest catches this, the oracle correctly rejects, and
+resolution stays at 0.
+
+Honest reading: the intervention improves tasks whose oracle is
+grep-dominated. It is NOT a universal planning fix.
+
+### Hands-on exercise
+
+Open `docs/dyno/agentic/p2c/attempts_i_debug.jsonl`. Find the 5
+seeds that RESOLVED under the intervention (verdict.resolved=True).
+For each, examine the `full_turns` trace and identify:
+1. Which turn the model FIRST emitted a grep for `DEBUG:`.
+2. How many finish rejections the model received before the final
+   successful finish.
+3. Whether the model's first finish attempt was before or after the
+   grep.
+
+Write 3-5 sentences on what the gate is teaching the model within
+the loop vs what pre-training would have to teach ahead of time.
+
+### Comprehension questions
+
+**Q20** (P2c). The intervention improved DEBUG and Rename, but not
+API-key. Would increasing the intervention's scope (e.g. ALSO gate
+finish on pytest returning 0) generalize to API-key? What would go
+wrong, and what does this teach about "oracle-shaped interventions"?
+
+**Q21** (P2c). Baseline DEBUG resolved 1/11 in this run but 0/11 in
+the prior P2b report. Both used the same seeds (9100-9110), same
+model, same task file. Propose the single most likely cause of the
+discrepancy and name the ONE exhibit in the receipts you would
+examine to confirm or refute it.
