@@ -1,0 +1,277 @@
+{
+  "audit_mode": "safetensors-header-declaration",
+  "safetensors_path": "/home/chris/models/qwen35-2b-orig/model.safetensors-00001-of-00001.safetensors",
+  "upstream_fp32_tensors_total": 36,
+  "entries": [
+    {
+      "name": "model.language_model.layers.0.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.0.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.1.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.1.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.10.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.10.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.12.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.12.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.13.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.13.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.14.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.14.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.16.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.16.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.17.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.17.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.18.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.18.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.2.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.2.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.20.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.20.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.21.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.21.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.22.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.22.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.4.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.4.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.5.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.5.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.6.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.6.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.8.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.8.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    },
+    {
+      "name": "model.language_model.layers.9.linear_attn.A_log",
+      "disk_dtype": "F32",
+      "shape": [
+        16
+      ]
+    },
+    {
+      "name": "model.language_model.layers.9.linear_attn.norm.weight",
+      "disk_dtype": "F32",
+      "shape": [
+        128
+      ]
+    }
+  ],
+  "vllm_dtype_policy": {
+    "requested_dtype": "bfloat16",
+    "load_behavior": "narrow all parameters to BF16 at load via param_data.copy_(loaded_weight.to(param_data.dtype)); silent at the API; not per-tensor audited",
+    "source_ref": "vllm/model_executor/model_loader/weight_utils.py (0.26.0): default_weight_loader invokes param_data.copy_(loaded_weight.to(param_data.dtype))",
+    "device_dtype_for_linear_attn_norm_weight": "bfloat16 (narrowed from fp32 at load, silently)"
+  },
+  "tfold_dtype_policy": {
+    "load_behavior": "normBf16OrF32 helper in zig/src/families/qwen3_5/cuda_weights.zig: bf16 pass-through OR fp32 -> bf16 RNE narrow with per-tensor max_abs, max_rel, non_finite audit",
+    "source_ref": "stage6b-cuda @ 0bdfd7efc, cuda_weights.zig lines 253-293 (normBf16OrF32)",
+    "device_dtype_for_linear_attn_norm_weight": "bfloat16 (narrowed from fp32 at load, declared + bounded via TF_NORM_AUDIT=1)"
+  },
+  "comparison": {
+    "both_runtimes_hold_bf16_on_device_for_fp32_norms": true,
+    "narrowing_rule_identical": "both use RNE (round to nearest even) because PyTorch's dtype-cast and __float2bfloat16_rn both use RNE",
+    "measured_max_abs_delta_per_tensor_tfold": "<=3.906e-3 (receipts/race_a_summary.json audit lines)",
+    "measured_max_abs_delta_per_tensor_vllm": "not emitted by vLLM; identical by construction because inputs are the same fp32 values narrowed by the same rule",
+    "throughput_fair_comparison": true
+  }
+}
