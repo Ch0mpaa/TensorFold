@@ -1,0 +1,29 @@
+{
+  "task_id": "agentic-p2b-fresh-remove-debug-prints",
+  "stage": "P2b-agentic-fresh-held-out",
+  "description": "Given a small Python repository containing exactly four debug `print('DEBUG: ...')` statements across two files, remove every one of them. The repository must still be importable and `pytest -q` must pass.",
+  "oracle_rules": [
+    "grep -r \"print('DEBUG:\" returns 0 hits across the repo",
+    "grep -r 'print(\"DEBUG:' returns 0 hits across the repo",
+    "python -m compileall -q . exits 0",
+    "pytest -q exits 0"
+  ],
+  "seed_repo_files": {
+    "src/__init__.py": "",
+    "src/calc.py": "def add(a, b):\n    print('DEBUG: add called')\n    return a + b\n\ndef mul(a, b):\n    print('DEBUG: mul called with', a, b)\n    return a * b\n",
+    "src/io.py":   "def load(path):\n    print(\"DEBUG: load entering\")\n    with open(path) as f:\n        data = f.read()\n    print('DEBUG: load returning', len(data), 'bytes')\n    return data\n",
+    "tests/__init__.py": "",
+    "tests/test_calc.py": "from src.calc import add, mul\n\ndef test_add():\n    assert add(2, 3) == 5\n\ndef test_mul():\n    assert mul(2, 3) == 6\n"
+  },
+  "old_key": "DEBUG:",
+  "required_idiom_patterns": ["def add", "def mul"],
+  "env_for_tests": {},
+  "tool_catalog": "same as docs/dyno/agentic/p2/task.json",
+  "turn_cap": 25,
+  "model_time_cap_s": 60,
+  "constraints": [
+    "edits must stay inside the workspace directory",
+    "no pip, no git, no network",
+    "removing non-debug content disqualifies the attempt via pytest or compile failure"
+  ]
+}

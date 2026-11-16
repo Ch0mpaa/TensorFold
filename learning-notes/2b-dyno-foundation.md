@@ -1200,3 +1200,117 @@ protocol to accept the model's dominant format (`TOOL: <tool> args
 not. Propose a MEASUREMENT that distinguishes "model can plan and
 write" from "model can also format tool calls cleanly". Which of the
 two is the real graduation gate?
+
+## 19. Stage P1b + P2b — Action reliability: separating 4 capabilities
+
+> P1 and P2 both reported 0 / N resolved. The question this experiment
+> forced us to answer: **were those failures task-reasoning failures,
+> or output-format failures?** With cleaner harnesses we can split them.
+
+### Four distinct capabilities, often conflated
+
+| Capability | What it means | How to measure |
+|---|---|---|
+| **Task reasoning** | Does the model know the right ANSWER? | semantically correct edit regardless of format |
+| **Output formatting** | Can the model encode the answer in the required protocol? | parser accepts output / `git apply --check` passes |
+| **Tool execution** | Can the harness actually EXECUTE the model's action? | tool actually runs, mutates state |
+| **Verified completion** | Does the environment oracle confirm success? | pytest exit 0, grep count 0, etc. |
+
+The raw P1/P2 numbers (0 / N) collapsed all four axes. The P1b + P2b
+two-lane experiments let us separate them.
+
+### P1 — coding (unified-diff vs JSON edit-spec lane)
+
+Raw lane: model emits unified diff directly. Assisted lane: model
+emits a structural edit-spec `{file, action, anchor, payload}`;
+harness applies the spec literally, then generates the diff via
+`git diff HEAD` and validates with `git apply --check`.
+
+On the original SWE-bench Verified instance `pallets__flask-5014`:
+
+| Metric | Raw | Assisted |
+|---|---|---|
+| Response parsed | 4 / 4 | 4 / 4 |
+| `git apply --check` passes | **0 / 4** | **3 / 4** |
+| RESOLVED (f2p + p2p) | 0 / 4 | 0 / 4 |
+
+Formatting unlocked (0 → 3), but task reasoning still wrong on
+real-repo code.
+
+On a fresh held-out synthetic task (`area_of_circle` off-by-factor bug):
+
+| Metric | Raw | Assisted |
+|---|---|---|
+| `git apply --check` passes | 0 / 4 | **4 / 4** |
+| **RESOLVED (pytest exit 0)** | 0 / 4 | **3 / 4** |
+
+🎯 First end-to-end resolved coding task for 2B. The lane effect
+generalized across two different tasks (one real, one synthetic).
+Where capability existed (simple math fix), formatting had been the
+bottleneck; where it didn't (real repo code), assisted lane still
+failed at the reasoning step.
+
+### P2 — agentic (free-form TOOL: vs JSON-schema constrained)
+
+Raw lane: model emits `TOOL: {json}` free-form; regex parses.
+Constrained lane: exllamav3 `LLGuidanceFilter(json_schema=...)`
+constrains decoding so the entire assistant turn is a schema-valid
+tool call.
+
+On the original API-key replacement task:
+
+| Metric | Raw | Constrained |
+|---|---|---|
+| Parse-failure rate per turn | **99.3 %** | **0.0 %** |
+| Tool actions actually executed (sum over 11 attempts) | 2 | **112** |
+| RESOLVED (all 4 oracle checks) | 0 / 11 | 0 / 11 |
+
+On a fresh "remove DEBUG prints" task: parse-failure 89 % → 1 %;
+tool actions 28 → 87; RESOLVED 0 → 0.
+
+Formatting + tool-execution both unlocked across BOTH tasks. Task
+completion still at zero: the model picks a `write_file` action,
+writes content that is syntactically valid, but the content often
+drops the `import os` line or preserves the original key string.
+The four-rule oracle catches all of these.
+
+### What this teaches
+
+1. **Two distinct 2B failure modes**: formatting-limited AND
+   capability-limited. The same model that can't emit a unified
+   diff CAN emit a JSON edit-spec AND can drive a 25-turn tool loop
+   when the decoder enforces schema. Prior P1/P2 reports confounded
+   these; P1b/P2b separate them.
+2. **Where capability exists, tooling removes the bottleneck**.
+   Fresh-held-out P1 went from 0 / 4 to 3 / 4 purely by changing
+   the output protocol — no new model, no new training.
+3. **Where capability does not exist, tooling cannot save it**.
+   P2 tool-execution rose 56×, verified completion rose 0×. 2B
+   does not multi-step-plan file edits that must keep ONE file
+   working while modifying another.
+4. **Do NOT silently repair raw output**. The brief required it;
+   we honored it. Raw numbers stayed at 0 / 4 and 0 / 11.
+
+### Hands-on exercise
+
+Open `docs/dyno/coding/p1b_fresh/attempts.jsonl` and `_generated_patch.diff`
+under each `attempts/attempt_assisted_*/` directory. For the one
+assisted FAILURE (seed 10003) read the generated patch. The
+`git apply --check` passed; `pytest` failed. In one paragraph
+describe what the model did wrong at the TASK-REASONING step, and
+explain why no amount of output-formatting improvement would have
+saved this attempt.
+
+### Comprehension questions
+
+**Q18** (P1b). We generate the patch from `git diff HEAD` on a
+committed base. Why do we commit the test_patch BEFORE the model
+edits (vs leaving it in the index)? What specific git-apply failure
+mode did we see before this fix?
+
+**Q19** (P2b). The constrained lane's tool-execution rate is 56×
+the raw lane's, but the verified-completion rate is unchanged. If
+you had to pick ONE of these two metrics as your official
+graduation signal for the AGENTIC track, which would you pick and
+why? The brief's "the environment confirms success" rule constrains
+your answer; so does operator trust in a tool-using agent.

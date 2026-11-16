@@ -1,0 +1,9 @@
+{
+  "instance_id": "p1b-fresh-synthetic-circle-area",
+  "instance_source": "self-contained synthetic; NOT from SWE-bench Verified manifest. Transparently labeled as a 2b-authored repro used only for lane-effect generalization measurement.",
+  "repo": "p1b_fresh_repo (local)",
+  "base_commit": "initial fresh repo (with bug)",
+  "target_file": "src/calc.py",
+  "problem_statement": "area_of_circle(r) returns the wrong value: it uses the diameter squared instead of the radius squared. Fix the formula so that the area of a circle equals pi * r**2. The existing test tests/test_calc.py::test_circle must transition from FAIL to PASS, and tests/test_calc.py::test_rectangle must stay PASS.",
+  "failing_test_body": "def test_circle():\n    result = area_of_circle(5)\n    assert 78.0 < result < 79.0, f\"got {result}\""
+}
