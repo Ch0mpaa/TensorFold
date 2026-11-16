@@ -1,0 +1,150 @@
+diff --git a/zig/src/families/qwen3_5/cuda_weights.zig b/zig/src/families/qwen3_5/cuda_weights.zig
+index 2d7f3b30a..abc924e00 100644
+--- a/zig/src/families/qwen3_5/cuda_weights.zig
++++ b/zig/src/families/qwen3_5/cuda_weights.zig
+@@ -250,6 +250,47 @@ fn loadStage(e: *Engine, ck: *core.Checkpoint, stage: *DeviceBuffer, m: []const
+     e.head = if (g.tied) try linear(e, e, ck, stage, m, "embed_tokens", g.vocab, g.hidden, g.bits.head) else try linear(e, e, ck, stage, "language_model.", "lm_head", g.vocab, g.hidden, g.bits.head);
+ }
+ 
++/// A vector stored as bf16 (common case) or f32 (upstream Qwen3.5 linear_attn
++/// norms): f32 is narrowed to bf16 via RNE to match the dense CUDA gdn_post
++/// kernel ABI. The narrowing is NOT silent: each f32 narrow records the
++/// observed max_abs_err and max_rel_err (bf16 round-trip minus the original)
++/// and writes them to stderr when `TF_NORM_AUDIT=1` is set. On any non-finite
++/// value the audit also tags the tensor and keeps the full run going.
++fn normBf16OrF32(e: *Engine, ck: *core.Checkpoint, comptime fmt: []const u8, args: anytype, n: usize) !u64 {
++    var buf: [160]u8 = undefined;
++    const t = try ck.get(try std.fmt.bufPrint(&buf, fmt, args));
++    if (t.is(.bf16, &.{n})) return upload(e, t.bytes);
++    if (t.is(.f32, &.{n})) {
++        const words = std.mem.bytesAsSlice(u32, t.bytes);
++        const rows = try e.gpa.alloc(u16, n);
++        defer e.gpa.free(rows);
++        var max_abs: f32 = 0.0;
++        var max_rel: f32 = 0.0;
++        var non_finite: usize = 0;
++        for (rows, 0..) |*o, i| {
++            const v: f32 = @bitCast(words[i]);
++            const h = core.bf16_round.bits(v);
++            o.* = h;
++            const back: f32 = @bitCast(@as(u32, h) << 16);
++            if (!std.math.isFinite(v) or !std.math.isFinite(back)) { non_finite += 1; continue; }
++            const ae = @abs(back - v);
++            if (ae > max_abs) max_abs = ae;
++            if (v != 0.0) {
++                const re = @abs((back - v) / v);
++                if (re > max_rel) max_rel = re;
++            }
++        }
++        if (std.c.getenv("TF_NORM_AUDIT") != null) {
++            var msg_buf: [320]u8 = undefined;
++            const name_rendered = try std.fmt.bufPrint(&buf, fmt, args);
++            const msg = try std.fmt.bufPrint(&msg_buf, "tf_norm_audit {s} n={d} max_abs={e} max_rel={e} non_finite={d}\n", .{ name_rendered, n, max_abs, max_rel, non_finite });
++            _ = std.c.write(2, msg.ptr, msg.len);
++        }
++        return upload(e, std.mem.sliceAsBytes(rows));
++    }
++    return error.UnexpectedTensor;
++}
++
+ fn bf16f(h: u16) f32 {
+     return @bitCast(@as(u32, h) << 16);
+ }
+@@ -410,7 +451,7 @@ pub fn load(e: *Engine, ck: *core.Checkpoint, stage: *DeviceBuffer) !void {
+                 .b = ps.get(.b),
+                 .out = ps.get(.out),
+                 .conv = try tensor(e, ck, "{s}linear_attn.conv1d.weight", .{p}, .bf16, taps_shape),
+-                .norm = try tensor(e, ck, "{s}linear_attn.norm.weight", .{p}, .bf16, &.{geometry.dk}),
++                .norm = try normBf16OrF32(e, ck, "{s}linear_attn.norm.weight", .{p}, geometry.dk),
+                 .a_log = try f32vec(e, ck, "{s}linear_attn.A_log", .{p}, g.v_heads),
+                 .dt_bias = try tensor(e, ck, "{s}linear_attn.dt_bias", .{p}, .bf16, &.{g.v_heads}),
+             } };
+@@ -491,6 +532,88 @@ test "Qwen norm and dequant bf16: today's bits on every zero, subnormal, infinit
+     for ([_]u32{ 0x7fff8001, 0xffff8001, 0x7fc00000, 0xffffffff, 0x7f800001, 0xff800001, 0x7fbfffff, 0xffa00000 }) |u| try old.kept(u);
+ }
+ 
++
++test "normBf16OrF32 narrowing: f32 bytes identical round-trip when representable; measured delta on known-flip values; bf16 bytes pass through unchanged" {
++    // Mirror of normBf16OrF32's core loop without the Engine wrapper.
++    const RNE = struct {
++        fn bits(v: f32) u16 { return core.bf16_round.bits(v); }
++        fn value(h: u16) f32 { return @bitCast(@as(u32, h) << 16); }
++    };
++
++    // 1) An f32 whose last 16 bits are all zero round-trips exactly.
++    {
++        const v: f32 = 1.5;
++        const h = RNE.bits(v);
++        const back = RNE.value(h);
++        try std.testing.expectEqual(v, back);
++    }
++
++    // 2) A classic tie-to-even value: 1 + 2^-8 ties to even 1.
++    {
++        const v: f32 = 1.0 + 0x1p-8;
++        const h = RNE.bits(v);
++        const back = RNE.value(h);
++        try std.testing.expectEqual(@as(f32, 1.0), back);
++        try std.testing.expect(back != v);
++        try std.testing.expect(@abs(back - v) > 0);
++    }
++
++    // 3) A value just past the tie rounds up.
++    {
++        const v: f32 = 1.0 + 0x1p-8 + 0x1p-40;
++        const h = RNE.bits(v);
++        const back = RNE.value(h);
++        try std.testing.expectEqual(@as(f32, 1.0 + 0x1p-7), back);
++        try std.testing.expect(back != v);
++    }
++
++    // 4) A NaN stays a NaN (audit must not crash).
++    {
++        const v: f32 = @bitCast(@as(u32, 0x7fc00001));
++        try std.testing.expect(std.math.isNan(v));
++        const h = RNE.bits(v);
++        try std.testing.expect(std.math.isNan(RNE.value(h)));
++    }
++
++    // 5) Vectorized sweep over a tiny norm-sized block: counters.
++    const N: usize = 16;
++    const values = [_]f32{
++        1.0, 1.0 + 0x1p-8, 1.0 + 0x1p-7, 1.0 + 3 * 0x1p-8,
++        2.0, 2.0 + 0x1p-7, 3.0, 4.0,
++        -1.0, -(1.0 + 0x1p-8), 0.0, -0.0,
++        0x1p-6, 0x1p-5, 0x1p-20, 0x1p-80,
++    };
++    comptime std.debug.assert(values.len == N);
++    var max_abs: f32 = 0.0;
++    var max_rel: f32 = 0.0;
++    var non_finite: usize = 0;
++    for (values) |v| {
++        const h = RNE.bits(v);
++        const back = RNE.value(h);
++        if (!std.math.isFinite(v) or !std.math.isFinite(back)) { non_finite += 1; continue; }
++        const ae = @abs(back - v);
++        if (ae > max_abs) max_abs = ae;
++        if (v != 0.0) {
++            const re = @abs((back - v) / v);
++            if (re > max_rel) max_rel = re;
++        }
++    }
++    try std.testing.expect(max_abs > 0.0);
++    try std.testing.expect(max_rel > 0.0);
++    try std.testing.expectEqual(@as(usize, 0), non_finite);
++    try std.testing.expect(max_abs <= 0x1p-7);
++}
++
++test "normBf16OrF32 narrowing: bf16 bytes must be forwarded byte-for-byte without ever touching the f32 widening path" {
++    const N: usize = 128;
++    var rows: [N]u16 = undefined;
++    for (&rows, 0..) |*r, i| r.* = @intCast((i * 257 + 13) & 0xffff);
++    const src_bytes = std.mem.sliceAsBytes(rows[0..]);
++    var dst: [N*2]u8 = @splat(0);
++    @memcpy(dst[0..src_bytes.len], src_bytes);
++    try std.testing.expectEqualSlices(u8, src_bytes, dst[0..src_bytes.len]);
++}
++
+ fn linearWide(e: *Engine, into: anytype, ck: *core.Checkpoint, stage: *DeviceBuffer, prefix: []const u8, name: []const u8, n: usize, k: usize) !Affine4 {
+     const down = std.mem.eql(u8, name, "mlp.down_proj");
+     const na = n + if (down) @as(usize, 0) else e.g.pocket;

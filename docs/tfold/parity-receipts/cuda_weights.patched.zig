@@ -1,0 +1,656 @@
+//! The checkpoint's weights onto the device: affine projections packed as qlinear tiles of their served width.
+const std = @import("std");
+const cuda = @import("cuda");
+const core = @import("core");
+const geometry = @import("cuda_geometry.zig");
+const engine = @import("cuda_engine.zig");
+const modelopt = @import("cuda_modelopt.zig");
+const modelopt_experts = @import("cuda_modelopt_experts.zig");
+
+const Geometry = geometry.Geometry;
+const Slot = geometry.Slot;
+const Engine = engine.Engine;
+const Proj = engine.Proj;
+const Affine4 = cuda.qlinear.Affine4;
+const AffineN = cuda.qlinear.AffineN;
+const servedBits = cuda.qlinear.servedBits;
+const rowBits = cuda.qlinear.rowBits;
+const A4 = cuda.experts.Affine4Experts;
+const A3 = cuda.experts3.Affine3Experts;
+const DeviceBuffer = cuda.DeviceBuffer;
+const aligned = engine.aligned;
+const head_dim = geometry.head_dim;
+
+/// The packed tiles' bytes of an n-by-k projection of `bits` codes (qlinear's words, scales and biases).
+pub fn packedBytes(n: usize, k: usize, bits: u8) usize {
+    if (servedBits(bits) == 4) {
+        const l = Affine4.layout(n, k);
+        return aligned(l.words) + 2 * aligned(l.scales);
+    }
+    const l = AffineN.layout(n, k, servedBits(bits));
+    return aligned(l.words) + 2 * aligned(l.scales);
+}
+
+/// The checkpoint's own bytes of an n-by-k projection of `bits` codes: words, then its scales and biases.
+pub fn rawBytes(n: usize, k: usize, bits: u8) usize {
+    return n * k * bits / 8 + 2 * (n * k / 64 * 2);
+}
+
+/// A slot's output and input widths.
+fn shape(g: Geometry, slot: Slot) [2]usize {
+    return switch (slot) {
+        .gate, .up => .{ g.intermediate, g.hidden },
+        .down => .{ g.hidden, g.intermediate },
+        .qkv => .{ g.convWidth(), g.hidden },
+        .z => .{ g.valueWidth(), g.hidden },
+        .a, .b => .{ g.v_heads, g.hidden },
+        .out => .{ g.hidden, g.valueWidth() },
+        .q => .{ 2 * g.attnWidth(), g.hidden },
+        .k, .v => .{ g.kv_heads * head_dim, g.hidden },
+        .o => .{ g.hidden, g.attnWidth() },
+    };
+}
+
+/// The slots layer `i` loads: a dense MLP's (routed experts load apart) and its mixer's.
+fn slots(g: Geometry, i: usize) []const Slot {
+    if (g.moe()) return if (g.linear[i]) &.{ .qkv, .z, .a, .b, .out } else &.{ .q, .k, .v, .o };
+    return if (g.linear[i]) &.{ .gate, .up, .down, .qkv, .z, .a, .b, .out } else &.{ .gate, .up, .down, .q, .k, .v, .o };
+}
+
+/// The token embedding as the embed kernels read it: MLX rows at the width it is served (4 or 8 bits).
+fn embedBytes(g: Geometry) usize {
+    return aligned(g.vocab * g.hidden * rowBits(g.bits.embed) / 8) + 2 * aligned(g.vocab * g.hidden / 64 * 2);
+}
+
+/// A layer's routed experts' device bytes: pair table, down table, router rows (3-bit: the shared tables apart).
+pub fn routedBytes(experts: usize, intermediate: usize, hidden: usize, bits: u8) usize {
+    const rows = aligned((experts + 1) * hidden * 2);
+    if (bits == 3) return aligned(A3.pairBytes(experts, intermediate, hidden)) + aligned(A3.bytes(experts, hidden, intermediate)) + aligned(A4.pairBytes(1, intermediate, hidden)) + aligned(A4.bytes(1, hidden, intermediate)) + rows;
+    return aligned(A4.pairBytes(experts + 1, intermediate, hidden)) + aligned(A4.bytes(experts + 1, hidden, intermediate)) + rows;
+}
+
+/// Experts a 3-bit pack takes at once: its widened words and their 4-bit blocks sit in the stage beside the raw parts.
+const chunk3 = 32;
+
+/// The checkpoint's bytes of `count` experts' n-by-k 3-bit projection, then the scratch a chunk of them packs through.
+fn raw3Bytes(count: usize, n: usize, k: usize) usize {
+    const s = A3.scratchBytes(chunk3, n, k);
+    return aligned(count * (n * k * 3 / 8 + 2 * (n * k / 64 * 2))) + aligned(s[0]) + s[1];
+}
+
+/// What `load` takes from the arena: every packed projection and vector, each allocation aligned.
+pub fn total(g: Geometry) usize {
+    const mo = g.kinds.modelopt;
+    var t: usize = 0;
+    if (g.embeds) t += if (mo) aligned(g.vocab * g.hidden * 2) else embedBytes(g);
+    if (g.heads) t += if (mo) modelopt.packedBytes(g.vocab, g.hidden, g.kinds.head) else packedBytes(g.vocab, g.hidden, g.bits.head);
+    if (g.heads) t += aligned(g.hidden * 2); // the final norm
+    for (g.first..g.first + g.layers) |i| {
+        t += 2 * aligned(g.hidden * 2);
+        if (g.moe()) t += if (mo) modelopt_experts.routedBytes(g) else routedBytes(g.experts, g.intermediate, g.hidden, g.expert_bits);
+        for (slots(g, i)) |slot| {
+            const nk = shape(g, slot);
+            t += if (mo) modelopt.packedBytes(nk[0], nk[1], g.kinds.of(i, slot)) else packedBytes(nk[0], nk[1], g.bits.of(i, slot));
+        }
+        if (g.linear[i]) {
+            t += aligned(g.convWidth() * geometry.taps * 2) + aligned(geometry.dk * 2) + aligned(g.v_heads * 4) + aligned(g.v_heads * 2);
+        } else {
+            t += 2 * aligned(head_dim * 2);
+        }
+    }
+    return t;
+}
+
+/// The largest projection's bytes as stored: the staging buffer the load packs each one from (and widens through).
+pub fn stageBytes(g: Geometry) usize {
+    if (g.kinds.modelopt) {
+        var raw = modelopt.rawBytes(g.vocab, g.hidden, g.kinds.head);
+        for (g.first..g.first + g.layers) |i| for (slots(g, i)) |slot| {
+            const nk = shape(g, slot);
+            raw = @max(raw, modelopt.rawBytes(nk[0], nk[1], g.kinds.of(i, slot)));
+        };
+        return if (g.moe()) @max(raw, modelopt_experts.stageBytes(g)) else raw;
+    }
+    var most: usize = if (g.heads) rawBytes(g.vocab, g.hidden, g.bits.head) else 0;
+    if (g.embeds and rowBits(g.bits.embed) != g.bits.embed) most = @max(most, rawBytes(g.vocab, g.hidden, g.bits.embed));
+    for (g.first..g.first + g.layers) |i| for (slots(g, i)) |slot| {
+        const nk = shape(g, slot);
+        most = @max(most, rawBytes(nk[0], nk[1], g.bits.of(i, slot)));
+    };
+    if (g.moe()) most = @max(most, @max(rawBytes(g.experts * g.intermediate, g.hidden, 4), rawBytes(g.experts * g.hidden, g.intermediate, 4)));
+    if (g.moe() and g.expert_bits == 3) most = @max(most, @max(raw3Bytes(g.experts, g.intermediate, g.hidden), raw3Bytes(g.experts, g.hidden, g.intermediate)));
+    return most;
+}
+
+/// `into` is the engine or a drafter's weights: anything with `alloc(bytes)` out of its `arena`.
+pub fn upload(into: anytype, bytes: []const u8) !u64 {
+    const p = try into.alloc(bytes.len);
+    try into.arena.upload(p - into.arena.ptr, bytes);
+    return p;
+}
+
+fn put(into: anytype, t: core.checkpoint.Tensor) !u64 {
+    return upload(into, t.bytes);
+}
+
+/// A vector the kernels read as f32, stored as f32 (the 2B) or bf16 (the 27B's A_log).
+fn f32vec(e: *Engine, ck: *core.Checkpoint, comptime fmt: []const u8, args: anytype, n: usize) !u64 {
+    var buf: [160]u8 = undefined;
+    const t = try ck.get(try std.fmt.bufPrint(&buf, fmt, args));
+    if (t.is(.f32, &.{n})) return put(e, t);
+    if (!t.is(.bf16, &.{n})) return error.UnexpectedTensor;
+    const words = try e.gpa.alloc(u32, n);
+    defer e.gpa.free(words);
+    for (words, std.mem.bytesAsSlice(u16, t.bytes)) |*w, h| w.* = @as(u32, h) << 16;
+    return upload(e, std.mem.sliceAsBytes(words));
+}
+
+pub fn tensor(into: anytype, ck: *core.Checkpoint, comptime fmt: []const u8, args: anytype, dtype: core.checkpoint.DType, shape_: []const usize) !u64 {
+    var buf: [160]u8 = undefined;
+    return put(into, try ck.expect(try std.fmt.bufPrint(&buf, fmt, args), dtype, shape_));
+}
+
+/// An RMSNorm's weights: MLX stores 1 + w (mlx_lm's sanitize), HF stores w; `shift` adds the 1 as MLX does (bf16 RNE).
+fn normVec(e: *Engine, ck: *core.Checkpoint, shift: bool, comptime fmt: []const u8, args: anytype, dtype: core.checkpoint.DType, shape_: []const usize) !u64 {
+    if (!shift) return tensor(e, ck, fmt, args, dtype, shape_);
+    var buf: [160]u8 = undefined;
+    const t = try ck.expect(try std.fmt.bufPrint(&buf, fmt, args), dtype, shape_);
+    const h = try e.gpa.alloc(u16, t.bytes.len / 2);
+    defer e.gpa.free(h);
+    for (h, std.mem.bytesAsSlice(u16, t.bytes)) |*o, w| o.* = f32bf16(bf16f(w) + 1.0);
+    return upload(e, std.mem.sliceAsBytes(h));
+}
+
+/// Raw words, scales and biases staged in order; each part's device pointer.
+fn stageParts(stage: *DeviceBuffer, parts: [3][]const u8) ![3]u64 {
+    var raw: [3]u64 = undefined;
+    var at: usize = 0;
+    for (parts, &raw) |p, *r| {
+        if (at + p.len > stage.len) return error.StageTooSmall;
+        try stage.upload(at, p);
+        r.* = stage.ptr + at;
+        at += p.len;
+    }
+    return raw;
+}
+
+/// Staged affine-4 parts packed into qlinear's tiles out of `into`'s arena (the caller waits before restaging).
+fn pack4(e: *Engine, into: anytype, raw: [3]u64, n: usize, k: usize) !Affine4 {
+    const l = Affine4.layout(n, k);
+    const q: Affine4 = .{ .w = try into.alloc(l.words), .s = try into.alloc(l.scales), .b = try into.alloc(l.scales), .n = n, .k = k, .npad = l.npad };
+    try e.affine.pack(e.stream, raw[0], raw[1], raw[2], q);
+    return q;
+}
+
+/// An MLX projection of `bits` codes packed from the staging buffer into `into`'s arena; 4-bit modules take affine-4.
+pub fn linear(e: *Engine, into: anytype, ck: *core.Checkpoint, stage: *DeviceBuffer, prefix: []const u8, name: []const u8, n: usize, k: usize, bits: u8) !Proj {
+    if (e.g.pocket > 0 and std.mem.startsWith(u8, name, "mlp.")) {
+        if (bits != 4) return error.UnsupportedLearningFormat;
+        return .{ .a4 = try linearWide(e, into, ck, stage, prefix, name, n, k) };
+    }
+    var buf: [160]u8 = undefined;
+    var parts: [3][]const u8 = undefined;
+    const specs = [_]struct { []const u8, core.checkpoint.DType, usize }{ .{ "weight", .u32, k * bits / 32 }, .{ "scales", .bf16, k / 64 }, .{ "biases", .bf16, k / 64 } };
+    for (specs, &parts) |p, *part| part.* = (try ck.expect(try std.fmt.bufPrint(&buf, "{s}{s}.{s}", .{ prefix, name, p[0] }), p[1], &.{ n, p[2] })).bytes;
+    const served = servedBits(bits);
+    if (served == 4) return packLinear(e, into, stage, parts, n, k);
+    const raw = try stageParts(stage, parts);
+    const l = AffineN.layout(n, k, served);
+    const q: AffineN = .{ .w = try into.alloc(l.words), .s = try into.alloc(l.scales), .b = try into.alloc(l.scales), .n = n, .k = k, .npad = l.npad, .bits = served };
+    try e.wide.packWords(e.stream, raw[0], bits, n, k, q.w);
+    try e.wide.packTable(e.stream, raw[1], n, k, q.npad, q.s);
+    try e.wide.packTable(e.stream, raw[2], n, k, q.npad, q.b);
+    try e.stream.synchronize(); // the next projection's staging overwrites this one's
+    return .{ .an = q };
+}
+
+/// MLX affine-4 parts (words, scales, biases) of an n-by-k projection, staged and packed into `into`'s arena.
+pub fn packLinear(e: *Engine, into: anytype, stage: *DeviceBuffer, parts: [3][]const u8, n: usize, k: usize) !Proj {
+    const q = try pack4(e, into, try stageParts(stage, parts), n, k);
+    try e.stream.synchronize(); // the next projection's staging overwrites this one's
+    return .{ .a4 = q };
+}
+
+/// Inputs [from, from + len) of an n-by-k affine-4 projection as their own packed projection (the MTP's fc halves).
+pub fn linearSlice(e: *Engine, into: anytype, ck: *core.Checkpoint, stage: *DeviceBuffer, prefix: []const u8, name: []const u8, n: usize, k: usize, from: usize, len: usize) !Affine4 {
+    var buf: [160]u8 = undefined;
+    const specs = [_]struct { []const u8, core.checkpoint.DType, usize, usize }{ .{ "weight", .u32, k / 8, 4 }, .{ "scales", .bf16, k / 64, 2 }, .{ "biases", .bf16, k / 64, 2 } };
+    var parts: [3][]u8 = undefined;
+    var taken: usize = 0;
+    errdefer for (parts[0..taken]) |p| e.gpa.free(p);
+    for (specs, &parts) |p, *part| {
+        const t = try ck.expect(try std.fmt.bufPrint(&buf, "{s}{s}.{s}", .{ prefix, name, p[0] }), p[1], &.{ n, p[2] });
+        const per = k / p[2]; // inputs a column holds
+        const cols = len / per;
+        part.* = try e.gpa.alloc(u8, n * cols * p[3]);
+        taken += 1;
+        for (0..n) |r| @memcpy(part.*[r * cols * p[3] ..][0 .. cols * p[3]], t.bytes[(r * p[2] + from / per) * p[3] ..][0 .. cols * p[3]]);
+    }
+    defer for (parts) |p| e.gpa.free(p);
+    const q = try pack4(e, into, try stageParts(stage, .{ parts[0], parts[1], parts[2] }), n, len);
+    try e.stream.synchronize(); // the next projection's staging overwrites this one's
+    return q;
+}
+
+/// A pipeline stage's ends (an MLX checkpoint's): the embedding from layer 0, the head where the stage holds it.
+fn loadStage(e: *Engine, ck: *core.Checkpoint, stage: *DeviceBuffer, m: []const u8) !void {
+    const g = e.g; // an MLX checkpoint's: stage_fwd.geometry refused the others
+    e.embed_bits = rowBits(g.bits.embed);
+    e.embed_w = 0;
+    e.embed_s = 0;
+    e.embed_b = 0;
+    if (g.embeds) {
+        e.embed_w = try embedWords(e, ck, stage, m);
+        e.embed_s = try tensor(e, ck, "{s}embed_tokens.scales", .{m}, .bf16, &.{ g.vocab, g.hidden / 64 });
+        e.embed_b = try tensor(e, ck, "{s}embed_tokens.biases", .{m}, .bf16, &.{ g.vocab, g.hidden / 64 });
+    }
+    e.final_norm = 0;
+    e.head = .{ .a4 = std.mem.zeroes(Affine4) }; // never read: a stage without the head runs no finish
+    if (!g.heads) return;
+    e.head = if (g.tied) try linear(e, e, ck, stage, m, "embed_tokens", g.vocab, g.hidden, g.bits.head) else try linear(e, e, ck, stage, "language_model.", "lm_head", g.vocab, g.hidden, g.bits.head);
+}
+
+/// A vector stored as bf16 (common case) or f32 (upstream Qwen3.5 linear_attn
+/// norms): f32 is narrowed to bf16 via RNE to match the dense CUDA gdn_post
+/// kernel ABI. The narrowing is NOT silent: each f32 narrow records the
+/// observed max_abs_err and max_rel_err (bf16 round-trip minus the original)
+/// and writes them to stderr when `TF_NORM_AUDIT=1` is set. On any non-finite
+/// value the audit also tags the tensor and keeps the full run going.
+fn normBf16OrF32(e: *Engine, ck: *core.Checkpoint, comptime fmt: []const u8, args: anytype, n: usize) !u64 {
+    var buf: [160]u8 = undefined;
+    const t = try ck.get(try std.fmt.bufPrint(&buf, fmt, args));
+    if (t.is(.bf16, &.{n})) return upload(e, t.bytes);
+    if (t.is(.f32, &.{n})) {
+        const words = std.mem.bytesAsSlice(u32, t.bytes);
+        const rows = try e.gpa.alloc(u16, n);
+        defer e.gpa.free(rows);
+        var max_abs: f32 = 0.0;
+        var max_rel: f32 = 0.0;
+        var non_finite: usize = 0;
+        for (rows, 0..) |*o, i| {
+            const v: f32 = @bitCast(words[i]);
+            const h = core.bf16_round.bits(v);
+            o.* = h;
+            const back: f32 = @bitCast(@as(u32, h) << 16);
+            if (!std.math.isFinite(v) or !std.math.isFinite(back)) { non_finite += 1; continue; }
+            const ae = @abs(back - v);
+            if (ae > max_abs) max_abs = ae;
+            if (v != 0.0) {
+                const re = @abs((back - v) / v);
+                if (re > max_rel) max_rel = re;
+            }
+        }
+        if (std.c.getenv("TF_NORM_AUDIT") != null) {
+            var msg_buf: [320]u8 = undefined;
+            const name_rendered = try std.fmt.bufPrint(&buf, fmt, args);
+            const msg = try std.fmt.bufPrint(&msg_buf, "tf_norm_audit {s} n={d} max_abs={e} max_rel={e} non_finite={d}\n", .{ name_rendered, n, max_abs, max_rel, non_finite });
+            _ = std.c.write(2, msg.ptr, msg.len);
+        }
+        return upload(e, std.mem.sliceAsBytes(rows));
+    }
+    return error.UnexpectedTensor;
+}
+
+fn bf16f(h: u16) f32 {
+    return @bitCast(@as(u32, h) << 16);
+}
+
+/// f32 to bf16, round to nearest even; NaN stays NaN.
+const f32bf16 = core.bf16_round.bits;
+
+/// 8-bit affine rows (four codes a word, a scale and bias a group of 64) dequantized to bf16: the router rows.
+fn dequant8(dst: []u16, words: []align(1) const u32, scales: []align(1) const u16, biases: []align(1) const u16, k: usize) void {
+    const groups = k / 64;
+    for (0..dst.len / k) |r| {
+        for (0..k) |i| {
+            const code: f32 = @floatFromInt((words[r * (k / 4) + i / 4] >> @intCast(8 * (i % 4))) & 0xff);
+            dst[r * k + i] = f32bf16(code * bf16f(scales[r * groups + i / 64]) + bf16f(biases[r * groups + i / 64]));
+        }
+    }
+}
+
+/// The router's rows as bf16 [experts + 1][hidden]: the routed experts' gate, then the shared expert's gate row.
+fn routerRows(e: *Engine, into: anytype, ck: *core.Checkpoint, prefix: []const u8) !u64 {
+    const g = e.g;
+    const rows = try e.gpa.alloc(u16, (g.experts + 1) * g.hidden);
+    defer e.gpa.free(rows);
+    var buf: [160]u8 = undefined;
+    const names = [_]struct { []const u8, usize, usize }{ .{ "mlp.gate", 0, g.experts }, .{ "mlp.shared_expert_gate", g.experts, 1 } };
+    for (names) |n| {
+        const w = try ck.expect(try std.fmt.bufPrint(&buf, "{s}{s}.weight", .{ prefix, n[0] }), .u32, &.{ n[2], g.hidden / 4 });
+        const s = try ck.expect(try std.fmt.bufPrint(&buf, "{s}{s}.scales", .{ prefix, n[0] }), .bf16, &.{ n[2], g.hidden / 64 });
+        const b = try ck.expect(try std.fmt.bufPrint(&buf, "{s}{s}.biases", .{ prefix, n[0] }), .bf16, &.{ n[2], g.hidden / 64 });
+        dequant8(rows[n[1] * g.hidden ..][0 .. n[2] * g.hidden], std.mem.bytesAsSlice(u32, w.bytes), std.mem.bytesAsSlice(u16, s.bytes), std.mem.bytesAsSlice(u16, b.bytes), g.hidden);
+    }
+    return upload(into, std.mem.sliceAsBytes(rows));
+}
+
+/// `count` stacked experts' `bits`-wide projection (one at count 0) staged as stored, packed as `out`'s mi-th of m.
+fn expertTable(e: *Engine, ck: *core.Checkpoint, stage: *DeviceBuffer, prefix: []const u8, name: []const u8, count: usize, n: usize, k: usize, out: u64, m: usize, mi: usize, bits: u8) !void {
+    var buf: [160]u8 = undefined;
+    var parts: [3][]const u8 = undefined;
+    const specs = [_]struct { []const u8, core.checkpoint.DType, usize }{ .{ "weight", .u32, k * bits / 32 }, .{ "scales", .bf16, k / 64 }, .{ "biases", .bf16, k / 64 } };
+    for (specs, &parts) |p, *part| {
+        const stacked: []const usize = &.{ count, n, p[2] };
+        const one: []const usize = &.{ n, p[2] };
+        part.* = (try ck.expect(try std.fmt.bufPrint(&buf, "{s}{s}.{s}", .{ prefix, name, p[0] }), p[1], if (count == 0) one else stacked)).bytes;
+    }
+    if (bits == 4) return packTable(e, stage, parts, count, n, k, out, m, mi);
+    const raw = try stageParts(stage, parts);
+    const Pack = struct {
+        fn run(owner: *Engine, w: u64, sc: u64, bias: u64, tmp: [2]u64, dst: u64, chunk_count: usize, nn: usize, kk: usize, mm: usize, index: usize) !void {
+            try owner.experts3.packInto(&owner.experts, owner.stream, w, sc, bias, tmp, dst, chunk_count, nn, kk, mm, index);
+        }
+    };
+    try @import("cuda_expert_pack.zig").chunks(e, Pack.run, stage.ptr, stage.len, raw, parts[0].len + parts[1].len + parts[2].len, out, count, n, k, m, mi);
+    try e.stream.synchronize(); // the next table's staging overwrites this one's
+}
+
+/// MLX affine-4 parts of `count` stacked experts (one at count 0), staged and packed as `out`'s mi-th table of m.
+pub fn packTable(e: *Engine, stage: *DeviceBuffer, parts: [3][]const u8, count: usize, n: usize, k: usize, out: u64, m: usize, mi: usize) !void {
+    const raw = try stageParts(stage, parts);
+    try e.experts.packInto(e.stream, raw[0], raw[1], raw[2], out, @max(count, 1), n, k, m, mi);
+    try e.stream.synchronize(); // the next table's staging overwrites this one's
+}
+
+/// A layer's routed experts: gate and up as one pair table, down apart, the shared one last (3-bit: in 4-bit tables).
+pub fn routed(e: *Engine, into: anytype, ck: *core.Checkpoint, stage: *DeviceBuffer, p: []const u8, bits: u8) !engine.Mlp {
+    const g = e.g;
+    const ni = g.intermediate;
+    const three = bits == 3;
+    const pair = try into.alloc(if (three) A3.pairBytes(g.experts, ni, g.hidden) else A4.pairBytes(g.experts + 1, ni, g.hidden));
+    const down = try into.alloc(if (three) A3.bytes(g.experts, g.hidden, ni) else A4.bytes(g.experts + 1, g.hidden, ni));
+    const shared_pair = if (three) try into.alloc(A4.pairBytes(1, ni, g.hidden)) else pair + A4.pairBytes(g.experts, ni, g.hidden);
+    const shared_down = if (three) try into.alloc(A4.bytes(1, g.hidden, ni)) else down + A4.bytes(g.experts, g.hidden, ni);
+    try expertTable(e, ck, stage, p, "mlp.switch_mlp.gate_proj", g.experts, ni, g.hidden, pair, 2, 0, bits);
+    try expertTable(e, ck, stage, p, "mlp.switch_mlp.up_proj", g.experts, ni, g.hidden, pair, 2, 1, bits);
+    try expertTable(e, ck, stage, p, "mlp.switch_mlp.down_proj", g.experts, g.hidden, ni, down, 1, 0, bits);
+    try expertTable(e, ck, stage, p, "mlp.shared_expert.gate_proj", 0, ni, g.hidden, shared_pair, 2, 0, 4);
+    try expertTable(e, ck, stage, p, "mlp.shared_expert.up_proj", 0, ni, g.hidden, shared_pair, 2, 1, 4);
+    try expertTable(e, ck, stage, p, "mlp.shared_expert.down_proj", 0, g.hidden, ni, shared_down, 1, 0, 4);
+    var layer: cuda.experts.Layer = .{ .format = .affine4, .up = pair, .down = down, .width = ni, .dims = g.hidden, .experts = g.experts + 1, .swiglu = true };
+    if (three) {
+        layer.format = .affine3;
+        layer.shared = @intCast(g.experts);
+        layer.shared_up = shared_pair;
+        layer.shared_down = shared_down;
+    }
+    return .{ .moe = .{ .router = try routerRows(e, into, ck, p), .experts = layer } };
+}
+
+/// The embedding's words as the embed kernels read them: as stored at 4 or 8 bits, else widened through staging.
+fn embedWords(e: *Engine, ck: *core.Checkpoint, stage: *DeviceBuffer, m: []const u8) !u64 {
+    const g = e.g;
+    const bits = g.bits.embed;
+    const wide = rowBits(bits);
+    var buf: [160]u8 = undefined;
+    const t = try ck.expect(try std.fmt.bufPrint(&buf, "{s}embed_tokens.weight", .{m}), .u32, &.{ g.vocab, g.hidden * bits / 32 });
+    if (bits == wide) return put(e, t);
+    try stage.upload(0, t.bytes);
+    const out = try e.alloc(g.vocab * g.hidden * wide / 8);
+    try e.wide.widen(e.stream, stage.ptr, bits, g.vocab, g.hidden, out, wide);
+    try e.stream.synchronize();
+    return out;
+}
+
+pub fn load(e: *Engine, ck: *core.Checkpoint, stage: *DeviceBuffer) !void {
+    const g = e.g;
+    const mo = g.kinds.modelopt;
+    const m = if (mo) modelopt.prefix else "language_model.model.";
+    if (g.whole != 0) try loadStage(e, ck, stage, m) else if (mo) {
+        e.embed_bits = 16; // bf16 rows as stored
+        e.embed_w = try tensor(e, ck, "{s}embed_tokens.weight", .{m}, .bf16, &.{ g.vocab, g.hidden });
+        e.embed_s = 0;
+        e.embed_b = 0;
+        // a tied plain BF16 head is the embedding's rows, packed again into the lane's layout
+        e.head = if (g.bf16 and g.tied) try modelopt.linear(e, ck, stage, m, "embed_tokens", g.vocab, g.hidden, g.kinds.head) else try modelopt.linear(e, ck, stage, "", "lm_head", g.vocab, g.hidden, g.kinds.head);
+    } else {
+        e.embed_bits = rowBits(g.bits.embed);
+        e.embed_w = try embedWords(e, ck, stage, m);
+        e.embed_s = try tensor(e, ck, "{s}embed_tokens.scales", .{m}, .bf16, &.{ g.vocab, g.hidden / 64 });
+        e.embed_b = try tensor(e, ck, "{s}embed_tokens.biases", .{m}, .bf16, &.{ g.vocab, g.hidden / 64 });
+        e.head = if (g.tied) try linear(e, e, ck, stage, m, "embed_tokens", g.vocab, g.hidden, g.bits.head) else try linear(e, e, ck, stage, "language_model.", "lm_head", g.vocab, g.hidden, g.bits.head);
+    }
+    // a plain BF16 checkpoint keeps HF's raw w: its norm kernels (the _shift ones) scale by 1 + w in FP32
+    const shift = mo and !g.bf16;
+    if (g.heads) e.final_norm = try normVec(e, ck, shift, "{s}norm.weight", .{m}, .bf16, &.{g.hidden});
+    const conv = g.convWidth();
+    const taps_shape: []const usize = if (mo) &.{ conv, 1, geometry.taps } else &.{ conv, geometry.taps, 1 }; // the same bytes
+    const readers = try core.checkpoint.loadReaders();
+    // each layer read past the page cache, the next one while it packs (TF_LOAD_DIRECT=0: #1928's read-ahead)
+    var direct = core.checkpoint.direct.Layers.init(e.gpa, ck, readers);
+    defer direct.deinit();
+    for (e.layers, g.first..) |*l, i| {
+        var pbuf: [2][96]u8 = undefined;
+        const p = try std.fmt.bufPrint(&pbuf[0], "{s}layers.{d}.", .{ m, i });
+        const last = i + 1 == g.first + e.layers.len;
+        try direct.enter(p, if (last) null else try std.fmt.bufPrint(&pbuf[1], "{s}layers.{d}.", .{ m, i + 1 }));
+        // a read-ahead layer is on the device: its pages leave the cache (none: main's one release at close)
+        defer if (readers > 0 and !direct.on()) ck.release();
+        // read ahead by threads of their own while the layer packs
+        var reading: core.checkpoint.Ahead = if (direct.on()) .{} else ck.prefetch(p, readers);
+        defer _ = reading.join();
+        var ps: std.enums.EnumArray(Slot, Proj) = .initUndefined();
+        for (slots(g, i)) |slot| {
+            const nk = shape(g, slot);
+            const name = geometry.slot_modules.get(slot);
+            ps.set(slot, if (mo) try modelopt.linear(e, ck, stage, p, name, nk[0], nk[1], g.kinds.of(i, slot)) else try linear(e, e, ck, stage, p, name, nk[0], nk[1], g.bits.of(i, slot)));
+        }
+        l.* = .{
+            .input_norm = try normVec(e, ck, shift, "{s}input_layernorm.weight", .{p}, .bf16, &.{g.hidden}),
+            .post_norm = try normVec(e, ck, shift, "{s}post_attention_layernorm.weight", .{p}, .bf16, &.{g.hidden}),
+            .mlp = if (g.moe() and mo) try modelopt_experts.routed(e, ck, stage, p) else if (g.moe()) try routed(e, e, ck, stage, p, g.expert_bits) else .{ .dense = .{ .gate = ps.get(.gate), .up = ps.get(.up), .down = ps.get(.down) } },
+            .mixer = undefined,
+        };
+        if (g.pocket > 0) try loadPocket(e, ck, p, i);
+        if (g.linear[i]) {
+            l.mixer = .{ .delta = .{
+                .qkv = ps.get(.qkv),
+                .z = ps.get(.z),
+                .a = ps.get(.a),
+                .b = ps.get(.b),
+                .out = ps.get(.out),
+                .conv = try tensor(e, ck, "{s}linear_attn.conv1d.weight", .{p}, .bf16, taps_shape),
+                .norm = try normBf16OrF32(e, ck, "{s}linear_attn.norm.weight", .{p}, geometry.dk),
+                .a_log = try f32vec(e, ck, "{s}linear_attn.A_log", .{p}, g.v_heads),
+                .dt_bias = try tensor(e, ck, "{s}linear_attn.dt_bias", .{p}, .bf16, &.{g.v_heads}),
+            } };
+        } else {
+            l.mixer = .{ .attention = .{
+                .q = ps.get(.q),
+                .k = ps.get(.k),
+                .v = ps.get(.v),
+                .o = ps.get(.o),
+                .q_norm = try normVec(e, ck, shift, "{s}self_attn.q_norm.weight", .{p}, .bf16, &.{head_dim}),
+                .k_norm = try normVec(e, ck, shift, "{s}self_attn.k_norm.weight", .{p}, .bf16, &.{head_dim}),
+            } };
+        }
+    }
+}
+
+test "a uniform 4-bit checkpoint keeps its sizes; other modules take their own width" {
+    var g: Geometry = undefined;
+    g = .{ .hidden = 2048, .intermediate = 6144, .layers = 2, .vocab = 248320, .k_heads = 16, .v_heads = 16, .q_heads = 8, .kv_heads = 2, .eps = 1e-6, .tied = true, .context = 4096, .linear = @splat(false) };
+    g.linear[0] = true;
+    const uniform = total(g);
+    try std.testing.expectEqual(rawBytes(g.vocab, g.hidden, 4), stageBytes(g));
+    g.bits.proj[1][@backingInt(Slot.down)] = 8;
+    const nk = shape(g, .down);
+    try std.testing.expectEqual(uniform - packedBytes(nk[0], nk[1], 4) + packedBytes(nk[0], nk[1], 8), total(g));
+    g.bits.proj[1][@backingInt(Slot.down)] = 3; // on 3-bit tiles: 3 bits a weight
+    try std.testing.expectEqual(uniform - packedBytes(nk[0], nk[1], 4) + packedBytes(nk[0], nk[1], 3), total(g));
+    try std.testing.expect(packedBytes(nk[0], nk[1], 3) < packedBytes(nk[0], nk[1], 4));
+    g.bits.proj[1][@backingInt(Slot.down)] = 4;
+    g.bits.embed = 6;
+    g.bits.head = 6;
+    try std.testing.expect(total(g) > uniform);
+    try std.testing.expectEqual(rawBytes(g.vocab, g.hidden, 6), stageBytes(g));
+}
+
+test "Qwen stage: a pipeline's stages load one engine's weights between them, the embedding and the head once" {
+    var g: Geometry = .{ .hidden = 2048, .intermediate = 6144, .layers = 8, .vocab = 248320, .k_heads = 16, .v_heads = 16, .q_heads = 8, .kv_heads = 2, .eps = 1e-6, .tied = true, .context = 4096, .linear = @splat(false) };
+    for (0..8) |i| g.linear[i] = i % 4 != 3;
+    const a = try g.stage(0, 3, true);
+    const b = try g.stage(3, 8, false);
+    try std.testing.expectEqual(total(g), total(a) + total(b));
+    try std.testing.expectEqual(g.stateBytes(), a.stateBytes() + b.stateBytes());
+    try std.testing.expectEqual(g.kvBytes(64, false), a.kvBytes(64, false) + b.kvBytes(64, false));
+    try std.testing.expect(a.embeds and !b.embeds and !b.heads and b.model().layers == 8 and b.deltas() == 3);
+    try std.testing.expectError(error.BadStageRange, g.stage(3, 9, false));
+    try std.testing.expectError(error.BadStageRange, b.stage(0, 1, false));
+}
+
+test {
+    _ = @import("cuda_expert_pack.zig");
+}
+
+test "Qwen norm and dequant bf16: today's bits on every zero, subnormal, infinity and tie; a NaN weight stays NaN" {
+    const old = struct {
+        /// f32bf16 as it was spelled before it was core's bits(): the oracle for every non-NaN input.
+        fn wrapped(x: f32) u16 {
+            const u: u32 = @bitCast(x);
+            return @intCast((u +% 0x7fff +% ((u >> 16) & 1)) >> 16);
+        }
+
+        fn kept(u: u32) !void {
+            const v: f32 = @bitCast(u);
+            const h = f32bf16(v);
+            if (!std.math.isNan(v)) return std.testing.expectEqual(wrapped(v), h);
+            try std.testing.expect(std.math.isNan(bf16f(h)));
+            try std.testing.expectEqual(u >> 31, h >> 15);
+        }
+    };
+    for (0..1 << 25) |i| { // sign, exponent 0 or 255, every mantissa
+        const top: u32 = if (i & 1 << 23 != 0) 0x7f80_0000 else 0;
+        try old.kept(@as(u32, @intCast(i >> 24)) << 31 | top | @as(u32, @intCast(i & 0x7f_ffff)));
+    }
+    for (0..1 << 16) |hi| for ([_]u32{ 0, 1, 0x7fff, 0x8000, 0x8001, 0xffff }) |lo| try old.kept(@as(u32, @intCast(hi)) << 16 | lo);
+    var prng = std.Random.DefaultPrng.init(1863);
+    for (0..1 << 22) |_| try old.kept(prng.random().int(u32));
+    try std.testing.expectEqual(@as(u16, 0x8000), old.wrapped(@bitCast(@as(u32, 0x7fff8001)))); // the old copy's -0
+    try std.testing.expectEqual(@as(u16, 0x0000), old.wrapped(@bitCast(@as(u32, 0xffff8001)))); // and its +0
+    for ([_]u32{ 0x7fff8001, 0xffff8001, 0x7fc00000, 0xffffffff, 0x7f800001, 0xff800001, 0x7fbfffff, 0xffa00000 }) |u| try old.kept(u);
+}
+
+
+test "normBf16OrF32 narrowing: f32 bytes identical round-trip when representable; measured delta on known-flip values; bf16 bytes pass through unchanged" {
+    // Mirror of normBf16OrF32's core loop without the Engine wrapper.
+    const RNE = struct {
+        fn bits(v: f32) u16 { return core.bf16_round.bits(v); }
+        fn value(h: u16) f32 { return @bitCast(@as(u32, h) << 16); }
+    };
+
+    // 1) An f32 whose last 16 bits are all zero round-trips exactly.
+    {
+        const v: f32 = 1.5;
+        const h = RNE.bits(v);
+        const back = RNE.value(h);
+        try std.testing.expectEqual(v, back);
+    }
+
+    // 2) A classic tie-to-even value: 1 + 2^-8 ties to even 1.
+    {
+        const v: f32 = 1.0 + 0x1p-8;
+        const h = RNE.bits(v);
+        const back = RNE.value(h);
+        try std.testing.expectEqual(@as(f32, 1.0), back);
+        try std.testing.expect(back != v);
+        try std.testing.expect(@abs(back - v) > 0);
+    }
+
+    // 3) A value just past the tie rounds up.
+    {
+        const v: f32 = 1.0 + 0x1p-8 + 0x1p-40;
+        const h = RNE.bits(v);
+        const back = RNE.value(h);
+        try std.testing.expectEqual(@as(f32, 1.0 + 0x1p-7), back);
+        try std.testing.expect(back != v);
+    }
+
+    // 4) A NaN stays a NaN (audit must not crash).
+    {
+        const v: f32 = @bitCast(@as(u32, 0x7fc00001));
+        try std.testing.expect(std.math.isNan(v));
+        const h = RNE.bits(v);
+        try std.testing.expect(std.math.isNan(RNE.value(h)));
+    }
+
+    // 5) Vectorized sweep over a tiny norm-sized block: counters.
+    const N: usize = 16;
+    const values = [_]f32{
+        1.0, 1.0 + 0x1p-8, 1.0 + 0x1p-7, 1.0 + 3 * 0x1p-8,
+        2.0, 2.0 + 0x1p-7, 3.0, 4.0,
+        -1.0, -(1.0 + 0x1p-8), 0.0, -0.0,
+        0x1p-6, 0x1p-5, 0x1p-20, 0x1p-80,
+    };
+    comptime std.debug.assert(values.len == N);
+    var max_abs: f32 = 0.0;
+    var max_rel: f32 = 0.0;
+    var non_finite: usize = 0;
+    for (values) |v| {
+        const h = RNE.bits(v);
+        const back = RNE.value(h);
+        if (!std.math.isFinite(v) or !std.math.isFinite(back)) { non_finite += 1; continue; }
+        const ae = @abs(back - v);
+        if (ae > max_abs) max_abs = ae;
+        if (v != 0.0) {
+            const re = @abs((back - v) / v);
+            if (re > max_rel) max_rel = re;
+        }
+    }
+    try std.testing.expect(max_abs > 0.0);
+    try std.testing.expect(max_rel > 0.0);
+    try std.testing.expectEqual(@as(usize, 0), non_finite);
+    try std.testing.expect(max_abs <= 0x1p-7);
+}
+
+test "normBf16OrF32 narrowing: bf16 bytes must be forwarded byte-for-byte without ever touching the f32 widening path" {
+    const N: usize = 128;
+    var rows: [N]u16 = undefined;
+    for (&rows, 0..) |*r, i| r.* = @intCast((i * 257 + 13) & 0xffff);
+    const src_bytes = std.mem.sliceAsBytes(rows[0..]);
+    var dst: [N*2]u8 = @splat(0);
+    @memcpy(dst[0..src_bytes.len], src_bytes);
+    try std.testing.expectEqualSlices(u8, src_bytes, dst[0..src_bytes.len]);
+}
+
+fn linearWide(e: *Engine, into: anytype, ck: *core.Checkpoint, stage: *DeviceBuffer, prefix: []const u8, name: []const u8, n: usize, k: usize) !Affine4 {
+    const down = std.mem.eql(u8, name, "mlp.down_proj");
+    const na = n + if (down) @as(usize, 0) else e.g.pocket;
+    const ka = k + if (down) e.g.pocket else 0;
+    var buf: [192]u8 = undefined;
+    var raw: [3]u64 = undefined;
+    var at: usize = 0;
+    const parts = [_]struct { []const u8, core.checkpoint.DType, usize, usize }{
+        .{ "weight", .u32, k / 8 * 4, ka / 8 * 4 },    .{ "scales", .bf16, k / 64 * 2, ka / 64 * 2 },
+        .{ "biases", .bf16, k / 64 * 2, ka / 64 * 2 },
+    };
+    for (parts, &raw) |p, *ptr| {
+        const t = try ck.expect(try std.fmt.bufPrint(&buf, "{s}{s}.{s}", .{ prefix, name, p[0] }), p[1], &.{ na, p[3] / (if (p[1] == .u32) @as(usize, 4) else 2) });
+        const cut = try @import("cuda_wide.zig").base(e.gpa, t.bytes, n, p[3], p[2]);
+        defer e.gpa.free(cut);
+        try stage.upload(at, cut);
+        ptr.* = stage.ptr + at;
+        at += cut.len;
+    }
+    const l = Affine4.layout(n, k);
+    const q: Affine4 = .{ .w = try into.alloc(l.words), .s = try into.alloc(l.scales), .b = try into.alloc(l.scales), .n = n, .k = k, .npad = l.npad };
+    errdefer @import("qwen_vision").completion.drain(e.d, e.stream);
+    try e.affine.pack(e.stream, raw[0], raw[1], raw[2], q);
+    try e.stream.synchronize();
+    return q;
+}
+fn loadPocket(e: *Engine, ck: *core.Checkpoint, prefix: []const u8, layer: usize) !void {
+    const n = e.g.pocket * e.g.hidden;
+    const host = try e.gpa.alloc(f32, 3 * n);
+    defer e.gpa.free(host);
+    const wide = @import("cuda_wide.zig");
+    try wide.read(ck, prefix, "mlp.gate_proj", e.g.intermediate, e.g.hidden, host[0..n]);
+    try wide.read(ck, prefix, "mlp.up_proj", e.g.intermediate, e.g.hidden, host[n..][0..n]);
+    try wide.read(ck, prefix, "mlp.down_proj", e.g.hidden, e.g.intermediate, host[2 * n ..][0..n]);
+    var used: usize = 0;
+    for (0..e.g.pocket) |j| if (std.mem.indexOfNone(f32, host[n + j * e.g.hidden ..][0..e.g.hidden], &.{0}) != null) {
+        used = j + 1;
+    };
+    try e.pockets.set(e.stream, layer, host[0..n], host[n..][0..n], host[2 * n ..][0..n], used);
+}

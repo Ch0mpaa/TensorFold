@@ -1,0 +1,24 @@
+tf_norm_audit model.language_model.layers.0.linear_attn.norm.weight n=128 max_abs=2.9296875e-3 max_rel=3.1948881e-3 non_finite=0
+tf_norm_audit model.language_model.layers.1.linear_attn.norm.weight n=128 max_abs=3.7841797e-3 max_rel=3.7398962e-3 non_finite=0
+tf_norm_audit model.language_model.layers.2.linear_attn.norm.weight n=128 max_abs=3.6621094e-3 max_rel=3.563792e-3 non_finite=0
+tf_norm_audit model.language_model.layers.4.linear_attn.norm.weight n=128 max_abs=3.7841797e-3 max_rel=3.7453184e-3 non_finite=0
+tf_norm_audit model.language_model.layers.5.linear_attn.norm.weight n=128 max_abs=3.90625e-3 max_rel=3.8910506e-3 non_finite=0
+tf_norm_audit model.language_model.layers.6.linear_attn.norm.weight n=128 max_abs=3.90625e-3 max_rel=3.8910506e-3 non_finite=0
+tf_norm_audit model.language_model.layers.8.linear_attn.norm.weight n=128 max_abs=3.90625e-3 max_rel=3.800905e-3 non_finite=0
+tf_norm_audit model.language_model.layers.9.linear_attn.norm.weight n=128 max_abs=3.90625e-3 max_rel=3.8314175e-3 non_finite=0
+tf_norm_audit model.language_model.layers.10.linear_attn.norm.weight n=128 max_abs=3.90625e-3 max_rel=3.8610038e-3 non_finite=0
+tf_norm_audit model.language_model.layers.12.linear_attn.norm.weight n=128 max_abs=3.90625e-3 max_rel=3.773585e-3 non_finite=0
+tf_norm_audit model.language_model.layers.13.linear_attn.norm.weight n=128 max_abs=3.90625e-3 max_rel=3.8610038e-3 non_finite=0
+tf_norm_audit model.language_model.layers.14.linear_attn.norm.weight n=128 max_abs=3.90625e-3 max_rel=3.683898e-3 non_finite=0
+tf_norm_audit model.language_model.layers.16.linear_attn.norm.weight n=128 max_abs=3.1738281e-3 max_rel=3.06387e-3 non_finite=0
+tf_norm_audit model.language_model.layers.17.linear_attn.norm.weight n=128 max_abs=1.953125e-3 max_rel=3.1948881e-3 non_finite=0
+tf_norm_audit model.language_model.layers.18.linear_attn.norm.weight n=128 max_abs=1.953125e-3 max_rel=3.1545742e-3 non_finite=0
+tf_norm_audit model.language_model.layers.20.linear_attn.norm.weight n=128 max_abs=1.953125e-3 max_rel=2.610966e-3 non_finite=0
+tf_norm_audit model.language_model.layers.21.linear_attn.norm.weight n=128 max_abs=3.90625e-3 max_rel=3.8605344e-3 non_finite=0
+tf_norm_audit model.language_model.layers.22.linear_attn.norm.weight n=128 max_abs=3.90625e-3 max_rel=3.8314175e-3 non_finite=0
+window 0: 1 of 5 rows kept
+window 1: 1 of 5 rows kept
+window 2: 0 of 5 rows kept
+window 3: 2 of 5 rows kept
+stage whole: scenario 912 ms, 48 logits rows, tokens 197 197 13 197 197 13 197 197 13 197 197 13 197 197 13 197 197 13 197 13 13 197
+stage 0 whole: 5.11 GiB device now, 5.73 GiB peak

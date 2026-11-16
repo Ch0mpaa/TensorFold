@@ -1,0 +1,71 @@
+{
+  "mission": "original-weight TFOLD inference parity vs upstream safetensors",
+  "binary": {
+    "path": "/home/chris/worktrees/tfold/zig-out/bin/tf-qwen35-cuda",
+    "built_with": "zig build qwen35-cuda -Doptimize=ReleaseFast -Dnvcc=/usr/local/cuda-13.0/bin/nvcc",
+    "zig_version": "0.17.0",
+    "cuda": "13.0 toolkit; driver 615.71.09; sm_121; DGX Spark GB10"
+  },
+  "patch": {
+    "file": "zig/src/families/qwen3_5/cuda_weights.zig",
+    "summary": "add normBf16OrF32(): bf16 pass-through OR f32->bf16 RNE narrow with per-tensor audit (max_abs, max_rel, non_finite) emitted on TF_NORM_AUDIT=1",
+    "lines_touched": 42,
+    "callsite": "line 413 (dense delta mixer), linear_attn.norm.weight",
+    "tests_added": 2
+  },
+  "checkpoints_compared": {
+    "A_safetensors_dir": {
+      "path": "/home/chris/models/qwen35-2b-orig",
+      "upstream": "Qwen/Qwen3.5-2B@15852e8c16360a2fea060d615a32b45270f8a8fc",
+      "shard_sha256": "aa33250c4fc64891ddfaba3a314fd9542ea371843c387178b425fbcc5ed680b1"
+    },
+    "B_tfold": {
+      "path": "/tmp/tfold_dir (model.tfold hardlinks /home/chris/models/tfold/Qwen3.5-2B-orig-bf16.tfold)",
+      "tfold_size_bytes": 4548300616,
+      "loader_boundary_parity": "632/632 tensors byte-identical (verify_parity.py yesterday)"
+    }
+  },
+  "runtime_fp32_norm_audit": {
+    "tensor_pattern": "model.language_model.layers.<i>.linear_attn.norm.weight",
+    "layers_observed": [0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22],
+    "n_each": 128,
+    "max_abs_delta_observed_across_all_layers": 3.90625e-3,
+    "max_rel_delta_observed_across_all_layers": 3.8910506e-3,
+    "non_finite": 0,
+    "audit_lines_safetensors_vs_tfold": "IDENTICAL by `diff`"
+  },
+  "scenario_sweep_logit_dump_sha256": {
+    "note": "TF_PIPE_TOKENS controls stage window; all 5 produce identical byte-level outputs on both checkpoint paths",
+    "N=1":  {"sft": "0385e13dd46771cd", "tfold": "0385e13dd46771cd", "match": true},
+    "N=3":  {"sft": "0385e13dd46771cd", "tfold": "0385e13dd46771cd", "match": true},
+    "N=5":  {"sft": "0385e13dd46771cd", "tfold": "0385e13dd46771cd", "match": true},
+    "N=8":  {"sft": "0385e13dd46771cd", "tfold": "0385e13dd46771cd", "match": true},
+    "N=12": {"sft": "0385e13dd46771cd", "tfold": "0385e13dd46771cd", "match": true},
+    "full_sha256_logits": "0385e13dd46771cd9ebae910cf191375fb91ce2a391bfe439d3b56325d80fbfe",
+    "logit_rows_per_scenario": 48,
+    "logit_bytes_per_scenario": 23838720
+  },
+  "token_sequence": {
+    "safetensors_dir": "197 197 13 197 197 13 197 197 13 197 197 13 197 197 13 197 197 13 197 13 13 197",
+    "tfold":           "197 197 13 197 197 13 197 197 13 197 197 13 197 197 13 197 197 13 197 13 13 197",
+    "match": true
+  },
+  "timing_and_memory": {
+    "safetensors": {"scenario_ms": 890, "device_now_gib": 5.11, "peak_gib": 5.73},
+    "tfold":       {"scenario_ms": 912, "device_now_gib": 5.11, "peak_gib": 5.73}
+  },
+  "exl3_regression_preserved": {
+    "path": "/home/chris/models/Qwen3.5-2B-exl3-8.00bpw",
+    "logit_dump_sha256": "c22df21edf589eceaa8405b6cd75883d9b97bd493fbc042c4cf5811238f5340f",
+    "token_sequence": "197 197 13 197 197 13 197 197 13 197 197 13 197 197 13 197 197 13 197 13 13 197",
+    "device_now_gib": 3.24, "peak_gib": 3.24,
+    "scenario_ms": 2791,
+    "note": "EXL3 logits differ from BF16 (expected, different arithmetic path); argmax is identical"
+  },
+  "conclusion": {
+    "safetensors_vs_tfold": "BIT-IDENTICAL end-to-end (identical bf16 logit dump sha256 across all 5 scenarios)",
+    "narrowing_declared": "18 FP32 linear_attn.norm.weight tensors narrowed f32 -> bf16 via core.bf16_round.bits (RNE) at load, max_abs <= 3.90625e-3, max_rel <= 3.89e-3, all finite",
+    "unavoidable_conversion": "gdn_post CUDA kernel's NW parameter is __nv_bfloat16* (kernels/cuda/qwen35.cu:385); FP32 weights cannot flow through unless the kernel signature changes. This is reported, not hidden.",
+    "tfold_claim_validity": "lossless BYTE storage (verify_parity.py) + lossless RUNTIME equivalence to the same safetensors through the same binary (identical logit sha)"
+  }
+}
