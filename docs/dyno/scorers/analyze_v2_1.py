@@ -4,7 +4,9 @@ from pathlib import Path
 from collections import Counter, defaultdict
 import random
 
-sys.path.insert(0, '/tmp')
+# Make scorer_v2b importable regardless of cwd: it sits beside this file.
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE))
 from scorer_v2b import parse_batched as p2b_batched, parse_single as p2b_single, parse_highest_risk as p2b_hr
 
 DEV_SNIPPETS_CWE = {"CWE-89", "CWE-79", "CWE-22"}
@@ -53,7 +55,11 @@ def bootstrap_ci_mean(values, n_boot=10000, alpha=0.05, seed=0):
     hi = boots[int(n_boot * (1 - alpha / 2))]
     return (lo, hi)
 
-ROOT = Path("D:/op13-root/src/tensorfold/docs/dyno/offsec/v2")
+# Repo-relative: this file lives at <repo>/docs/dyno/scorers/analyze_v2_1.py.
+# Receipts live at <repo>/docs/dyno/offsec/v2 and the summary lands beside them.
+_REPO = _HERE.parent.parent.parent
+ROOT = _REPO / "docs" / "dyno" / "offsec" / "v2"
+OUT_PATH = _REPO / "docs" / "dyno" / "v2_1_analysis.json"
 
 def load(cond):
     path = ROOT / f"{cond}.jsonl"
@@ -179,7 +185,7 @@ for cond, res in results_table.items():
     res["heldout_snip_bootstrap_ci"] = [hlo, hhi]
 
 # Dump results for the receipt JSON
-with open("D:/op13-root/src/tensorfold/docs/dyno/v2_1_analysis.json", "w") as f:
+with OUT_PATH.open("w") as f:
     json.dump({
         "agreement": {
             "batched_per_slot": {"match": agreements['batched'][0], "total": agreements['batched'][1], "pct": bat_agree_slot},

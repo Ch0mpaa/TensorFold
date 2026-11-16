@@ -12,7 +12,8 @@ for the 3 zero-accuracy categories (CWE-346, CWE-434, CWE-347) + CWE-311
 import json, re, sys, time
 from pathlib import Path
 
-MODEL_DIR = "/home/chris/models/Qwen3.5-2B-exl3-8.00bpw"
+import os
+MODEL_DIR = os.environ.get("TF_MODEL_DIR", "/home/chris/models/Qwen3.5-2B-exl3-8.00bpw")
 CONTEXT = 4096
 
 # NEW probe phrasings for the 4 weakest categories
@@ -77,7 +78,7 @@ def main():
 
     SEEDS = list(range(7000, 7050))  # 50 seeds, non-overlapping with prior
 
-    out_path = Path("/home/chris/stage7j/g4_probe.jsonl")
+    out_path = Path(os.environ.get("TF_STAGE7J_OUT", "/home/chris/stage7j/g4_probe.jsonl"))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     f = open(out_path, "w")
 

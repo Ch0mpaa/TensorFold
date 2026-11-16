@@ -9,14 +9,16 @@ McNemar chi-squared with continuity correction = (|n10 - n01| - 1)^2 / (n10 + n0
 """
 import json, sys, re
 from pathlib import Path
-sys.path.insert(0, '/tmp')
+_HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(_HERE))
 from scorer_v2b import parse_batched, parse_single
 
 HELDOUT_IDX = [3, 4, 5, 6, 7, 8, 9]  # 0-indexed slot numbers for the 7 held-out
 ALL_TRUTHS = ["CWE-89", "CWE-79", "CWE-22", "CWE-347", "CWE-434", "CWE-311", "CWE-352", "CWE-346", "CWE-327", "CWE-78"]
 HELDOUT_TRUTHS = [ALL_TRUTHS[i] for i in HELDOUT_IDX]
 
-ROOT = Path("D:/op13-root/src/tensorfold/docs/dyno/offsec/v2")
+_REPO = _HERE.parent.parent.parent
+ROOT = _REPO / "docs" / "dyno" / "offsec" / "v2"
 
 def load(cond):
     return [json.loads(l) for l in (ROOT / f"{cond}.jsonl").open()]

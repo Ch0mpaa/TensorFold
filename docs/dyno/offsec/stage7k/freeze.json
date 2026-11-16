@@ -1,0 +1,41 @@
+{
+  "frozen_at": "stage7k-prep",
+  "frozen_before_any_output_inspected": true,
+  "model": {
+    "repo": "UnstableLlama/Qwen3.5-2B-exl3-8.00bpw",
+    "revision_pin_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
+    "runtime": "exllamav3 1.6.7",
+    "context_tokens": 4096,
+    "eos_ids": [248046, 248044],
+    "tokenizer_note": "<|im_end|> = 248046 ; <|endoftext|> = 248044"
+  },
+  "prompt_template": {
+    "condition_name": "few_single_frozen",
+    "rationale": "The ONLY v2.1 condition that beat random chance on held-out (20.9%, p<10^-6). Using it unchanged is the fair apples-to-apples test of generalization to fresh examples. No prompt variant is tested in Stage 7K.",
+    "system_messages": [],
+    "user_template": "You classify a single vulnerable code snippet by its most-specific CWE Top-25 identifier.\n\nExamples:\n\nSnippet: user_input is concatenated into an SQL string: cur.execute('SELECT * FROM x WHERE y=' + user_input)\nAnswer: CWE-89\n\nSnippet: an HTTP handler echoes request.args['q'] directly into an HTML response without escaping.\nAnswer: CWE-79\n\nSnippet: the server reads filename = request.args['f']; open(os.path.join('/data', filename)) without checking for '..'.\nAnswer: CWE-22\n\nNow classify this snippet. Reply with ONLY 'CWE-NNN' and nothing else.\n\nSnippet (lang={lang}):\n{desc}\nCode: {code}\n\nAnswer:",
+    "placeholder_description": "Three ChatML user turns of {lang, desc, code} fused into one turn as a frozen few-shot preamble. Examples cover ONLY the v2 dev CWEs (89, 79, 22) so the preamble does not leak truth labels for the Stage 7K categories."
+  },
+  "sampler": {
+    "deterministic": {"constructor": "GreedySampler()", "note": "argmax at every step"},
+    "sampled":       {"constructor": "DefaultSampler()", "note": "exllamav3 1.6.7 default; Temperature(1.0) + Sample(). Matches v2 runner EXACTLY so Stage 7K is apples-to-apples with Stage 7J."}
+  },
+  "seeds": {
+    "deterministic_count": 1,
+    "sampled_seeds": "range(5000, 5050)",
+    "seeds_do_not_overlap_prior_stages": true
+  },
+  "limits": {
+    "max_new_tokens_per_trial": 100,
+    "per_trial_timeout_seconds": 30
+  },
+  "scoring": {
+    "primary": "scorer_v2b (no regex; 100% agreement with scorer_v2a on 1,100 v2.1 trials)",
+    "truth_from": "snippet['cwe']"
+  },
+  "data_hygiene": [
+    "No snippet model output will be read by the author before analysis is complete.",
+    "Prompt text is NOT allowed to change based on stage7k results.",
+    "Any post-hoc change to the prompt or scorer invalidates this evaluation."
+  ]
+}

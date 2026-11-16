@@ -736,3 +736,119 @@ significant result. Describe in 2-3 sentences the one honest way to
 report BOTH results in the same table, and why NOT doing so would
 inflate the claim of the few_single win. Hint: this is why
 pre-registration exists.
+
+## 14. Stage 7K — Fresh held-out generalization test
+
+> Stage 7J left us with a brittle estimate: 20.9% held-out accuracy
+> but a bootstrap CI (2.6-44.0) so wide it told us almost nothing
+> about a real population of vulnerability examples. Stage 7K runs
+> the same frozen prompt on **30 genuinely new** snippets to see
+> whether the number survives.
+
+### What we froze BEFORE running the model
+
+`docs/dyno/offsec/stage7k/freeze.json` lists:
+- Model repo + SHA-256 of the safetensors file.
+- The `few_single` prompt (the only v2.1 condition that beat chance).
+- Sampler constructors (`GreedySampler()` for deterministic;
+  `DefaultSampler()` for sampled — EXACTLY matching the v2 runner).
+- Seeds: `range(5000, 5050)`, non-overlapping with every prior stage.
+- 30 s timeout, 100 new-token cap, `scorer_v2b` as the primary scorer.
+
+The freeze was committed to disk before `stage7k_runner.py` ran. No
+model output for any Stage 7K snippet was inspected during prompt
+design. That's the point of freezing.
+
+### Headline numbers
+
+**Sampled (1,500 trials, 50 seeds × 30 snippets)**
+
+| Metric | Value |
+|---|---|
+| Trial-level | 380 / 1,500 = **25.3%** (Wilson 23.2 - 27.6) |
+| **Item-level (bootstrap over 30)** | **25.3% (CI 13.1 - 38.9)** |
+| Macro over 10 CWEs | 25.3% (bootstrap 7.9 - 46.9) |
+| Malformed outputs | 0 (frozen prompt always emits `CWE-NNN`) |
+| Wrong-CWE | 1,120 / 1,500 (74.7%) |
+
+**Deterministic (greedy, 30 trials)**: 9 / 30 = 30.0% (Wilson 16.7-47.9).
+Greedy and sampled agree closely — the frozen few-shot prompt
+produces a very peaked distribution.
+
+### Per-CWE breakdown (sampled)
+
+| CWE | correct / 150 | acc |
+|---|---|---|
+| CWE-89  (SQL)         | 148 / 150 | **98.7%** |
+| CWE-79  (XSS)         |  77 / 150 | 51.3% |
+| CWE-22  (path)        |  76 / 150 | 50.7% |
+| CWE-352 (CSRF)        |  41 / 150 | 27.3% |
+| CWE-78  (OS cmd)      |  34 / 150 | 22.7% |
+| CWE-327 (weak crypto) |   3 / 150 |  2.0% |
+| CWE-347 (JWT sig)     |   1 / 150 |  0.7% |
+| CWE-311 (cleartext)   |   0 / 150 | **0.0%** |
+| CWE-346 (origin)      |   0 / 150 | **0.0%** |
+| CWE-434 (upload)      |   0 / 150 | **0.0%** |
+
+Per-example results are **bimodal**: 12 snippets at ≥40/50, 13 at
+0/50. The overall mean is driven by a few examples that the model
+gets almost ALWAYS right, not by partial competence everywhere.
+
+### Did Stage 7K beat Stage 7J?
+
+Stage 7J: 20.9% [bootstrap 2.6 - 44.0]
+Stage 7K: 25.3% [bootstrap 13.1 - 38.9]
+
+**No.** Stage 7J's point estimate sits well inside Stage 7K's bootstrap
+interval, and the two intervals overlap by 26 percentage points. The
+4.4-point jump is NOT statistically distinguishable from no change.
+This is exactly the discipline the brief demanded: "Do not claim
+statistical improvement merely because a point estimate increased."
+
+What Stage 7K actually gives us:
+- The 20-25% range **reproduces** on a bigger, deliberately-different
+  pool of examples. Stage 7J's number was not a 7-snippet fluke.
+- Item-level CI **tightens** from 41pp to 26pp — better evidence,
+  same score.
+- The same four categories (311, 346, 434, 347) stay broken.
+
+### Why the frozen prompt did NOT fix the zero categories
+
+g4 (Stage 7J) showed that pasting the four CWE definitions into the
+prompt lifts these categories from 0% to 90-100% on dev snippets.
+The Stage 7K frozen prompt is the `few_single` prompt (examples for
+CWE-89, 79, 22 only) — it does NOT contain the catalog of
+definitions for 311 / 346 / 434. So the model has no way to
+retrieve those CWE IDs. The 0% outcome in Stage 7K was predictable
+from the g4 finding and is a direct consequence of the frozen
+prompt choice.
+
+Takeaway: the model has the SEMANTIC knowledge (g4 proved it) but
+not the ID-recall capability under a non-catalog prompt. This is a
+retrieval gap, not a model capability gap.
+
+### Hands-on exercise
+
+Open `docs/dyno/offsec/stage7k/sampled.jsonl` and read any 20 lines
+for `snippet_id: s7k16` (`CWE-311`, "cookie without Secure or
+HttpOnly"). What CWE does the model pick INSTEAD? Does it change
+across seeds? Do the model's wrong answers cluster around related
+categories (CWE-614, CWE-1004, CWE-384) or are they scattered?
+Write a one-paragraph summary.
+
+### Comprehension questions
+
+**Q8** (v2.1 → 7K). The Stage 7J Wilson CI for few_single held-out
+was 16.9-25.4 (width 8pp). The Stage 7K Wilson CI is 23.2-27.6
+(width 4pp). The Wilson CI got TIGHTER — great news, right? Why is
+this comparison misleading, and which TWO CIs would you actually
+compare to show whether anything changed? Hint: think about what
+each Wilson interval is sampling over.
+
+**Q9** (7K). We found that 13 of the 30 fresh snippets score 0/50
+and 12 score ≥40/50. Call the overall accuracy `a` and the number of
+ALWAYS-correct snippets `k`. If the model were "mediocre" (same `a`
+but partial competence spread evenly), what would the per-snippet
+accuracy distribution look like? Which one of the two patterns would
+SFT most easily move — and why? Hint: look at logistic regression
+against class prevalence.
