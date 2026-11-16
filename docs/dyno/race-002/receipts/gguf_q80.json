@@ -1,0 +1,9 @@
+{
+  "label": "q80",
+  "model_path": "/home/chris/models/gguf-qwen35-2b/Qwen_Qwen3.5-2B-Q8_0.gguf",
+  "n_predict": 32,
+  "ngl": 99,
+  "cold_load_s": 15.266460945,
+  "vram_mib_observed": 2236,
+  "results": [{"idx":0,"dt_s":.402875075,"n":32,"tok_s":79.43,"text":" I am a student of the University of California, Irvine (UCI) and I am currently working on a project called \"The Impact of the Internet on the"},{"idx":1,"dt_s":.535586966,"n":32,"tok_s":59.75,"text":" Paris.\nA. True\nB. False\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:** The user is presenting a statement"},{"idx":2,"dt_s":.562167339,"n":32,"tok_s":56.92,"text":"\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: Explain photosynthesis.\n    *   Constraint:"},{"idx":3,"dt_s":.563193504,"n":32,"tok_s":56.82,"text":"\n\n<think>\n\n</think>\n\nThe sky turns gray and heavy,\nClouds gather, dark and deep.\nA sudden drumming starts,\nA gentle,"},{"idx":4,"dt_s":.535340054,"n":32,"tok_s":59.78,"text":" 1, 2, 3, 4, 5.\nCount to five: 1, 2, 3, 4,"}]
+}

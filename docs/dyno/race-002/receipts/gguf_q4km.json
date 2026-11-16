@@ -1,0 +1,9 @@
+{
+  "label": "q4km",
+  "model_path": "/home/chris/models/gguf-qwen35-2b/Qwen_Qwen3.5-2B-Q4_K_M.gguf",
+  "n_predict": 32,
+  "ngl": 99,
+  "cold_load_s": 5.596516923,
+  "vram_mib_observed": 1586,
+  "results": [{"idx":0,"dt_s":.597817067,"n":32,"tok_s":53.53,"text":" I am a student of the University of California, Berkeley. I am a student of the University of California, Berkeley. I am a student of the University of"},{"idx":1,"dt_s":2.044863893,"n":32,"tok_s":15.65,"text":" Paris.\nA. True\nB. False\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:** The user is presenting a statement"},{"idx":2,"dt_s":1.145368685,"n":32,"tok_s":27.94,"text":"\n\n<think>\n\n</think>\n\nPhotosynthesis is the biological process by which plants, algae, and some bacteria convert light energy from the sun into chemical energy stored in glucose"},{"idx":3,"dt_s":.621135775,"n":32,"tok_s":51.52,"text":"\n\n<think>\n\n</think>\n\nThe sky turns gray and heavy,\nA curtain of gray,\nThe clouds begin to fall,\nA soft, gentle sigh."},{"idx":4,"dt_s":.385910174,"n":32,"tok_s":82.92,"text":" 1, 2, 3, 4, 5.\nCount to five: 1, 2, 3, 4,"}]
+}

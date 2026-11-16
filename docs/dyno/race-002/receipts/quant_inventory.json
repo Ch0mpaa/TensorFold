@@ -1,0 +1,64 @@
+{
+  "model_id": "Qwen/Qwen3.5-2B",
+  "upstream_revision": "15852e8c16360a2fea060d615a32b45270f8a8fc",
+  "candidates": [
+    {
+      "label": "BF16-reference",
+      "format": "safetensors + .tfold",
+      "effective_bpw": 16.0,
+      "file_bytes_safetensors": 4548221488,
+      "file_bytes_tfold": 4548300616,
+      "tfold_sha256": "86e1bba7a61309eca99da3f263012ce4ed145df419d36b8456fc71c64dac7707",
+      "upstream_sha256": "aa33250c4fc64891ddfaba3a314fd9542ea371843c387178b425fbcc5ed680b1",
+      "calibration": "none (lossless container of upstream BF16+FP32)",
+      "runtimes_tested": ["tf-qwen35-cuda stage", "vLLM 0.26.0"]
+    },
+    {
+      "label": "EXL3-8bpw",
+      "format": "EXL3 safetensors + .tfold",
+      "effective_bpw": 8.0,
+      "file_bytes_safetensors": 3438956902,
+      "file_bytes_tfold": 3439095240,
+      "tfold_sha256": "027ee2964e3868fa..." ,
+      "exl3_safetensors_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
+      "calibration": "turboderp HF-published quant; config.json + quantization_config.json preserved",
+      "source_url": "turboderp/Qwen3.5-2B-exl3@8.00bpw/model.safetensors",
+      "runtimes_tested": ["tf-qwen35-cuda stage (both via safetensors dir and via model.tfold)"]
+    },
+    {
+      "label": "GGUF-Q8_0",
+      "format": "GGUF Q8_0 (round-to-nearest 8-bit, block_size=32)",
+      "effective_bpw": 8.5,
+      "file_bytes": 2080140384,
+      "calibration": "bartowski/Qwen_Qwen3.5-2B-GGUF published build (sha 7d26695454df6de5fbcce2e58681e62dae06ce43)",
+      "source_url": "huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/.../Qwen_Qwen3.5-2B-Q8_0.gguf",
+      "runtimes_tested": ["llama-server 0.3.0-dev (lmstudio cuda13 build)"]
+    },
+    {
+      "label": "GGUF-Q4_K_M",
+      "format": "GGUF Q4_K_M (K-quant, mix of Q4_K main/Q6_K embed and output tails)",
+      "effective_bpw": 5.705,
+      "measured_total_tensor_bytes": 1385235712,
+      "measured_total_params": 1942653248,
+      "file_bytes": 1396198496,
+      "calibration": "bartowski published build; uses bartowski's calibration imatrix bundled as Qwen_Qwen3.5-2B-imatrix.gguf",
+      "source_url": "huggingface.co/bartowski/Qwen_Qwen3.5-2B-GGUF/resolve/.../Qwen_Qwen3.5-2B-Q4_K_M.gguf",
+      "runtimes_tested": ["llama-server 0.3.0-dev"]
+    },
+    {
+      "label": "EXL3-4bpw-NOT_PRODUCED",
+      "format": "EXL3 4-bit (would-be comparable low-bit)",
+      "status": "NOT PRODUCED THIS RACE",
+      "reason": "exllamav3.conversion.convert_model at -b 4.0 on contested GB10 (tensorfold-native held 97 GiB) was projected >1h; cancelled after layer 0 of 24. Follow-up work.",
+      "effective_bpw_target": 4.0
+    }
+  ],
+  "dtype_note": {
+    "fp32_norm_handling": {
+      "TFOLD BF16-reference": "normBf16OrF32 narrow at load (TF_NORM_AUDIT=1 shows max_abs <= 3.906e-3)",
+      "TFOLD EXL3-8bpw": "cuda_exl3_weights.zig bf16OrF32 (same RNE narrow)",
+      "GGUF Q8_0/Q4_K_M/BF16": "GGUF format stores norm and norm-like F32 tensors natively (observed: attn_norm.weight is F32 in Q4_K_M via gguf python reader)",
+      "vLLM BF16": "default_weight_loader param_data.copy_(loaded_weight.to(param_data.dtype)) - narrow to BF16"
+    }
+  }
+}

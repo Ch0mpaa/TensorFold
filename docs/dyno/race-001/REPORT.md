@@ -11,7 +11,7 @@ Frozen config: `CONFIG.md` in this directory (every sha256 pinned there must mat
 | **Scenario compute** | ms (prefill+decode of 48 rows) | **TIE** | 875 ms | 884 ms | n/a | within 1.5% (noise floor) |
 | **Peak VRAM (observed)** | GiB | **TIE** | 5.73 | 5.73 | ~5.3 (nvidia-smi during sweep) | TFOLD stage includes KV tables; vLLM reports 0 via pynvml on GB10 UMA |
 | **Wall-clock open+run** | s | A (startup) | 3.58 | 7.48 | see Race B | 3.9 s delta = FNV-1a-64 trailer verification (median `fnv=4529 ms`) |
-| **Cold load** | s | **TFOLD (both paths)** | 3.58 (A) / 7.48 (B) | — | 412.58 (vLLM) | TFOLD wins by 55× vs vLLM (FlashInfer/FlashAttention JIT first-touch dominates vLLM) |
+| **Cold load** | s | **withdrawn — see `docs/dyno/race-002/RACE-001-CORRECTION.md`** | 3.58 (A) / 7.48 (B) | — | 412.58 (vLLM) | ~~TFOLD wins by 55× vs vLLM~~ — not fair: TFOLD is prebuilt, vLLM includes first-touch JIT compile. Original numbers preserved in receipts/vllm_sweep.json. |
 | **Resident set (host)** | MiB | A/B TIE; vLLM higher | 7420 | 7418 | ~10,200 (ps rss during load) | mmap pages for TFOLD; vLLM carries torch + CUDA context |
 | **Integrity check** | — | **B exclusive** | not present | full-file FNV-1a-64 before any tensor read | not performed | this *is* the cost of lossless integrity |
 | **Batched throughput (C=32)** | tok/s total | **vLLM wins (unique)** | n/a (CLI single-stream) | n/a | 1119.13 | TFOLD stage CLI does not batch today; no-winner for TFOLD here |

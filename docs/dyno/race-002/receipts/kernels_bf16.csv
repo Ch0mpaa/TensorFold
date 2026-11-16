@@ -1,0 +1,24 @@
+Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+75.1,1108461504,543,2041365.6,319872.0,20704,13806752,3074848.9,"void tf_qmmf::qmmf_kernel<(int)4, (int)64, (int)64, (int)1, (int)4, (int)4, (bool)0, (bool)0, (bool)1>(const __nv_bfloat16 *, const unsigned char *, const unsigned char *, float, void *, float *, int, int, int, int, int, int, int)"
+4.7,68813056,187,367984.3,249056.0,3040,29407936,2140994.9,tf_pack_bf16_lane
+4.0,59571008,72,827375.1,176416.0,17440,3886848,1308217.3,"void tf_gdn_prefill::chain_kernel<__nv_bfloat16, __nv_bfloat16, (int)64, (int)32>(const T1 *, const T1 *, const __nv_bfloat16 *, const float *, const T2 *, const float *, float *, __nv_bfloat16 *, int, int, int)"
+3.1,46110720,96,480320.0,27408.0,2208,3408512,960591.7,tf_q35_mlp_act
+3.0,44126848,196,225137.0,31776.0,2208,3078368,628245.3,tf_q35_norm_shift
+2.4,35276832,4,8819208.0,9319040.0,7216192,9422560,1069842.5,"void tf_qmmf::qmmf_kernel<(int)4, (int)16, (int)64, (int)1, (int)4, (int)4, (bool)0, (bool)0, (bool)0>(const __nv_bfloat16 *, const unsigned char *, const unsigned char *, float, void *, float *, int, int, int, int, int, int, int)"
+2.4,35068736,186,188541.6,96256.0,7648,2706720,520734.9,"void tf_qmmf::qmmf_kernel<(int)4, (int)32, (int)64, (int)1, (int)4, (int)4, (bool)0, (bool)1, (bool)0>(const __nv_bfloat16 *, const unsigned char *, const unsigned char *, float, void *, float *, int, int, int, int, int, int, int)"
+1.8,26720256,72,371114.7,88064.0,6016,3111168,730147.4,tf_q35_gdn_pre
+1.4,20600224,24,858342.7,196240.0,9888,3733088,1251796.0,"void tf_prefill_attention::hpattn_whole_kernel<(int)256, (int)8, (int)2, (int)2>(const __nv_bfloat16 *, const __nv_bfloat16 *, const __nv_bfloat16 *, __nv_bfloat16 *, int, int, int, int, int, float, int)"
+1.0,14344448,72,199228.4,26672.0,2048,2714080,570941.6,tf_q35_gdn_post
+0.6,8468288,15,564552.5,204096.0,90016,2814240,872148.5,"void tf_qmmf::qmmf_kernel<(int)4, (int)64, (int)64, (int)1, (int)4, (int)4, (bool)0, (bool)1, (bool)0>(const __nv_bfloat16 *, const unsigned char *, const unsigned char *, float, void *, float *, int, int, int, int, int, int, int)"
+0.3,4067712,48,84744.0,9600.0,1728,2723232,391128.8,tf_q35_head_norm_shift
+0.2,2249792,24,93741.3,46496.0,3840,314048,110821.7,tf_q35_rope
+0.1,1611904,24,67162.7,10432.0,2144,298240,101892.6,tf_q35_attn_gate
+0.0,703232,4,175808.0,175456.0,143744,208576,27185.3,tf_q35k_apply
+0.0,300448,72,4172.9,2496.0,1312,22400,3698.0,tf_q35_conv_commit
+0.0,271680,4,67920.0,35104.0,11008,190464,84103.2,tf_embed_rows_bf16_copies
+0.0,76992,4,19248.0,17504.0,13664,28320,6587.4,tf_q35k_conv
+0.0,30848,1,30848.0,30848.0,30848,30848,0.0,tf_draw_slice_top
+0.0,19232,1,19232.0,19232.0,19232,19232,0.0,tf_draw_rows_finish
+0.0,13184,2,6592.0,6592.0,4672,8512,2715.3,tf_q35_argmax_slices
+0.0,12128,1,12128.0,12128.0,12128,12128,0.0,tf_q35k_compact
+0.0,3968,2,1984.0,1984.0,1760,2208,316.8,tf_q35_argmax_merge

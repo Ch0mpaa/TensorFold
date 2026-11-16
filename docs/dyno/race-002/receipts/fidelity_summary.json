@@ -1,0 +1,492 @@
+{
+  "per_model": {
+    "bf16": {
+      "coding": {
+        "details": [
+          {
+            "idx": 0,
+            "pass": false,
+            "snippet": "    pass\\n\\n\\n# Test cases\\nprint(has_close_elements([1, 2, 3, 4, 5], 1))\\nprint(has_close_elements([1, 2, 3, 4, 5], 2))"
+          },
+          {
+            "idx": 1,
+            "pass": false,
+            "snippet": "    # Your code here\\n    pass\\n\\n\\n# Test cases\\nprint(is_palindrome(\\\"A man, a plan, a canal: Panama\\\"))\\nprint(is_pal"
+          },
+          {
+            "idx": 2,
+            "pass": false,
+            "snippet": "    pass\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"
+          },
+          {
+            "idx": 3,
+            "pass": false,
+            "snippet": "    if n == 0:\\n        return 1\\n    else:\\n        return n * factorial(n - 1)\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"
+          },
+          {
+            "idx": 4,
+            "pass": false,
+            "snippet": "    pass\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"
+          }
+        ],
+        "n": 5,
+        "pass": 0,
+        "rate": 0.0
+      },
+      "reasoning": {
+        "details": [
+          {
+            "idx": 0,
+            "pass": false,
+            "snippet": "\\nA:\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A word problem about a store selling apples and oranges, and John's purchase.\n    *"
+          },
+          {
+            "idx": 1,
+            "pass": false,
+            "snippet": "A:\n\n<think>\nHere's a thinking process that leads to the suggested solution:\n\n1.  **Analyze the Request:**\n    *   **Problem:** Two trains leave from the same sp"
+          },
+          {
+            "idx": 2,
+            "pass": false,
+            "snippet": "A:\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A word problem about Mary and cookies.\n    *   Task: Solve the problem step by step.\n"
+          },
+          {
+            "idx": 3,
+            "pass": true,
+            "snippet": "A:\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A math problem (\"A rectangle has perimeter 40. If length is 3 more than width, what a"
+          },
+          {
+            "idx": 4,
+            "pass": false,
+            "snippet": "A:\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A question (\"If 3 workers paint a house in 6 hours, how long will 4 workers take, ass"
+          }
+        ],
+        "n": 5,
+        "pass": 1,
+        "rate": 0.2
+      },
+      "ifeval": {
+        "details": [
+          {
+            "idx": 0,
+            "pass": true,
+            "snippet": "\\nExample: The azure sky is beautiful.\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: Write a sentence.\n    *   Constraint 1: The word \""
+          },
+          {
+            "idx": 1,
+            "pass": false,
+            "snippet": "\\n1. Apple\\n2. Banana\\n3. Orange\\n\\nOutput:\\n\\nApple, Banana, Orange\\n\\nOutput:\\n\\nApple, Banana, Orange\\n\\nOutput:\\n\\nApple, Banana, Orange\\n\\nOutput:\\n\\nApple"
+          },
+          {
+            "idx": 2,
+            "pass": false,
+            "snippet": "\\nIs the sky typically blue during the day?\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: Respond with only the word \"YES\" or only the "
+          },
+          {
+            "idx": 3,
+            "pass": false,
+            "snippet": "\\nExample: \\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\"
+          },
+          {
+            "idx": 4,
+            "pass": false,
+            "snippet": "\\nhello\\n\\nSpanish:\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: English word \"hello\".\n    *   Task: Translate \"hello\" into Spanish.\n"
+          }
+        ],
+        "n": 5,
+        "pass": 1,
+        "rate": 0.2
+      },
+      "cyber": {
+        "details": [
+          {
+            "idx": 0,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-95",
+              "CWE-94"
+            ]
+          },
+          {
+            "idx": 1,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-89"
+            ]
+          },
+          {
+            "idx": 2,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-79"
+            ]
+          },
+          {
+            "idx": 3,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-208",
+              "CWE-203",
+              "CWE-200",
+              "CWE-326"
+            ]
+          },
+          {
+            "idx": 4,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-22",
+              "CWE-23"
+            ]
+          }
+        ],
+        "n": 5,
+        "pass": 0,
+        "rate": 0.0
+      }
+    },
+    "q80": {
+      "coding": {
+        "details": [
+          {
+            "idx": 0,
+            "pass": false,
+            "snippet": "    pass\\n\\n\\n# Test cases\\nprint(has_close_elements([1, 2, 3, 4, 5], 1))\\nprint(has_close_elements([1, 2, 3, 4, 5], 2))"
+          },
+          {
+            "idx": 1,
+            "pass": false,
+            "snippet": "    # Your code here\\n    pass\\n\\n\\n# Test cases\\nprint(is_palindrome(\\\"A man, a plan, a canal: Panama\\\"))\\nprint(is_pal"
+          },
+          {
+            "idx": 2,
+            "pass": false,
+            "snippet": "    pass\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"
+          },
+          {
+            "idx": 3,
+            "pass": false,
+            "snippet": "    if n == 0:\\n        return 1\\n    else:\\n        return n * factorial(n - 1)\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"
+          },
+          {
+            "idx": 4,
+            "pass": false,
+            "snippet": "    pass\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"
+          }
+        ],
+        "n": 5,
+        "pass": 0,
+        "rate": 0.0
+      },
+      "reasoning": {
+        "details": [
+          {
+            "idx": 0,
+            "pass": false,
+            "snippet": "\\nA:\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A word problem about a store selling apples and oranges, and John's purchase.\n    *"
+          },
+          {
+            "idx": 1,
+            "pass": false,
+            "snippet": "A:\n\n<think>\nHere's a thinking process that leads to the suggested solution:\n\n1.  **Analyze the Request:**\n    *   **Problem:** Two trains leave from the same sp"
+          },
+          {
+            "idx": 2,
+            "pass": false,
+            "snippet": "A:\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A word problem about Mary and cookies.\n    *   Task: Solve the problem step by step.\n"
+          },
+          {
+            "idx": 3,
+            "pass": true,
+            "snippet": "A:\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A math problem (\"A rectangle has perimeter 40. If length is 3 more than width, what a"
+          },
+          {
+            "idx": 4,
+            "pass": false,
+            "snippet": "A:\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A question (\"If 3 workers paint a house in 6 hours, how long will 4 workers take, ass"
+          }
+        ],
+        "n": 5,
+        "pass": 1,
+        "rate": 0.2
+      },
+      "ifeval": {
+        "details": [
+          {
+            "idx": 0,
+            "pass": true,
+            "snippet": "\\nExample: \\n\\nAzure is a beautiful color.\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: Write a sentence.\n    *   Constraint 1: The wo"
+          },
+          {
+            "idx": 1,
+            "pass": false,
+            "snippet": "\\n1. Apple\\n2. Banana\\n3. Orange\\n\\nOutput:\\nApple, Banana, Orange\\n\\nOutput:\\nApple, Banana, Orange\\n\\nOutput:\\nApple, Banana, Orange\\n\\nOutput:\\nApple, Banana"
+          },
+          {
+            "idx": 2,
+            "pass": false,
+            "snippet": "\\nRespond with only the word YES or only the word NO. Is the sky typically blue during the day?\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *  "
+          },
+          {
+            "idx": 3,
+            "pass": false,
+            "snippet": "\\nExample: \\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\"
+          },
+          {
+            "idx": 4,
+            "pass": false,
+            "snippet": "\\nhello\\n\\nSpanish:\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: English word \"hello\".\n    *   Task: Translate \"hello\" into Spanish.\n"
+          }
+        ],
+        "n": 5,
+        "pass": 1,
+        "rate": 0.2
+      },
+      "cyber": {
+        "details": [
+          {
+            "idx": 0,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-95",
+              "CWE-94"
+            ]
+          },
+          {
+            "idx": 1,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-89"
+            ]
+          },
+          {
+            "idx": 2,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-79"
+            ]
+          },
+          {
+            "idx": 3,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-208",
+              "CWE-203",
+              "CWE-200",
+              "CWE-326"
+            ]
+          },
+          {
+            "idx": 4,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-22",
+              "CWE-23"
+            ]
+          }
+        ],
+        "n": 5,
+        "pass": 0,
+        "rate": 0.0
+      }
+    },
+    "q4km": {
+      "coding": {
+        "details": [
+          {
+            "idx": 0,
+            "pass": false,
+            "snippet": "    pass\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"
+          },
+          {
+            "idx": 1,
+            "pass": false,
+            "snippet": "    # Your code here\\n    pass\\n\\n\\n# Test cases\\nprint(is_palindrome(\\\"A man, a plan, a canal: Panama\\\"))\\nprint(is_pal"
+          },
+          {
+            "idx": 2,
+            "pass": true,
+            "snippet": "    return sum([int(d) for d in str(n)])\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"
+          },
+          {
+            "idx": 3,
+            "pass": false,
+            "snippet": "    pass\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"
+          },
+          {
+            "idx": 4,
+            "pass": false,
+            "snippet": "    pass\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"
+          }
+        ],
+        "n": 5,
+        "pass": 1,
+        "rate": 0.2
+      },
+      "reasoning": {
+        "details": [
+          {
+            "idx": 0,
+            "pass": false,
+            "snippet": "\\nA:\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A word problem about a store selling apples and oranges, and John's purchase.\n    *"
+          },
+          {
+            "idx": 1,
+            "pass": false,
+            "snippet": "A:\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: A word problem about two trains leaving from the same spot in the same direction.\n   "
+          },
+          {
+            "idx": 2,
+            "pass": false,
+            "snippet": "\\nStep 1: Mary has 24 cookies. She gives 1/3 to her brother. How many cookies does she give to her brother?\n\n<think>\nThinking Process:\n\n1.  **Analyze the Reques"
+          },
+          {
+            "idx": 3,
+            "pass": true,
+            "snippet": "\\nA: Let $x$ be the width of the rectangle. Then the length is $x + 3$. The perimeter of a rectangle is given by the formula $P = 2(l + w)$, where $l$ is the le"
+          },
+          {
+            "idx": 4,
+            "pass": false,
+            "snippet": "\\nA:\n\n<think>\n\n</think>\n\nHere is the step-by-step solution:\n\n1.  **Calculate the total amount of work:**\n    We know that 3 workers can complete the house in 6 "
+          }
+        ],
+        "n": 5,
+        "pass": 1,
+        "rate": 0.2
+      },
+      "ifeval": {
+        "details": [
+          {
+            "idx": 0,
+            "pass": true,
+            "snippet": "\\nExample: The azure sky is beautiful.\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Task: Write a sentence.\n    *   Constraint 1: The word \""
+          },
+          {
+            "idx": 1,
+            "pass": false,
+            "snippet": "\\n1. Apple\\n2. Banana\\n3. Orange\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n"
+          },
+          {
+            "idx": 2,
+            "pass": false,
+            "snippet": "\\nIs the sky typically blue during the day?\n\n<think>\n\n</think>\n\nYES"
+          },
+          {
+            "idx": 3,
+            "pass": false,
+            "snippet": "\\nExample: \\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\n\\"
+          },
+          {
+            "idx": 4,
+            "pass": false,
+            "snippet": "\\nhello\n\n<think>\nThinking Process:\n\n1.  **Analyze the Request:**\n    *   Input: English word \"hello\".\n    *   Task: Translate into Spanish.\n    *   Constraint: "
+          }
+        ],
+        "n": 5,
+        "pass": 1,
+        "rate": 0.2
+      },
+      "cyber": {
+        "details": [
+          {
+            "idx": 0,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-95",
+              "CWE-94"
+            ]
+          },
+          {
+            "idx": 1,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-89"
+            ]
+          },
+          {
+            "idx": 2,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-79"
+            ]
+          },
+          {
+            "idx": 3,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-208",
+              "CWE-203",
+              "CWE-200",
+              "CWE-326"
+            ]
+          },
+          {
+            "idx": 4,
+            "pass": false,
+            "model_answer": "",
+            "expected": [
+              "CWE-22",
+              "CWE-23"
+            ]
+          }
+        ],
+        "n": 5,
+        "pass": 0,
+        "rate": 0.0
+      }
+    }
+  },
+  "cross_agreement_bf16": {
+    "q80": {
+      "coding": {
+        "n": 5,
+        "exact_match_vs_bf16": 5
+      },
+      "reasoning": {
+        "n": 5,
+        "exact_match_vs_bf16": 4
+      },
+      "ifeval": {
+        "n": 5,
+        "exact_match_vs_bf16": 2
+      },
+      "cyber": {
+        "n": 5,
+        "exact_match_vs_bf16": 4
+      }
+    },
+    "q4km": {
+      "coding": {
+        "n": 5,
+        "exact_match_vs_bf16": 2
+      },
+      "reasoning": {
+        "n": 5,
+        "exact_match_vs_bf16": 0
+      },
+      "ifeval": {
+        "n": 5,
+        "exact_match_vs_bf16": 1
+      },
+      "cyber": {
+        "n": 5,
+        "exact_match_vs_bf16": 1
+      }
+    }
+  }
+}
