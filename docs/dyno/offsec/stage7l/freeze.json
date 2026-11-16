@@ -1,0 +1,63 @@
+{
+  "frozen_at": "stage7l-prep",
+  "frozen_before_any_output_inspected": true,
+  "model": {
+    "repo": "UnstableLlama/Qwen3.5-2B-exl3-8.00bpw",
+    "revision_pin_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
+    "runtime": "exllamav3 1.6.7",
+    "context_tokens": 8192,
+    "context_note": "Doubled from Stage 7K (4096) because conditions B and C each add ~500 prompt tokens; 4096 was comfortable for A but tight for B/C after the few-shot preamble.",
+    "eos_ids": [248046, 248044],
+    "tokenizer_note": "<|im_end|> = 248046 ; <|endoftext|> = 248044"
+  },
+  "assets": {
+    "catalog_md":   {"path": "docs/dyno/offsec/stage7l/catalog.md",   "sha256": "92811f6e0272d0da1c31695f9e289a1baf15e78d94d3b404f14a799d9d97fcf8", "words_in_body": 435, "chars_in_body": 3011, "source": "MITRE Common Weakness Enumeration, cwe.mitre.org, catalog version CWE 4.14 abstraction wording"},
+    "control_md":   {"path": "docs/dyno/offsec/stage7l/control.md",   "sha256": "1b1018ab3818d8031deff1e0d682c044e5aaa92e988b1e63defe31840424bbb8", "words_in_body": 441, "chars_in_body": 3094, "content": "CPython asyncio topics — length-matched to catalog, deliberately contains NO security terms"},
+    "snippets_json":{"path": "docs/dyno/offsec/stage7l/snippets.json","sha256": "83eeefbfe4dc37d538a609ee97999c615fb983d4d03eec9031844e67336d114a", "count": 30, "per_cwe": 3}
+  },
+  "conditions": {
+    "A_baseline": {
+      "name": "Stage 7K few_single prompt, UNCHANGED",
+      "template": "You classify a single vulnerable code snippet by its most-specific CWE Top-25 identifier.\n\nExamples:\n\nSnippet: user_input is concatenated into an SQL string: cur.execute('SELECT * FROM x WHERE y=' + user_input)\nAnswer: CWE-89\n\nSnippet: an HTTP handler echoes request.args['q'] directly into an HTML response without escaping.\nAnswer: CWE-79\n\nSnippet: the server reads filename = request.args['f']; open(os.path.join('/data', filename)) without checking for '..'.\nAnswer: CWE-22\n\nNow classify this snippet. Reply with ONLY 'CWE-NNN' and nothing else.\n\nSnippet (lang={lang}):\n{desc}\nCode: {code}\n\nAnswer:"
+    },
+    "B_catalog": {
+      "name": "A + CWE reference catalog (10 CWE MITRE definitions) spliced before the question",
+      "template_structure": "<catalog body from catalog.md after the --- marker>\n\n<<baseline template unchanged>>"
+    },
+    "C_control": {
+      "name": "A + length-matched neutral CPython-asyncio text, spliced before the question",
+      "template_structure": "<control body from control.md after the --- marker>\n\n<<baseline template unchanged>>",
+      "control_purpose": "Distinguishes (a) 'catalog content helps' from (b) 'any longer prompt helps'. If C matches B, the help came from length / more tokens of context, not from the definitions."
+    }
+  },
+  "sampler": {
+    "deterministic": {"constructor": "GreedySampler()",  "note": "argmax, identical to Stage 7K"},
+    "sampled":       {"constructor": "DefaultSampler()", "note": "identical to Stage 7K and v2"}
+  },
+  "seeds": {
+    "deterministic_count": 1,
+    "sampled_seeds": "range(6000, 6050)",
+    "seeds_do_not_overlap_prior_stages": true
+  },
+  "limits": {
+    "max_new_tokens_per_trial": 100,
+    "per_trial_timeout_seconds": 60,
+    "timeout_rationale": "Larger because B/C prompts take longer to prefill under the 2B KV cache."
+  },
+  "scoring": {
+    "primary": "scorer_v2b (no regex; 100% agreement with scorer_v2a on 1,100 v2.1 trials)",
+    "truth_from": "snippet['cwe']"
+  },
+  "runtime_measurements_to_record": [
+    "prompt_tokens: input length in tokens (prefill cost proxy)",
+    "ttft_s: time from enqueue to first streamed text event",
+    "elapsed_s: total time per trial",
+    "n_tokens: number of generated tokens"
+  ],
+  "data_hygiene": [
+    "No snippet model output read by the author before analysis is complete.",
+    "Catalog text is NOT allowed to change based on observed stage7l results.",
+    "Control text is NOT allowed to change based on observed stage7l results.",
+    "Any post-hoc change to any frozen asset invalidates this evaluation."
+  ]
+}

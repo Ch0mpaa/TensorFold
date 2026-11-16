@@ -852,3 +852,106 @@ but partial competence spread evenly), what would the per-snippet
 accuracy distribution look like? Which one of the two patterns would
 SFT most easily move — and why? Hint: look at logistic regression
 against class prevalence.
+
+## 15. Stage 7L — CWE catalog A/B/control experiment
+
+> Stage 7K named "catalog-in-prompt" as the single next graduation
+> blocker but did not test it. Stage 7L runs the controlled
+> experiment: baseline (A) vs catalog in prompt (B) vs
+> length-matched neutral text in prompt (C). The control is the
+> whole point — it distinguishes "the CWE definitions helped" from
+> "a longer prompt helped".
+
+### Why we needed a control
+
+A common reviewer trap: paste more text in the prompt, see accuracy
+go up, declare the extra text helped. The hidden alternative
+explanation is that **any** longer prompt helps (via register,
+calibration, or attention-pattern reasons unrelated to content). A
+length-matched neutral text controls for that.
+
+- **A**: Stage 7K's `few_single` prompt (CWE-89 / 79 / 22 examples).
+- **B**: A + 435 words of MITRE CWE definitions for all 10 evaluated
+  CWEs (including CWE-346 and CWE-311, which are NOT in the Top-25).
+- **C**: A + 441 words of CPython asyncio reference text,
+  length-matched to B, deliberately containing zero security
+  vocabulary.
+
+### Headline results
+
+Sampled (1,500 trials / condition):
+
+| Cond | k/n | Trial Wilson | Item bootstrap |
+|---|---|---|---|
+| **A** baseline | 357/1,500 (**23.8%**) | 21.7-26.0 | 11.8-36.9 |
+| **B** +catalog | **1,373/1,500 (91.5%)** | 90.0-92.8 | **83.8-97.4** |
+| **C** +control | 370/1,500 (24.7%) | 22.6-26.9 | 12.6-37.9 |
+
+Deterministic greedy: A=8/30, **B=29/30**, C=6/30.
+
+Paired McNemar on matched (snippet, seed):
+```
+A vs B  chi2=868.66  p = 6.4e-191   (catalog massively helps)
+B vs C  chi2=879.93  p = 2.3e-193   (catalog massively beats control)
+A vs C  chi2=  1.12  p = 0.29       (control = baseline)
+```
+
+Per-CWE highlights (sampled, 150 trials each):
+- Zero → full: CWE-311 (0.7 → 100), CWE-346 (0 → 100), CWE-434 (0
+  → 100), CWE-347 (0 → 96.7), CWE-352 (0.7 → 98), CWE-327 (6 → 100).
+- Mild gain: CWE-78 (16 → 100), CWE-79 (56 → 98), CWE-22 (60.7 → 63.3).
+- **Regression**: CWE-89 (SQL) **98 → 59.3** (-38.7pp). The one
+  category A got right now gets confused with CWE-78.
+
+Per-example reliability bands (of 30 snippets):
+- A: 2 × 50/50, 14 mid, 14 × 0/50.
+- B: **20 × 50/50**, 10 mid, **0 × 0/50**. Nothing is a hard zero anymore.
+- C: 2 × 50/50, 14 mid, 14 × 0/50 — identical shape to A.
+
+Prompt text lengths: A ≈ 500 chars (~130 tokens), B ≈ 3,500 chars
+(~920), C ≈ 3,600 chars (~940). Cost: tokens-per-correct-classification
+drops from A=26.4 to **B=7.3** — 3.6× cheaper per correct answer
+despite 7× longer prompt.
+
+### What the comparison tells us
+
+The brief's two hypotheses:
+1. "Catalog content helps because the model needed the definitions."
+2. "Any long prompt helps (register / calibration / pattern)."
+
+Stage 7L rules out (2). Condition C is statistically
+indistinguishable from A (p=0.29). B overwhelmingly beats both.
+The signal is in the CWE definitions themselves, not in the extra
+length. That's what a length-matched control is FOR.
+
+Stage 7L does NOT tell us whether a shorter catalog would suffice
+(we tested one length, not a dose-response curve), nor whether the
+CWE-89 regression could be fixed by rewording to reduce the
+"constructs all or part of ... command" overlap with CWE-78. Both
+are in-scope for a future stage.
+
+### Hands-on exercise
+
+Pick any one zero-category snippet from Stage 7L sampled receipts.
+Read all 50 seeds under each of A, B, C. Record:
+1. The five most common wrong CWEs the model picks in each condition.
+2. Whether the wrong CWEs under B are closer to the truth category
+   semantically (CWE-311 near CWE-319 / CWE-1004 / CWE-614) than
+   the wrong CWEs under A.
+3. Whether C's wrong answers look more like A's or more like B's.
+
+Write 3-5 sentences on what this tells you about where the catalog's
+signal is coming from.
+
+### Comprehension questions
+
+**Q10** (7L). The brief required a length-matched control. Suppose
+C's accuracy came out identical to B's on the held-out 30 snippets.
+What follow-up experiment would you design, and what hypothesis
+would it test? Hint: there are at least two ways to vary the control.
+
+**Q11** (7L). Prompt-token overhead grew from ~X in A to ~Y in B. For
+a production CWE classifier that must stay under a fixed per-request
+latency SLO, derive a rough rule for when adding the catalog is
+still worth it. Hint: think about tokens-per-correct-answer and
+prefill vs decode time on a specific hardware class.
