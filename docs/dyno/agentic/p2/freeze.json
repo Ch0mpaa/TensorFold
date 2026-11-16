@@ -1,0 +1,38 @@
+{
+  "stage": "P2-agentic-pilot",
+  "frozen_before_any_output_inspected": true,
+  "model": {
+    "repo": "UnstableLlama/Qwen3.5-2B-exl3-8.00bpw",
+    "revision_pin_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
+    "runtime": "exllamav3 1.6.7",
+    "context_tokens": 8192,
+    "eos_ids": [248046, 248044]
+  },
+  "assets": {
+    "task_json":   {"path": "docs/dyno/agentic/p2/task.json",   "sha256": "f6f0b224cde5285197428b405897144ab022fa19d943b16fb2b80a03f3847bf4"},
+    "harness_py":  {"path": "docs/dyno/agentic/p2/harness.py",  "sha256": "95fd3d927c02bfb79701104d80462cf2a731a0525bbd064c503485eb4fb853fc"}
+  },
+  "sampler": {
+    "greedy":  {"constructor": "GreedySampler()"},
+    "sampled": {"constructor": "DefaultSampler()"}
+  },
+  "attempts": {
+    "greedy_seeds":  [9000],
+    "sampled_seeds": [9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 9010],
+    "total_attempts": 11,
+    "max_new_tokens_per_turn": 400,
+    "model_timeout_per_turn_s": 30,
+    "turn_cap_per_attempt": 25
+  },
+  "oracle": {
+    "checks": [
+      "grep '<old_key>' returns 0 hits",
+      "os.environ[\"API_KEY\"] or os.environ['API_KEY'] appears",
+      "python -m compileall -q .  exits 0",
+      "pytest -q  exits 0 with API_KEY=dummy-value-for-tests"
+    ],
+    "llm_judge_used": false,
+    "resolved_rule": "ALL FOUR checks pass"
+  },
+  "pilot_scope_note": "ONE agentic task scaffold. Not representative of the full 50-task AGENTIC track. Proves harness + oracle work end-to-end before scaling."
+}

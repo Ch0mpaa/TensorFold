@@ -1,0 +1,55 @@
+{
+  "stage": "P1-coding-pilot",
+  "frozen_before_any_output_inspected": true,
+  "instance_id": "pallets__flask-5014",
+  "instance_source": "SWE-bench Verified (princeton-nlp/SWE-bench_Verified) via HuggingFace datasets",
+  "model": {
+    "repo": "UnstableLlama/Qwen3.5-2B-exl3-8.00bpw",
+    "revision_pin_sha256": "a106b1c9d58a768eb87960daa7aff6efd250b0cb7c73edb92155ac9fc653f45f",
+    "runtime": "exllamav3 1.6.7",
+    "context_tokens": 8192,
+    "eos_ids": [
+      248046,
+      248044
+    ]
+  },
+  "assets": {
+    "instance_json": {
+      "path": "docs/dyno/coding/p1/instance.json",
+      "sha256": "df7258bdebf0881c6b9acba39545a5794c4041fa6585a63719f3e12f2d47ac65"
+    },
+    "runner_py": {
+      "path": "docs/dyno/coding/p1/runner.py",
+      "sha256": "df7258bdebf0881c6b9acba39545a5794c4041fa6585a63719f3e12f2d47ac65"
+    }
+  },
+  "sampler": {
+    "greedy": {
+      "constructor": "GreedySampler()"
+    },
+    "sampled": {
+      "constructor": "DefaultSampler()"
+    }
+  },
+  "attempts": {
+    "greedy_seeds": [
+      8000
+    ],
+    "sampled_seeds": [
+      8001,
+      8002,
+      8003
+    ],
+    "total_attempts": 4,
+    "max_new_tokens_per_attempt": 1500,
+    "model_timeout_seconds": 180
+  },
+  "oracle": {
+    "fail_to_pass_command": "pytest -q --no-header --tb=no <FAIL_TO_PASS tests>",
+    "pass_to_pass_command": "pytest -q --no-header --tb=no <first 60 PASS_TO_PASS tests>",
+    "resolved_rule": "ALL fail_to_pass must pass AND ALL pass_to_pass that were passing still pass",
+    "per_test_timeout_seconds": 300,
+    "llm_judge_used": false
+  },
+  "pilot_scope_note": "Single instance from the SWE-bench Verified manifest, chosen for: single-file edit; standard pytest; small patch (<400 bytes); clear pass/fail oracle. We make NO claim about the full 50-instance coding track. Per the Stage 7M roadmap this is the one-task scaffold to prove the harness."
+}

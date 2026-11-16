@@ -1,0 +1,35 @@
+{
+  "task_id": "agentic-p2-api-key-replace",
+  "stage": "P2-agentic-pilot",
+  "description": "Given a small Python repository containing a hardcoded API key string, replace every hardcoded occurrence with `os.environ['API_KEY']` and add `import os` where needed. The repository must still be importable (no syntax errors) and all pre-existing tests must still pass.",
+  "oracle_rules": [
+    "grep for the literal old key value ('sk-prod-ABCDEF12345') returns 0 hits across the repo",
+    "the string `os.environ[\"API_KEY\"]` OR `os.environ['API_KEY']` appears at least once",
+    "`python -m compileall .` succeeds (no syntax errors introduced)",
+    "`pytest -q` in the repo returns exit code 0"
+  ],
+  "seed_repo_files": {
+    "src/client.py": "import requests\n\nAPI_KEY = 'sk-prod-ABCDEF12345'\n\ndef call(endpoint, data):\n    return requests.post(endpoint, json=data, headers={'Authorization': 'Bearer ' + API_KEY})\n",
+    "src/worker.py": "from src.client import call\n\ndef send_task(task):\n    headers = {'Authorization': 'Bearer sk-prod-ABCDEF12345'}\n    return call('/task', {'task': task, 'headers': headers})\n",
+    "src/__init__.py": "",
+    "tests/__init__.py": "",
+    "tests/test_client.py": "from src.client import call\n\ndef test_call_is_callable():\n    assert callable(call)\n"
+  },
+  "old_key": "sk-prod-ABCDEF12345",
+  "required_idiom_patterns": ["os.environ[\"API_KEY\"]", "os.environ['API_KEY']"],
+  "env_for_tests": {"API_KEY": "dummy-value-for-tests"},
+  "tool_catalog": {
+    "shell": "run a shell command in the workspace root; returns combined stdout+stderr + exit code",
+    "read_file": "read a text file by path",
+    "write_file": "overwrite a text file by path with new contents",
+    "grep":  "grep -nI --color=never -r <pattern> .  (returns matching lines)",
+    "finish": "no-op; indicates the model believes the task is complete"
+  },
+  "turn_cap": 25,
+  "model_time_cap_s": 60,
+  "constraints": [
+    "edits must stay inside the workspace directory",
+    "the model may NOT invoke pip, git, or any network command",
+    "no new files may be created outside src/ or tests/"
+  ]
+}

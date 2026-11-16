@@ -1,0 +1,196 @@
+{
+  "attempts": 11,
+  "resolved": 0,
+  "model_finished": 2,
+  "first_try_success": 0,
+  "with_recovery_success": 0,
+  "tool_counts": {
+    "shell": 28,
+    "read_file": 4,
+    "finish": 2,
+    "grep": 2
+  },
+  "tokens_mean": 752.9090909090909,
+  "tokens_sum": 8282,
+  "elapsed_s_mean": 8.585636363636363,
+  "turns_mean": 24.09090909090909,
+  "turns_max": 25,
+  "per_attempt": [
+    {
+      "mode": "greedy",
+      "seed": 9000,
+      "turns": 25,
+      "finished": false,
+      "verdict": {
+        "old_key_hits": 2,
+        "idiom_present": false,
+        "compiles": true,
+        "pytest_rc": 0,
+        "resolved": false,
+        "grep_tail": "./src/worker.py:    headers = {'Authorization': 'Bearer sk-prod-ABCDEF12345'}\n./src/client.py:API_KEY = 'sk-prod-ABCDEF12345'\n",
+        "compile_tail": "",
+        "pytest_tail": ".                                                                        [100%]\n1 passed in 0.04s\n"
+      }
+    },
+    {
+      "mode": "sampled",
+      "seed": 9001,
+      "turns": 25,
+      "finished": false,
+      "verdict": {
+        "old_key_hits": 2,
+        "idiom_present": false,
+        "compiles": true,
+        "pytest_rc": 0,
+        "resolved": false,
+        "grep_tail": "./src/worker.py:    headers = {'Authorization': 'Bearer sk-prod-ABCDEF12345'}\n./src/client.py:API_KEY = 'sk-prod-ABCDEF12345'\n",
+        "compile_tail": "",
+        "pytest_tail": ".                                                                        [100%]\n1 passed in 0.03s\n"
+      }
+    },
+    {
+      "mode": "sampled",
+      "seed": 9002,
+      "turns": 25,
+      "finished": false,
+      "verdict": {
+        "old_key_hits": 2,
+        "idiom_present": false,
+        "compiles": true,
+        "pytest_rc": 0,
+        "resolved": false,
+        "grep_tail": "./src/worker.py:    headers = {'Authorization': 'Bearer sk-prod-ABCDEF12345'}\n./src/client.py:API_KEY = 'sk-prod-ABCDEF12345'\n",
+        "compile_tail": "",
+        "pytest_tail": ".                                                                        [100%]\n1 passed in 0.04s\n"
+      }
+    },
+    {
+      "mode": "sampled",
+      "seed": 9003,
+      "turns": 25,
+      "finished": false,
+      "verdict": {
+        "old_key_hits": 2,
+        "idiom_present": false,
+        "compiles": true,
+        "pytest_rc": 0,
+        "resolved": false,
+        "grep_tail": "./src/worker.py:    headers = {'Authorization': 'Bearer sk-prod-ABCDEF12345'}\n./src/client.py:API_KEY = 'sk-prod-ABCDEF12345'\n",
+        "compile_tail": "",
+        "pytest_tail": ".                                                                        [100%]\n1 passed in 0.04s\n"
+      }
+    },
+    {
+      "mode": "sampled",
+      "seed": 9004,
+      "turns": 24,
+      "finished": true,
+      "verdict": {
+        "old_key_hits": 2,
+        "idiom_present": false,
+        "compiles": true,
+        "pytest_rc": 0,
+        "resolved": false,
+        "grep_tail": "./src/worker.py:    headers = {'Authorization': 'Bearer sk-prod-ABCDEF12345'}\n./src/client.py:API_KEY = 'sk-prod-ABCDEF12345'\n",
+        "compile_tail": "",
+        "pytest_tail": ".                                                                        [100%]\n1 passed in 0.04s\n"
+      }
+    },
+    {
+      "mode": "sampled",
+      "seed": 9005,
+      "turns": 25,
+      "finished": false,
+      "verdict": {
+        "old_key_hits": 2,
+        "idiom_present": false,
+        "compiles": true,
+        "pytest_rc": 0,
+        "resolved": false,
+        "grep_tail": "./src/worker.py:    headers = {'Authorization': 'Bearer sk-prod-ABCDEF12345'}\n./src/client.py:API_KEY = 'sk-prod-ABCDEF12345'\n",
+        "compile_tail": "",
+        "pytest_tail": ".                                                                        [100%]\n1 passed in 0.04s\n"
+      }
+    },
+    {
+      "mode": "sampled",
+      "seed": 9006,
+      "turns": 25,
+      "finished": false,
+      "verdict": {
+        "old_key_hits": 2,
+        "idiom_present": false,
+        "compiles": true,
+        "pytest_rc": 0,
+        "resolved": false,
+        "grep_tail": "./src/worker.py:    headers = {'Authorization': 'Bearer sk-prod-ABCDEF12345'}\n./src/client.py:API_KEY = 'sk-prod-ABCDEF12345'\n",
+        "compile_tail": "",
+        "pytest_tail": ".                                                                        [100%]\n1 passed in 0.03s\n"
+      }
+    },
+    {
+      "mode": "sampled",
+      "seed": 9007,
+      "turns": 25,
+      "finished": false,
+      "verdict": {
+        "old_key_hits": 2,
+        "idiom_present": false,
+        "compiles": true,
+        "pytest_rc": 0,
+        "resolved": false,
+        "grep_tail": "./src/worker.py:    headers = {'Authorization': 'Bearer sk-prod-ABCDEF12345'}\n./src/client.py:API_KEY = 'sk-prod-ABCDEF12345'\n",
+        "compile_tail": "",
+        "pytest_tail": ".                                                                        [100%]\n1 passed in 0.04s\n"
+      }
+    },
+    {
+      "mode": "sampled",
+      "seed": 9008,
+      "turns": 16,
+      "finished": true,
+      "verdict": {
+        "old_key_hits": 3,
+        "idiom_present": false,
+        "compiles": true,
+        "pytest_rc": 0,
+        "resolved": false,
+        "grep_tail": "./src/worker.py:    headers = {'Authorization': 'Bearer sk-prod-ABCDEF12345'}\n./src/client.py:API_KEY = 'sk-prod-ABCDEF12345'\ngrep: ./src/__pycache__/client.cpython-312.pyc: binary file matches\n",
+        "compile_tail": "",
+        "pytest_tail": ".                                                                        [100%]\n1 passed in 0.03s\n"
+      }
+    },
+    {
+      "mode": "sampled",
+      "seed": 9009,
+      "turns": 25,
+      "finished": false,
+      "verdict": {
+        "old_key_hits": 2,
+        "idiom_present": false,
+        "compiles": true,
+        "pytest_rc": 0,
+        "resolved": false,
+        "grep_tail": "./src/worker.py:    headers = {'Authorization': 'Bearer sk-prod-ABCDEF12345'}\n./src/client.py:API_KEY = 'sk-prod-ABCDEF12345'\n",
+        "compile_tail": "",
+        "pytest_tail": ".                                                                        [100%]\n1 passed in 0.03s\n"
+      }
+    },
+    {
+      "mode": "sampled",
+      "seed": 9010,
+      "turns": 25,
+      "finished": false,
+      "verdict": {
+        "old_key_hits": 2,
+        "idiom_present": false,
+        "compiles": true,
+        "pytest_rc": 0,
+        "resolved": false,
+        "grep_tail": "./src/worker.py:    headers = {'Authorization': 'Bearer sk-prod-ABCDEF12345'}\n./src/client.py:API_KEY = 'sk-prod-ABCDEF12345'\n",
+        "compile_tail": "",
+        "pytest_tail": ".                                                                        [100%]\n1 passed in 0.03s\n"
+      }
+    }
+  ]
+}

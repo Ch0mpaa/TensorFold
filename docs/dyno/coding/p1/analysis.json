@@ -1,0 +1,17 @@
+{
+  "attempts": 4,
+  "status_counts": {
+    "patch_apply_failed": 4
+  },
+  "oracle": {
+    "valid_patch": 4,
+    "patch_applied": 0,
+    "fail_to_pass_passed": 0,
+    "pass_to_pass_passed": 0,
+    "resolved": 0
+  },
+  "tokens_total": 2545,
+  "tokens_mean": 636.25,
+  "gen_elapsed_sum_s": 26.395,
+  "gen_elapsed_mean_s": 6.59875
+}

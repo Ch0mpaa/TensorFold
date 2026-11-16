@@ -1055,3 +1055,148 @@ regression in one of the eight untouched categories.
 C. Under what conditions would you expect catalog revisions to
 still fail, even with disambiguating wording? Hint: think about how
 many categories you have and how distinct their concrete sinks are.
+
+## 17. Stage P1 — Coding agent pilot (SWE-bench Verified `pallets__flask-5014`)
+
+> First real test of the CODING AGENT track: can the 2B model, shown one
+> failing test and the file that needs changing, produce a correct
+> unified diff that `git apply` accepts and `pytest` turns green?
+> **No. 0 of 4 attempts resolved.** But the harness works, the oracle
+> works, and the failure mode is specific and documented.
+
+### The scaffold
+
+Picked one SWE-bench Verified instance (`pallets__flask-5014`) for the
+pilot: 390-byte gold patch, one FAIL_TO_PASS test, 59 PASS_TO_PASS
+tests to protect. Model is shown problem statement + failing test +
+full target file; it must emit a unified diff inside a ```diff``` fence.
+The harness clones the repo at the pinned base commit, applies the SWE
+test_patch, applies the model's diff with `git apply --index`, then
+runs pytest for both the failing test and the first 60 passing tests.
+Resolved = ALL pass. No LLM judgment anywhere.
+
+### What actually happened (1 greedy + 3 sampled, seeds 8000-8003)
+
+| metric | value |
+|---|---|
+| extracted a unified diff | **4 / 4** |
+| `git apply` succeeded | **0 / 4** |
+| **RESOLVED** | **0 / 4** |
+| mean tokens per attempt | 636 |
+
+Every attempt FAILED at `git apply` with exit 128. The model produced
+plausible patches with the right conceptual edit (adding `if not name:
+raise ValueError(...)`), but with HALLUCINATED hunk line numbers.
+Greedy emitted `@@ -100,6 +100,10 @@` for a function that actually lives
+at line 190. Correct semantics, wrong offsets, git refuses.
+
+### What this teaches
+
+Two things:
+1. **The harness is honest.** Dropped `diff --git` headers, pinned
+   `werkzeug`, pinned `pytest`, added `-W ignore::DeprecationWarning`
+   — four harness bugs fixed before the recorded run. The 0/4 verdict
+   is on the MODEL, not the setup.
+2. **2B's failure mode has a name.** `hallucinated hunk line numbers`.
+   This is a well-known 2B-class limitation (small models do not
+   reliably track line positions in long files). A fuzzy-apply
+   wrapper (`patch -F 3`) would recover these — but then the oracle
+   is less strict than SWE-bench Verified's own grader. We did NOT
+   relax.
+
+### Hands-on exercise
+
+Open `docs/dyno/coding/p1/attempts.jsonl`. For each of the 4 attempts
+read `raw_output_head`. Count how many produced a diff whose BODY is
+semantically equivalent to the gold patch (`if not name: raise
+ValueError(...)` inserted anywhere inside `Blueprint.__init__` AFTER
+the `super().__init__` call). Also count how many diffs would succeed
+if you replaced `git apply` with `git apply --fuzz 3` or `patch -F 5`
+(which allow offset drift). Write 3-5 sentences on the trade-off.
+
+### Comprehension questions
+
+**Q14** (P1). SWE-bench Verified's own evaluation harness uses `git
+apply` strictly — no fuzz, no retry. Under what conditions would it
+be defensible to relax that to `git apply --fuzz 3` for the 2B's
+coding track, and what would you have to document to keep the number
+comparable to the published SWE-bench leaderboard?
+
+**Q15** (P1). The oracle here runs 60 of 59 pass_to_pass tests
+(we cap for latency). If a cherry-picked subset of 60 is "friendly"
+(all tests the model typically keeps green), item-level accuracy
+could inflate. Describe one adversarial subset-selection the brief's
+"do not inflate" rule would explicitly rule out.
+
+## 18. Stage P2 — Agentic API-key replacement pilot
+
+> The agentic track's protocol test: give the 2B a tiny Python repo
+> with a hardcoded API key, a tool catalog, and 25 turns to replace
+> the key with `os.environ["API_KEY"]`. **0 of 11 attempts resolved**,
+> for an interesting reason: the model cannot reliably emit the
+> required JSON tool-call format.
+
+### The protocol
+
+System prompt lists five tools and requires:
+
+```
+TOOL: {"tool": "write_file", "args": {"path": "src/x.py", "content": "..."}}
+```
+
+Harness parses the single-line JSON object after `TOOL:`, executes
+the tool, feeds back `OBSERVATION: {...}`. Up to 25 turns.
+
+### Oracle (environment, no LLM judgment)
+
+1. `grep '<old key>' -r .` returns 0 hits.
+2. `os.environ["API_KEY"]` idiom present.
+3. `python -m compileall -q .` exits 0.
+4. `pytest -q` with `API_KEY=dummy-value-for-tests` exits 0.
+
+Resolved = all four.
+
+### What happened (1 greedy + 10 sampled, seeds 9000-9010)
+
+| metric | value |
+|---|---|
+| Resolved | **0 / 11** |
+| Model emitted `finish` | 2 / 11 |
+| Mean turns used | 24.1 / 25 (cap) |
+| Parseable TOOL calls | 36 / 275 turn-slots (13%) |
+| `write_file` calls that parsed | **0** |
+| Mean tokens / wall time | 753 / 8.6 s per attempt |
+
+### What the model did instead
+
+It emitted `TOOL: read_file args {"path": "src/x.py"}` — the
+category word (`read_file`) outside the JSON object. The parser
+rejected it (required `{"tool": "read_file", "args": {...}}`). Two
+attempts eventually produced valid `TOOL: {"tool": "finish", ...}`
+and gave up without having written anything. The environment-ran
+`pytest` kept passing because the seed files were never touched.
+
+### Hands-on exercise
+
+Open `docs/dyno/agentic/p2/attempts.jsonl`. For attempt `sampled/9010`
+(highest tokens) read all 25 turns in `turns_head`. Identify:
+1. Which turn first produces a conceptually-correct file replacement
+   as the `content` argument?
+2. Why does the parser reject it anyway?
+3. What is the smallest harness-side change that would let the model
+   succeed WITHOUT relaxing the oracle? (hint: there's a one-line
+   change that keeps the oracle strict but makes the protocol forgiving).
+
+### Comprehension questions
+
+**Q16** (P2). The pytest oracle passed on all 11 attempts (the
+existing tests don't reference the key) even though the task was
+NOT solved. Why is this pytest-passes-but-resolved=false pattern a
+feature, not a bug, of the four-rule oracle?
+
+**Q17** (P2). We measured 13% TOOL-call parse rate. If we relaxed the
+protocol to accept the model's dominant format (`TOOL: <tool> args
+{json}`) the parse rate would jump but the task-completion rate might
+not. Propose a MEASUREMENT that distinguishes "model can plan and
+write" from "model can also format tool calls cleanly". Which of the
+two is the real graduation gate?
